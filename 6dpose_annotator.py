@@ -19,7 +19,7 @@ CLOUD_ROT = o3d.geometry.PointCloud()
 """ Total transformation"""
 all_transformation = np.identity(4)
 """ Step size for rotation """
-step = 0.1*pi
+step = 0.05*pi
 """ Voxel size for downsampling"""
 voxel_size = 0.001
 
@@ -110,6 +110,46 @@ class Mapping():
         return pnt
 
 
+def update_position(x, y, w_name, img_c, img_d, mapping):
+
+
+    """Direct move. Object model will be moved to clicked position."""
+    global all_transformation
+    print('Clicked({},{}): depth:{}'.format(x, y, img_d[y,x]))
+    print(img_d[y,x])
+    pnt = mapping.Pix2Pnt( [x,y], img_d[y,x] )
+    print('3D position is', pnt)
+
+    #compute current center of the cloud
+    cloud_c = copy.deepcopy(CLOUD_ROT)
+    cloud_c, center = c3D.Centering(cloud_c)
+    np_cloud = np.asarray(cloud_c.points) 
+
+    np_cloud += pnt
+    print('Offset:', pnt )
+    offset = np.identity(4)
+    offset[0:3,3] -= center
+    offset[0:3,3] += pnt
+    all_transformation = np.dot( offset, all_transformation )
+
+    CLOUD_ROT.points = o3d.utility.Vector3dVector(np_cloud)
+    generateImage( mapping, img_c )
+
+
+# Pose refinement by ICP
+def refine_registration(source, target, trans, voxel_size):
+    global all_transformation
+    distance_threshold = voxel_size * 0.4
+    print(":: Point-to-point ICP registration is applied on original point")
+    print("   clouds to refine the alignment. This time we use a strict")
+    print("   distance threshold %.3f." % distance_threshold)
+    result = o3d.pipelines.registration.registration_icp(source, target, 
+                                            distance_threshold, trans,
+                                            o3d.pipelines.registration.TransformationEstimationPointToPoint())
+
+    return result.transformation
+
+
 def mouse_event(event, x, y, flags, param):
     w_name, img_c, img_d, mapping = param
 
@@ -135,19 +175,6 @@ def mouse_event(event, x, y, flags, param):
 
         CLOUD_ROT.points = o3d.utility.Vector3dVector(np_cloud)
         generateImage( mapping, img_c )
-
-# Pose refinement by ICP
-def refine_registration(source, target, trans, voxel_size):
-    global all_transformation
-    distance_threshold = voxel_size * 0.4
-    print(":: Point-to-point ICP registration is applied on original point")
-    print("   clouds to refine the alignment. This time we use a strict")
-    print("   distance threshold %.3f." % distance_threshold)
-    result = o3d.pipelines.registration.registration_icp(source, target, 
-                                            distance_threshold, trans,
-                                            o3d.pipelines.registration.TransformationEstimationPointToPoint())
-
-    return result.transformation
 
 def generateImage( mapping, im_color ):
     global CLOUD_ROT
@@ -295,21 +322,37 @@ if __name__ == "__main__":
     cv2.namedWindow( window_name, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback( window_name, mouse_event, 
                         [window_name, im_color, im_depth, mapping])
+    x, y = 100, 100
 
     generateImage( mapping, im_color )
     while (True):
         key = cv2.waitKey(1) & 0xFF
         """Quit"""
-        if key == ord("q"):
+        if key == 27:
             break
-        """ICP registration"""
+
+        if key == ord("l"):
+            x += 1
+            update_position(x, y, window_name, im_color, im_depth, mapping)
+
+        if key == ord("j"):
+            x -= 1
+            update_position(x, y, window_name, im_color, im_depth, mapping)
+
+        if key == ord("i"):
+            y += 1
+            update_position(x, y, window_name, im_color, im_depth, mapping)
+
+        if key == ord("k"):
+            y += 1
+            update_position(x, y, window_name, im_color, im_depth, mapping)
+
         if key == ord("i"):
             print('ICP start (coarse mode)')
             result_icp = refine_registration( CLOUD_ROT, pcd, np.identity(4), 10.0*voxel_size)
             print(result_icp)
             CLOUD_ROT.transform( result_icp )
             all_transformation = np.dot( result_icp, all_transformation )
-
             generateImage( mapping, im_color )
 
         if key == ord("f"):
@@ -350,14 +393,14 @@ if __name__ == "__main__":
             all_transformation = np.dot( rotation, all_transformation )
             generateImage( mapping, im_color )
 
-        if key == ord("z"):
+        if key == ord("q"):
             print('Rotation around yaw axis')
             rotation = c3D.ComputeTransformationMatrixAroundCentroid( CLOUD_ROT, 0, 0, step )
             CLOUD_ROT.transform( rotation )
             all_transformation = np.dot( rotation, all_transformation )
             generateImage( mapping, im_color )
         
-        if key == ord("x"):
+        if key == ord("e"):
             print('Rotation around yaw axis')
             rotation = c3D.ComputeTransformationMatrixAroundCentroid( CLOUD_ROT, 0, 0, -step )
             CLOUD_ROT.transform( rotation )
@@ -369,12 +412,12 @@ if __name__ == "__main__":
     CLOUD_ROT.paint_uniform_color([0.9, 0.1, 0.1])
     o3d.visualization.draw_geometries([CLOUD_ROT, cloud_in_ds])
     """ Save output files """
-    o3d.io.write_point_cloud( "cloud_rot_ds.ply", CLOUD_ROT )
+    # o3d.io.write_point_cloud( "cloud_rot_ds.ply", CLOUD_ROT )
     
     cloud_m.transform( all_transformation )
-    o3d.io.write_point_cloud( "cloud_rot.ply", cloud_m )
+    # o3d.io.write_point_cloud( "cloud_rot.ply", cloud_m )
     img_mapped_original = mapping.Cloud2Image( cloud_m )
-    cv2.imwrite("img_mapped.png", img_mapped_original)
+    # cv2.imwrite("img_mapped.png", img_mapped_original)
 
     print("\n\nFinal transformation is\n", all_transformation)
     print("You can transform the original model to the final pose by multiplying above matrix.")
