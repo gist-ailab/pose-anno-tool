@@ -13,6 +13,7 @@ from src.visualizer import *
 from src.loader import *
 from src.utils import *
 import dearpygui.dearpygui as dpg
+import open3d.visualization.rendering as rendering
 
 class Annotator():
 
@@ -27,11 +28,12 @@ class Annotator():
         self.pos_step = 5
         """ Voxel size for downsampling"""
         self.voxel_size = 0.001
+        self.img_mapped = np.zeros([480, 640, 3])
+        self.trasparency = 0.5
 
         self.load_objects()
 
-        self.img_mapped = np.zeros([480, 640, 3])
-        self.trasparency = 0.5
+
 
     def load_objects(self):
 
@@ -60,19 +62,15 @@ class Annotator():
         self.im_depth = np.asarray(depth_raw)
         self.x, self.y = im_color.shape[1] // 2, im_color.shape[0] // 2
 
-        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color_raw, depth_raw, 1000.0, 2.0 )
-        self.obj_o3dpc = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, self.camera_intrinsic)
-        # o3d.io.write_point_cloud("tmp/cloud_in.ply", pcd)
-        # cloud_in_ds = pcd.voxel_down_sample(voxel_size)
-        # cloud_in_ds = pcd
-        # o3d.io.write_point_cloud("tmp/cloud_in_ds.ply", cloud_in_ds)
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color_raw, depth_raw, 1000.0, 2.0, convert_rgb_to_intensity=False)
+        self.o3dpc = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, self.camera_intrinsic)
 
-        np_pcd = np.asarray(self.obj_o3dpc.points)
+        # np_pcd = np.asarray(self.obj_o3dpc.points)
         
-        # frame = cv2.imread(rgb_path)
-        # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA).astype(float)/255
-        # dpg.set_value("2d_anno_vis", frame)
+
+
         self.object_select_button_callback(self.obj_names[0], None)
+        self.update_2d_anno_vis()
 
 
     def object_select_button_callback(self, sender, app_data):
@@ -101,6 +99,7 @@ class Annotator():
         self.CLOUD_ROT.transform(self.all_transformation)
         self.mapping = Mapping(self.camera_intrinsic, self.width, self.height)
         self.img_mapped = self.mapping.Cloud2Image(self.CLOUD_ROT)
+        o3d.visualization.draw_geometries([self.o3dpc], width=640*2, height=480, left=1720, top=800)
 
     def update_position(self):
 
@@ -138,6 +137,8 @@ class Annotator():
         self.CLOUD_ROT.points = o3d.utility.Vector3dVector(np_cloud)
         self.update_2d_anno_vis()
         self.update_3d_object_vis()
+        self.update_3d_anno_vis()
+
 
     def keyboard_press_callback(self, sender, app_data):
         if app_data == 87:
@@ -199,19 +200,25 @@ class Annotator():
         if app_data == 85:
             print("u")
             print('ICP start (coarse mode)')
-            result_icp = refine_registration(self.CLOUD_ROT, self.obj_o3dpc, np.identity(4), 5.0*self.voxel_size)
+            result_icp = refine_registration(self.CLOUD_ROT, self.o3dpc, np.identity(4), 5.0*self.voxel_size)
             self.CLOUD_ROT.transform( result_icp )
             self.all_transformation = np.dot( result_icp, self.all_transformation )
             self.update_2d_anno_vis()
         if app_data == 79:
             print("o")
             print('ICP start (fine mode)')
-            result_icp = refine_registration(self.CLOUD_ROT, self.obj_o3dpc, np.identity(4), 1.0*self.voxel_size)
+            result_icp = refine_registration(self.CLOUD_ROT, self.o3dpc, np.identity(4), 1.0*self.voxel_size)
             self.CLOUD_ROT.transform( result_icp )
             self.all_transformation = np.dot( result_icp, self.all_transformation )
             self.update_2d_anno_vis()
+        if app_data == 67:
+            print("c")
+            print('3d visualization')
+            o3d.visualization.draw_geometries([self.CLOUD_ROT, self.o3dpc], width=640*2, height=480, left=1720, top=800)
+
 
         self.update_3d_object_vis()
+
 
     def trasparency_callback(self, sender, appdata):
         self.trasparency = appdata
@@ -228,3 +235,6 @@ class Annotator():
         img_m = self.mapping.Cloud2Image(self.CLOUD_ROT)
         frame = cv2.cvtColor(img_m, cv2.COLOR_BGR2RGBA).astype(float)/255
         dpg.set_value("3d_object_vis", frame)
+
+
+
