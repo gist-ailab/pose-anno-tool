@@ -31,6 +31,7 @@ By using option "--init", you can choose initial transformation matrix to be app
 
 Try:
 ```
+$ conda activate pose-anno
 $ python 6dpose_annotator.py
 ```
 
