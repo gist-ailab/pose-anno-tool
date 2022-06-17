@@ -32,6 +32,7 @@ By using option "--init", you can choose initial transformation matrix to be app
 Try:
 ```
 $ conda activate pose-anno
+$ pip install opencv-python==4.1.2.30.
 $ python 6dpose_annotator.py
 ```
 

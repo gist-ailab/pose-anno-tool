@@ -13,11 +13,11 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <widget class="QWebEngineView" name="webEngineView_Test">
+  <widget class="QWebEngineView" name="webEngineView">
    <property name="geometry">
     <rect>
-     <x>350</x>
-     <y>10</y>
+     <x>360</x>
+     <y>40</y>
      <width>1301</width>
      <height>1011</height>
     </rect>
@@ -37,18 +37,7 @@
      <height>33</height>
     </rect>
    </property>
-   <layout class="QHBoxLayout" name="horizontalLayout">
-    <item>
-     <widget class="QLineEdit" name="line_url"/>
-    </item>
-    <item>
-     <widget class="QPushButton" name="btn_setUrl">
-      <property name="text">
-       <string>Go</string>
-      </property>
-     </widget>
-    </item>
-   </layout>
+   <layout class="QHBoxLayout" name="horizontalLayout"/>
   </widget>
   <widget class="QWidget" name="layoutWidget">
    <property name="geometry">
@@ -90,7 +79,7 @@
     </item>
    </layout>
   </widget>
-  <widget class="QListWidget" name="QListWidget_Object">
+  <widget class="QListWidget" name="objectSelecter">
    <property name="geometry">
     <rect>
      <x>0</x>
@@ -100,11 +89,11 @@
     </rect>
    </property>
   </widget>
-  <widget class="QPushButton" name="pushButton">
+  <widget class="QPushButton" name="saveAnno">
    <property name="geometry">
     <rect>
-     <x>20</x>
-     <y>990</y>
+     <x>240</x>
+     <y>740</y>
      <width>89</width>
      <height>27</height>
     </rect>
@@ -113,20 +102,20 @@
     <string>Save</string>
    </property>
   </widget>
-  <widget class="QPushButton" name="pushButton_2">
+  <widget class="QPushButton" name="pushbutton_select">
    <property name="geometry">
     <rect>
-     <x>140</x>
-     <y>990</y>
+     <x>120</x>
+     <y>740</y>
      <width>89</width>
      <height>27</height>
     </rect>
    </property>
    <property name="text">
-    <string>Open</string>
+    <string>Select</string>
    </property>
   </widget>
-  <widget class="QLabel" name="QLabel_GISTLogo">
+  <widget class="QLabel" name="gistLogo">
    <property name="geometry">
     <rect>
      <x>10</x>
@@ -139,7 +128,7 @@
     <string>TextLabel</string>
    </property>
   </widget>
-  <widget class="QLabel" name="QLabel_AILABLogo">
+  <widget class="QLabel" name="ailabLogo">
    <property name="geometry">
     <rect>
      <x>100</x>
@@ -150,6 +139,52 @@
    </property>
    <property name="text">
     <string>TextLabel</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="openFolder">
+   <property name="geometry">
+    <rect>
+     <x>20</x>
+     <y>740</y>
+     <width>89</width>
+     <height>27</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Open</string>
+   </property>
+  </widget>
+  <widget class="QTreeView" name="fileSystem">
+   <property name="geometry">
+    <rect>
+     <x>5</x>
+     <y>420</y>
+     <width>341</width>
+     <height>221</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QProgressBar" name="progressBar">
+   <property name="geometry">
+    <rect>
+     <x>360</x>
+     <y>10</y>
+     <width>431</width>
+     <height>23</height>
+    </rect>
+   </property>
+   <property name="value">
+    <number>24</number>
+   </property>
+  </widget>
+  <widget class="QPlainTextEdit" name="Logger">
+   <property name="geometry">
+    <rect>
+     <x>40</x>
+     <y>830</y>
+     <width>301</width>
+     <height>201</height>
+    </rect>
    </property>
   </widget>
  </widget>

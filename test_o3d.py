@@ -25,13 +25,25 @@
 # ----------------------------------------------------------------------------
 
 import open3d as o3d
+from easy_tcp_python2_3 import socket_utils as su
 
 def run_test_o3d():
+
+    sock = su.initialize_client('localhost', 5555)
     o3d.visualization.webrtc_server.enable_webrtc()
-    cube_red = o3d.geometry.TriangleMesh.create_box(1, 2, 4)
-    cube_red.compute_vertex_normals()
-    cube_red.paint_uniform_color((1.0, 0.0, 0.0))
-    o3d.visualization.draw(cube_red)
+    # cube_red = o3d.geometry.TriangleMesh.create_box(1, 2, 4)
+    # cube_red.compute_vertex_normals()
+    # cube_red.paint_uniform_color((1.0, 0.0, 0.0))
+    # o3d.visualization.draw(cube_red)
+    while True:
+        recv = su.recvall_pickle(sock)
+        print(recv)
+
+    o3dpc =  o3d.io.read_point_cloud("./tmp/cloud_in.ply")
+    o3d.visualization.draw([o3dpc])
+
+
+
 
 if __name__ == "__main__":
     run_test_o3d()
