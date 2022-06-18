@@ -24,23 +24,58 @@
 # IN THE SOFTWARE.
 # ----------------------------------------------------------------------------
 
+import os
 import open3d as o3d
-from easy_tcp_python2_3 import socket_utils as su
+import open3d.visualization.gui as gui
+import open3d.visualization.rendering as rendering
+import json
+
+def tail(stream_file):
+    """ Read a file like the Unix command `tail`. Code from https://stackoverflow.com/questions/44895527/reading-infinite-stream-tail """
+    stream_file.seek(0, os.SEEK_END)  # Go to the end of file
+
+    while True:
+        if stream_file.closed:
+            raise StopIteration
+
+        line = stream_file.readline()
+
+        yield line
+
+class poseAnnotator():
+
+    def __init__(self):
+
+        # self.window = gui.Application.instance.create_window(
+            # "Hand Labeling", 1024, 768)
+
+        self.getData()
+        self.workingFilePath = None
+        
+    def getData(self):
+        with open("./comm.json", "r") as log_file:
+            for line in tail(log_file):
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    # Bad json format, maybe corrupted...
+                    continue  # Read next line
+
+                # Do what you want with data:
+                # db.execute("INSERT INTO ...", log_data["level"], ...)
+                print(data)
 
 def run_test_o3d():
 
-    sock = su.initialize_client('localhost', 5555)
     o3d.visualization.webrtc_server.enable_webrtc()
-    # cube_red = o3d.geometry.TriangleMesh.create_box(1, 2, 4)
-    # cube_red.compute_vertex_normals()
-    # cube_red.paint_uniform_color((1.0, 0.0, 0.0))
-    # o3d.visualization.draw(cube_red)
-    while True:
-        recv = su.recvall_pickle(sock)
-        print(recv)
+    # o3dpc =  o3d.io.read_point_cloud("./tmp/cloud_in.ply")
+    # o3d.visualization.draw([o3dpc])
 
-    o3dpc =  o3d.io.read_point_cloud("./tmp/cloud_in.ply")
-    o3d.visualization.draw([o3dpc])
+    p = poseAnnotator()
+    
+    gui.Application.instance.initialize()
+    gui.Application.instance.run()
+
 
 
 

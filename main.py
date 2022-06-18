@@ -13,7 +13,9 @@ from multiprocessing import Process
 
 from test_o3d import run_test_o3d
 
-from easy_tcp_python2_3 import socket_utils as su
+from os.path import basename, dirname
+import json
+
 
 formClass = uic.loadUiType("./assets/ui/6d_pose_annotator.ui")[0]
 
@@ -33,8 +35,11 @@ class WindowClass(QMainWindow, formClass):
 
     def __init__(self):
         super().__init__()
+
         self.setupUi(self)
         self.setWindowTitle("GIST AILAB 6D Object Pose Annotator")
+
+        self.commLogfile = open("./comm.json", "w")
 
         logTextBox = QTextEditLogger(self)
         # You can format what is printed to text box
@@ -90,9 +95,15 @@ class WindowClass(QMainWindow, formClass):
         self.btn_stop.clicked.connect(self.btnStopFunc)
 
     def keyPressEvent(self, event):
-        su.sendall_pickle(self.sock, event.text())
-        if event.key() == Qt.Key_Space:
-            self.test_method()
+        logging.info("Key input: <" + event.text() + ">")
+        self.sendData("keyInput", event.text())
+
+
+    def sendData(self, type, data):
+        logData = {type: data}
+        self.commLogfile.write("{}\n".format(
+                json.dumps(logData), ensure_ascii=False))
+        self.commLogfile.flush()
 
     def test_method(self):
         pass
@@ -118,8 +129,10 @@ class WindowClass(QMainWindow, formClass):
 
         indexItem = self.model.index(index.row(), 0, index.parent())
         filePath = self.model.filePath(indexItem)
-        logging.debug("selected anno file: f{filePath}")
         fileName = self.model.fileName(indexItem)
+        logging.debug(f"selected anno file: {filePath}")
+        if basename(dirname(filePath)) == "rgb" and fileName.split(".")[-1] == "png":
+            self.sendData("workingFilePath", filePath)
 
 
 
@@ -152,10 +165,8 @@ if __name__ == "__main__":
 
     o3d_p = Process(target=run_test_o3d)
     o3d_p.start()
-    sock, add = su.initialize_server('localhost', 5555)
 
     app = QApplication(sys.argv)
     myWindow = WindowClass()
-    myWindow.sock = sock
     myWindow.show()
     app.exec_()
