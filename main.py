@@ -13,8 +13,9 @@ from multiprocessing import Process
 
 from test_o3d import run_test_o3d
 
-from os.path import basename, dirname
+from os.path import basename, dirname, abspath
 import json
+from pathlib import Path
 
 
 formClass = uic.loadUiType("./assets/ui/6d_pose_annotator.ui")[0]
@@ -24,7 +25,7 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 class QTextEditLogger(logging.Handler):
     def __init__(self, parent):
         super().__init__()
-        self.widget = parent.findChild(QPlainTextEdit, "Logger")
+        self.widget = parent.findChild(QPlainTextEdit, "logger")
         self.widget.setReadOnly(True)
 
     def emit(self, record):
@@ -50,7 +51,7 @@ class WindowClass(QMainWindow, formClass):
         logging.getLogger().addHandler(logTextBox)
         # You can control the logging level
         logging.getLogger().setLevel(logging.DEBUG)
-        logging.debug("hi debugger")
+        logging.info("start program")
 
 
         # textBrowser_Logger
@@ -68,20 +69,25 @@ class WindowClass(QMainWindow, formClass):
         pixmap = pixmap.scaledToHeight(h)
         self.ailabLogo.setPixmap(pixmap)
 
-        ## object selecter
-        for i in range(20):
-            self.objectSelecter.insertItem(i, f"object_{i}")
-        self.objectSelecter.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.objectSelecter.itemClicked.connect(self.select_object)
+        ## [QtreeView] dataDirSelecter
+        self.dataDirSelecter.setHeaderHidden(True)
+        # self.dataDirSelecter.clicked.connect(self.selectAnnoData)
+        self.setDataDirRoot(abspath(os.getcwd()))
+        ## [Open Button] openDataDir 
+        self.openDataDirButton.clicked.connect(self.openDataDir)
+        ## [Select Button] selectAnnoDataButton
+        self.selectAnnoDataButton.clicked.connect(self.selectAnnoData)
 
-        ## [QtreeView] fileSystem
-        self.fileSystem.setHeaderHidden(True)
-        self.fileSystem.clicked.connect(self.select_anno_file)
+        ## [QtreeView] objectDirSelecter
+        self.objectDirSelecter.setHeaderHidden(True)
+        self.objectDirSelecter.clicked.connect(self.selectAnnoObject)
+        ## [Open Button] openObjectDir 
+        self.openObjectDirButton.clicked.connect(self.openObjectDir)
+        ## [Select Button] selectAnnoObjectButton
+        self.selectAnnoObjectButton.clicked.connect(self.selectAnnoObject)
 
-        ## [Open Button] folder selecter
-        self.openFolder.clicked.connect(self.select_working_dir)
 
-
+        self.webEngineView.load(QUrl("http://localhost:8888/"))
 
         #WebEngineView의 시그널
         self.webEngineView.loadStarted.connect(self.printLoadStart)
@@ -108,31 +114,68 @@ class WindowClass(QMainWindow, formClass):
     def test_method(self):
         pass
 
-    def select_object(self):
-        print()
 
-    def select_working_dir(self):
+    def openDataDir(self):
 
-        path_selected = QFileDialog.getExistingDirectory(self, "Open File")
-        self.model = QFileSystemModel()
-        self.model.setRootPath(path_selected)
-        logging.info(f"set working directory to {path_selected}")
-        self.index_root = self.model.index(self.model.rootPath())
-        self.fileSystem.setModel(self.model)
-        self.fileSystem.setRootIndex(self.index_root)
-        for i in range(1, self.fileSystem.model().columnCount()):
-            self.fileSystem.header().hideSection(i)
+        pathSelected = QFileDialog.getExistingDirectory(self, "Open File")
+        self.setDataDirRoot(pathSelected)
 
+    def selectAnnoData(self):
+        index = self.dataDirSelecter.selectedIndexes()[0]
+        info = self.dataDirSelecter.model().fileInfo(index)
+        filePath = info.absoluteFilePath()
+        fileName = basename(filePath)
 
-
-    def select_anno_file(self, index):
-
-        indexItem = self.model.index(index.row(), 0, index.parent())
-        filePath = self.model.filePath(indexItem)
-        fileName = self.model.fileName(indexItem)
-        logging.debug(f"selected anno file: {filePath}")
+        logging.debug(f"selected anno data: {filePath}")
         if basename(dirname(filePath)) == "rgb" and fileName.split(".")[-1] == "png":
-            self.sendData("workingFilePath", filePath)
+            annoRGBPath = filePath
+            annoDepthPath = annoRGBPath.replace(f"rgb/{fileName}", f"depth/{fileName}")
+            annoSceneCameraPath = annoRGBPath.replace(f"rgb/{fileName}", f"scene_camera.json")
+            if not os.path.exists(annoDepthPath):
+                logging.warn(f"File does not exist: {annoDepthPath}")
+            if not os.path.exists(annoSceneCameraPath):
+                logging.warn(f"File does not exist: {annoSceneCameraPath}")
+            self.sendData("annoRGBPath", annoRGBPath)
+            self.sendData("annoDepthPath", annoDepthPath)
+            self.sendData("annoSceneCameraPath", annoSceneCameraPath)
+            # auto import object models
+            objectDirPath = os.path.join(str(Path(filePath).parent.parent.parent.parent), "models")
+            self.setObjectDirRoot(objectDirPath)
+
+
+    def setDataDirRoot(self, path):
+        self.modelFS = QFileSystemModel()
+        self.modelFS.setRootPath(path)
+        logging.info(f"set data directory to {path}")
+        self.indexRootFS = self.modelFS.index(self.modelFS.rootPath())
+        self.dataDirSelecter.setModel(self.modelFS)
+        self.dataDirSelecter.setRootIndex(self.indexRootFS)
+        for i in range(1, self.dataDirSelecter.model().columnCount()):
+            self.dataDirSelecter.header().hideSection(i)
+
+    def openObjectDir(self):
+        pathSelected = QFileDialog.getExistingDirectory(self, "Open File")
+        self.setObjectDirRoot(pathSelected)
+
+    def setObjectDirRoot(self, path):
+        self.modelOS = QFileSystemModel()
+        self.modelOS.setRootPath(path)
+        logging.info(f"set object directory to {path}")
+        self.indexRootOS = self.modelOS.index(self.modelOS.rootPath())
+        self.objectDirSelecter.setModel(self.modelOS)
+        self.objectDirSelecter.setRootIndex(self.indexRootOS)
+        for i in range(1, self.objectDirSelecter.model().columnCount()):
+            self.objectDirSelecter.header().hideSection(i)
+
+
+    def selectAnnoObject(self, index):
+        index = self.dataDirSelecter.selectedIndexes()[0]
+        info = self.dataDirSelecter.model().fileInfo(index)
+        filePath = info.absoluteFilePath()
+        fileName = basename(filePath)
+        logging.debug(f"selected anno object: {fileName}")
+        if fileName.split(".")[-1] == "ply":
+            self.sendData("annoObjectPath", filePath)
 
 
 
