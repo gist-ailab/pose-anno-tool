@@ -8,15 +8,16 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5 import uic
+from PyQt5.QtTest import QTest
 
 from multiprocessing import Process
 
-from test_o3d import run_test_o3d
+from src.annotator import runObjectPoseAnnotator
 
 from os.path import basename, dirname, abspath
 import json
 from pathlib import Path
-
+import time
 
 formClass = uic.loadUiType("./assets/ui/6d_pose_annotator.ui")[0]
 
@@ -72,7 +73,7 @@ class WindowClass(QMainWindow, formClass):
         ## [QtreeView] dataDirSelecter
         self.dataDirSelecter.setHeaderHidden(True)
         # self.dataDirSelecter.clicked.connect(self.selectAnnoData)
-        self.setDataDirRoot(abspath(os.getcwd()))
+        self.setDataDirRoot(abspath(os.getcwd()) + "/data/lm/test/000002")
         ## [Open Button] openDataDir 
         self.openDataDirButton.clicked.connect(self.openDataDir)
         ## [Select Button] selectAnnoDataButton
@@ -80,11 +81,14 @@ class WindowClass(QMainWindow, formClass):
 
         ## [QtreeView] objectDirSelecter
         self.objectDirSelecter.setHeaderHidden(True)
-        self.objectDirSelecter.clicked.connect(self.selectAnnoObject)
+        # self.objectDirSelecter.clicked.connect(self.selectAnnoObject)
         ## [Open Button] openObjectDir 
         self.openObjectDirButton.clicked.connect(self.openObjectDir)
-        ## [Select Button] selectAnnoObjectButton
-        self.selectAnnoObjectButton.clicked.connect(self.selectAnnoObject)
+
+        ## [Add Button] addAnnoObjectButton
+        self.addAnnoObjectButton.clicked.connect(self.addAnnoObject)
+        ## [Delete Button] addAnnoObjectButton
+        self.deleteAnnoObjectButton.clicked.connect(self.deleteAnnoObject)
 
 
         self.webEngineView.load(QUrl("http://localhost:8888/"))
@@ -102,14 +106,21 @@ class WindowClass(QMainWindow, formClass):
 
     def keyPressEvent(self, event):
         logging.info("Key input: <" + event.text() + ">")
-        self.sendData("keyInput", event.text())
+        data = {
+            "keyInput": event.text()
+        }
+        self.sendData("keyPress", data)
+        self.webEngineView.zoomFactor()
+        # for i in range(10):
+        # QTest.mouseClick(self.webEngineView, Qt.LeftButton, pos=QPoint(512, 360))
+        #     time.sleep(0.01)
 
-
-    def sendData(self, type, data):
-        logData = {type: data}
+    def sendData(self, action, data):
+        logData = {"action": action, "data": data}
         self.commLogfile.write("{}\n".format(
                 json.dumps(logData), ensure_ascii=False))
         self.commLogfile.flush()
+        time.sleep(0.01)
 
     def test_method(self):
         pass
@@ -131,16 +142,26 @@ class WindowClass(QMainWindow, formClass):
             annoRGBPath = filePath
             annoDepthPath = annoRGBPath.replace(f"rgb/{fileName}", f"depth/{fileName}")
             annoSceneCameraPath = annoRGBPath.replace(f"rgb/{fileName}", f"scene_camera.json")
+            annoScenesPath = str(Path(annoRGBPath).parent.parent.parent)
+            annoObjectDirPath = os.path.join(str(Path(annoRGBPath).parent.parent.parent.parent), "models")
             if not os.path.exists(annoDepthPath):
                 logging.warn(f"File does not exist: {annoDepthPath}")
             if not os.path.exists(annoSceneCameraPath):
                 logging.warn(f"File does not exist: {annoSceneCameraPath}")
-            self.sendData("annoRGBPath", annoRGBPath)
-            self.sendData("annoDepthPath", annoDepthPath)
-            self.sendData("annoSceneCameraPath", annoSceneCameraPath)
+            if not os.path.exists(annoScenesPath):
+                logging.warn(f"File does not exist: {annoScenesPath}")
+            if not os.path.exists(annoObjectDirPath):
+                logging.warn(f"File does not exist: {annoObjectDirPath}")
+            data = {
+                "annoRgbPath": annoRGBPath,
+                "annoDepthPath": annoDepthPath,
+                "annoSceneCameraPath": annoSceneCameraPath,
+                "annoScenesPath": annoScenesPath,
+                "annoObjectDirPath": annoObjectDirPath
+            }
+            self.sendData("selectAnnoData", data)
             # auto import object models
-            objectDirPath = os.path.join(str(Path(filePath).parent.parent.parent.parent), "models")
-            self.setObjectDirRoot(objectDirPath)
+            self.setObjectDirRoot(annoObjectDirPath)
 
 
     def setDataDirRoot(self, path):
@@ -156,6 +177,10 @@ class WindowClass(QMainWindow, formClass):
     def openObjectDir(self):
         pathSelected = QFileDialog.getExistingDirectory(self, "Open File")
         self.setObjectDirRoot(pathSelected)
+        data = {
+            "annoObjectDirPath": pathSelected
+        }
+        self.sendData("openObjectDir", data)
 
     def setObjectDirRoot(self, path):
         self.modelOS = QFileSystemModel()
@@ -168,16 +193,27 @@ class WindowClass(QMainWindow, formClass):
             self.objectDirSelecter.header().hideSection(i)
 
 
-    def selectAnnoObject(self, index):
-        index = self.dataDirSelecter.selectedIndexes()[0]
-        info = self.dataDirSelecter.model().fileInfo(index)
+    def addAnnoObject(self, index):
+        index = self.objectDirSelecter.selectedIndexes()[0]
+        info = self.objectDirSelecter.model().fileInfo(index)
         filePath = info.absoluteFilePath()
         fileName = basename(filePath)
         logging.debug(f"selected anno object: {fileName}")
         if fileName.split(".")[-1] == "ply":
-            self.sendData("annoObjectPath", filePath)
+            data = {
+                "annoObjectPath": filePath
+            }
+            self.sendData("addAnnoObject", data)
 
-
+    def deleteAnnoObject(self, index):
+        index = self.objectDirSelecter.selectedIndexes()[0]
+        info = self.objectDirSelecter.model().fileInfo(index)
+        filePath = info.absoluteFilePath()
+        logging.warn("Not implemented yet!")
+        # fileName = basename(filePath)
+        # logging.debug(f"selected anno object: {fileName}")
+        # if fileName.split(".")[-1] == "ply":
+        #     self.sendData("annoObjectPath", filePath)
 
     #WebEngineView의 시그널에 연결된 함수들
     def printLoadStart(self): print("Start Loading")
@@ -205,8 +241,9 @@ class WindowClass(QMainWindow, formClass):
 
 if __name__ == "__main__":
 
-
-    o3d_p = Process(target=run_test_o3d)
+    # run open3d annotator as a subprocess
+    # communicate via webRTC and Json
+    o3d_p = Process(target=runObjectPoseAnnotator)
     o3d_p.start()
 
     app = QApplication(sys.argv)

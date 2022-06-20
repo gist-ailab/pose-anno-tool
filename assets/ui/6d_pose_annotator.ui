@@ -83,7 +83,7 @@
    <property name="geometry">
     <rect>
      <x>250</x>
-     <y>790</y>
+     <y>900</y>
      <width>89</width>
      <height>27</height>
     </rect>
@@ -96,7 +96,7 @@
    <property name="geometry">
     <rect>
      <x>130</x>
-     <y>200</y>
+     <y>90</y>
      <width>89</width>
      <height>27</height>
     </rect>
@@ -108,10 +108,10 @@
   <widget class="QLabel" name="gistLogo">
    <property name="geometry">
     <rect>
-     <x>190</x>
-     <y>10</y>
-     <width>151</width>
-     <height>111</height>
+     <x>130</x>
+     <y>0</y>
+     <width>101</width>
+     <height>71</height>
     </rect>
    </property>
    <property name="text">
@@ -123,8 +123,8 @@
     <rect>
      <x>10</x>
      <y>0</y>
-     <width>151</width>
-     <height>131</height>
+     <width>101</width>
+     <height>81</height>
     </rect>
    </property>
    <property name="text">
@@ -135,7 +135,7 @@
    <property name="geometry">
     <rect>
      <x>140</x>
-     <y>500</y>
+     <y>640</y>
      <width>89</width>
      <height>27</height>
     </rect>
@@ -148,7 +148,7 @@
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>530</y>
+     <y>670</y>
      <width>341</width>
      <height>221</height>
     </rect>
@@ -171,9 +171,9 @@
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>830</y>
+     <y>940</y>
      <width>341</width>
-     <height>201</height>
+     <height>161</height>
     </rect>
    </property>
   </widget>
@@ -181,7 +181,7 @@
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>230</y>
+     <y>120</y>
      <width>341</width>
      <height>231</height>
     </rect>
@@ -191,7 +191,7 @@
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>500</y>
+     <y>640</y>
      <width>131</width>
      <height>31</height>
     </rect>
@@ -210,7 +210,7 @@
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>200</y>
+     <y>90</y>
      <width>121</width>
      <height>31</height>
     </rect>
@@ -222,14 +222,14 @@
     <number>2</number>
    </property>
    <property name="text">
-    <string>Object Directory</string>
+    <string>Object Lists</string>
    </property>
   </widget>
   <widget class="QLabel" name="LoggerTitle">
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>790</y>
+     <y>900</y>
      <width>241</width>
      <height>31</height>
     </rect>
@@ -248,7 +248,7 @@
    <property name="geometry">
     <rect>
      <x>240</x>
-     <y>500</y>
+     <y>640</y>
      <width>89</width>
      <height>27</height>
     </rect>
@@ -257,17 +257,72 @@
     <string>Select</string>
    </property>
   </widget>
-  <widget class="QPushButton" name="selectAnnoObjectButton">
+  <widget class="QPushButton" name="addAnnoObjectButton">
    <property name="geometry">
     <rect>
-     <x>240</x>
-     <y>200</y>
+     <x>230</x>
+     <y>90</y>
      <width>89</width>
      <height>27</height>
     </rect>
    </property>
    <property name="text">
-    <string>Select</string>
+    <string>Add</string>
+   </property>
+  </widget>
+  <widget class="QTreeView" name="objectDirSelecter_2">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>390</y>
+     <width>341</width>
+     <height>231</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_3">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>360</y>
+     <width>121</width>
+     <height>31</height>
+    </rect>
+   </property>
+   <property name="frameShape">
+    <enum>QFrame::Box</enum>
+   </property>
+   <property name="lineWidth">
+    <number>2</number>
+   </property>
+   <property name="text">
+    <string>Annotation</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="deleteAnnoObjectButton">
+   <property name="geometry">
+    <rect>
+     <x>130</x>
+     <y>360</y>
+     <width>89</width>
+     <height>27</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Remove</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="deleteAnnoObjectButton_2">
+   <property name="geometry">
+    <rect>
+     <x>230</x>
+     <y>360</y>
+     <width>89</width>
+     <height>27</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Refine</string>
    </property>
   </widget>
  </widget>
