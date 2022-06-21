@@ -2,25 +2,20 @@
 
 An interactive 6 degree-of-freedom pose annotation tool using point cloud processings.
 
-<img src="./example.png" width="5000px">
-
-## Requirements
-- [open3d==0.11.1](http://www.open3d.org/)
-- [opencv-python==4.4.0.44](https://opencv.org/)
-
-
-
+<!-- <img src="./example.png" width="5000px"> -->
 
 # TODO:
 - [X] Show object coordinate
-- [ ] Add score visualizer
+- [X] Add progressive bar
 - [X] Add smart view controller
+- [X] Move to initial viewpoint
+- [ ] Show original image
+- [ ] Add transparency
 - [ ] Add logger
+- [ ] Add score visualizer
 
-Try:
 ```
 $ conda activate pose-anno
-$ pip install opencv-python==4.1.2.30.
 $ python annotator.py
 ```
 
