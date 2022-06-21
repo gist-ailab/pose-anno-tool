@@ -68,12 +68,13 @@ class Settings:
     def __init__(self):
         self.bg_color = gui.Color(1, 1, 1)
         self.show_axes = False
+        self.show_coord_frame = False
         self.highlight_obj = True
 
         self.apply_material = True  # clear to False after processing
 
         self.scene_material = rendering.MaterialRecord()
-        self.scene_material.base_color = [0.9, 0.9, 0.9, 1.0]
+        self.scene_material.base_color = [1.0, 1.0, 1.0, 1.0]
         self.scene_material.shader = Settings.UNLIT
 
         self.annotation_obj_material = rendering.MaterialRecord()
@@ -111,6 +112,21 @@ class AppWindow:
         self._show_axes.checked = self.settings.show_axes
         self._highlight_obj.checked = self.settings.highlight_obj
         self._point_size.double_value = self.settings.scene_material.point_size
+
+        if self.settings.show_coord_frame:
+            self._add_coord_frame()
+        else:
+            self._scene.scene.remove_geometry("coord_frame")
+
+    def _add_coord_frame(self):
+        objects = self._annotation_scene.get_objects()
+        active_obj = objects[self._meshes_used.selected_index]
+        self._scene.scene.remove_geometry("coord_frame")
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+        coord_frame.transform(active_obj.transform)
+        self._scene.scene.add_geometry("coord_frame", coord_frame, 
+                                        self.settings.annotation_obj_material,
+                                        add_downsampled_copy_for_fast_rendering=True) # shsh
 
     def _on_layout(self, layout_context):
         r = self.window.content_rect
@@ -180,6 +196,10 @@ class AppWindow:
         self._highlight_obj = gui.Checkbox("Highligh annotation objects")
         self._highlight_obj.set_on_checked(self._on_highlight_obj)
         view_ctrls.add_child(self._highlight_obj)
+
+        self._show_coord_frame = gui.Checkbox("Show coordinate frame")
+        self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
+        view_ctrls.add_child(self._show_coord_frame)
 
         self._point_size = gui.Slider(gui.Slider.INT)
         self._point_size.set_limits(1, 10)
@@ -303,6 +323,8 @@ class AppWindow:
 
         self._scene.set_on_mouse(self._on_mouse)
 
+
+
     def _on_filedlg_button(self):
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "Select file",
                                  self.window.theme)
@@ -335,10 +357,14 @@ class AppWindow:
 
 
     def _set_mouse_mode_rotate(self):
+        print("rotate mode")
+        
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
     def _set_mouse_mode_fly(self):
+        print("fly mode")
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
+
 
 
     def _update_scene_numbers(self):
@@ -393,8 +419,14 @@ class AppWindow:
             self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                            self.settings.annotation_active_obj_material,
                                            add_downsampled_copy_for_fast_rendering=True)
+                                        
             # update values stored of object
             active_obj.transform = np.matmul(h_transform, active_obj.transform)
+
+            if self.settings.show_coord_frame:
+                self._add_coord_frame()
+
+            
 
         if event.type == gui.KeyEvent.DOWN:  # only move objects with down strokes
             # Refine
@@ -501,8 +533,11 @@ class AppWindow:
         self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                     self.settings.annotation_active_obj_material,
                                     add_downsampled_copy_for_fast_rendering=True)
+        self._apply_settings()
 
     def _on_refine(self):
+
+        print("refine!")
         self._annotation_changed = True
 
         # if no active_mesh selected print error
@@ -533,6 +568,10 @@ class AppWindow:
                                         self.settings.annotation_active_obj_material,
                                         add_downsampled_copy_for_fast_rendering=True)
             active_obj.transform = np.matmul(reg.transformation, active_obj.transform)
+
+            if self.settings.show_coord_frame:
+                self._add_coord_frame()
+
 
     def _on_generate(self):
         image_num = self._annotation_scene.image_num
@@ -586,6 +625,10 @@ class AppWindow:
 
     def _on_show_axes(self, show):
         self.settings.show_axes = show
+        self._apply_settings()
+
+    def _on_show_coord_frame(self, show):
+        self.settings.show_coord_frame = show
         self._apply_settings()
 
     def _on_highlight_obj(self, light):
@@ -674,6 +717,7 @@ class AppWindow:
         new_mesh_name = str(self._meshes_available.selected_value) + '_' + str(new_mesh_instance)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
+
         self._annotation_scene.add_obj(object_geometry, new_mesh_name, new_mesh_instance, transform=init_trans)
         meshes = self._annotation_scene.get_objects()  # update list after adding current object
         meshes = [i.obj_name for i in meshes]
@@ -708,6 +752,7 @@ class AppWindow:
         return pcd
 
     def scene_load(self, scenes_path, scene_num, image_num):
+
         self._annotation_changed = False
 
         self._scene.scene.clear_geometry()
@@ -798,6 +843,7 @@ class AppWindow:
     def update_obj_list(self):
         model_names = self.load_model_names()
         self._meshes_available.set_items(model_names)
+
 
     def load_model_names(self):
 

@@ -12,9 +12,10 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 
 
 # TODO:
-- [ ] Show object coordinate
+- [X] Show object coordinate
 - [ ] Add score visualizer
 - [X] Add smart view controller
+- [ ] Add logger
 
 Try:
 ```
