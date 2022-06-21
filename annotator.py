@@ -119,6 +119,9 @@ class AppWindow:
             self._scene.scene.remove_geometry("coord_frame")
 
     def _add_coord_frame(self):
+        if self._annotation_scene is None: # shsh
+            self._on_error("There is no scene selected.")
+            return
         objects = self._annotation_scene.get_objects()
         active_obj = objects[self._meshes_used.selected_index]
         self._scene.scene.remove_geometry("coord_frame")
@@ -126,7 +129,7 @@ class AppWindow:
         coord_frame.transform(active_obj.transform)
         self._scene.scene.add_geometry("coord_frame", coord_frame, 
                                         self.settings.annotation_obj_material,
-                                        add_downsampled_copy_for_fast_rendering=True) # shsh
+                                        add_downsampled_copy_for_fast_rendering=True) 
 
     def _on_layout(self, layout_context):
         r = self.window.content_rect
@@ -144,7 +147,7 @@ class AppWindow:
         self.settings = Settings()
 
         self.window = gui.Application.instance.create_window(
-            "BOP manual annotation tool", width, height)
+            "GIST AILAB 6D Object Pose Annotation Tool", width, height)
         w = self.window  # to make the code more concise
 
         # 3D widget
@@ -323,7 +326,9 @@ class AppWindow:
 
         self._scene.set_on_mouse(self._on_mouse)
 
-
+        self._annotation_changed = False
+        self.current_scene_idx = None
+        self.current_image_idx = None
 
     def _on_filedlg_button(self):
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "Select file",
@@ -342,19 +347,21 @@ class AppWindow:
         dataset_path = str(Path(rgb_path).parent.parent.parent.parent)
         split_and_type = basename(str(Path(rgb_path).parent.parent.parent))
         self.scenes = Dataset(dataset_path, split_and_type)
-        start_scene_num = int(basename(str(Path(rgb_path).parent.parent)))
-        start_image_num = int(basename(rgb_path)[:-4])
-        self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + "/*")])
-        self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
-        self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + "/*.png")])
-        self.current_image_idx = self.image_num_lists.index(start_image_num)
+        try: 
+            start_scene_num = int(basename(str(Path(rgb_path).parent.parent)))
+            start_image_num = int(basename(rgb_path)[:-4])
+            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + "/*")])
+            self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
+            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + "/*.png")])
+            self.current_image_idx = self.image_num_lists.index(start_image_num)
+            if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
+                self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
+                self.update_obj_list()
+            self.window.close_dialog()
+        except Exception as e:
+            print(e)
+            self._on_error("Invalid path is selected.")
         
-        if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
-            self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
-            self.update_obj_list()
-
-        self.window.close_dialog()
-
 
     def _set_mouse_mode_rotate(self):
         print("rotate mode")
@@ -574,6 +581,10 @@ class AppWindow:
 
 
     def _on_generate(self):
+        if self._annotation_scene is None: # shsh
+            self._on_error("There is no scene selected.")
+            return
+
         image_num = self._annotation_scene.image_num
         model_names = self.load_model_names()
 
@@ -643,6 +654,9 @@ class AppWindow:
         self._apply_settings()
 
         # update current object visualization
+        if self._annotation_scene is None: # shsh
+            self._on_error("There is no scene selected.")
+            return
         meshes = self._annotation_scene.get_objects()
         for mesh in meshes:
             self._scene.scene.modify_geometry_material(mesh.obj_name, self.settings.annotation_obj_material)
@@ -666,7 +680,7 @@ class AppWindow:
 
         # Add the text
         dlg_layout = gui.Vert(em, gui.Margins(em, em, em, em))
-        dlg_layout.add_child(gui.Label("BOP manual annotation tool"))
+        dlg_layout.add_child(gui.Label("GIST AILAB 6D Object Pose Annotation Tool.\nCopyright (c) 2022 Seunghyeok Back\nGwangju Institute of Science and Technology (GIST)\nshback@gm.gist.ac.kr"))
 
         # Add the Ok button. We need to define a callback function to handle
         # the click.
@@ -702,6 +716,10 @@ class AppWindow:
         return count
 
     def _add_mesh(self):
+        if self._annotation_scene is None: # shsh
+            self._on_error("There is no scene selected.")
+            return
+
         meshes = self._annotation_scene.get_objects()
         meshes = [i.obj_name for i in meshes]
         object_geometry = o3d.io.read_point_cloud(
@@ -725,6 +743,9 @@ class AppWindow:
         self._meshes_used.selected_index = len(meshes) - 1
 
     def _remove_mesh(self):
+        if self._annotation_scene is None: # shsh
+            self._on_error("There is no scene selected.")
+            return
         if not self._annotation_scene.get_objects():
             print("There are no object to be deleted.")
             return
@@ -863,7 +884,9 @@ class AppWindow:
     def _on_next_scene(self):
         if self._check_changes():
             return
-
+        if self.current_scene_idx is None:
+            self._on_error("There is no scene selected.")
+            return
         if self.current_scene_idx > len(self.scene_num_lists) - 1:
             self._on_error("There is no next scene.")
             return
@@ -873,7 +896,9 @@ class AppWindow:
     def _on_previous_scene(self):
         if self._check_changes():
             return
-
+        if self.current_scene_idx is None:
+            self._on_error("There is no scene selected.")
+            return
         if self.current_scene_idx  < 0:
             self._on_error("There is no scene number before scene 1.")
             return
@@ -883,8 +908,9 @@ class AppWindow:
     def _on_next_image(self):
         if self._check_changes():
             return
-
-
+        if self.current_image_idx is None:
+            self._on_error("There is no image selected.")
+            return
         if self.current_image_idx  > len(self.image_num_lists) - 1:
             self._on_error("There is no next image.")
             return
@@ -894,7 +920,9 @@ class AppWindow:
     def _on_previous_image(self):
         if self._check_changes():
             return
-
+        if self.current_image_idx is None:
+            self._on_error("There is no scene selected.")
+            return
         if self.current_image_idx < 0:
             self._on_error("There is no image number before image 0.")
             return
