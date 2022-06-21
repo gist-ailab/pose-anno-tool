@@ -161,6 +161,18 @@ class AppWindow:
                                          gui.Margins(em, 0, 0, 0))
         view_ctrls.set_is_open(True)
 
+        self._arcball_button = gui.Button("Arcball")
+        self._arcball_button.horizontal_padding_em = 0.5
+        self._arcball_button.vertical_padding_em = 0
+        self._arcball_button.set_on_clicked(self._set_mouse_mode_rotate)
+        view_ctrls.add_child(self._arcball_button)
+
+        self._fly_button = gui.Button("Fly")
+        self._fly_button.horizontal_padding_em = 0.5
+        self._fly_button.vertical_padding_em = 0
+        self._fly_button.set_on_clicked(self._set_mouse_mode_fly)
+        view_ctrls.add_child(self._fly_button)
+
         self._show_axes = gui.Checkbox("Show axes")
         self._show_axes.set_on_checked(self._on_show_axes)
         view_ctrls.add_child(self._show_axes)
@@ -170,7 +182,7 @@ class AppWindow:
         view_ctrls.add_child(self._highlight_obj)
 
         self._point_size = gui.Slider(gui.Slider.INT)
-        self._point_size.set_limits(1, 5)
+        self._point_size.set_limits(1, 10)
         self._point_size.set_on_value_changed(self._on_point_size)
 
         grid = gui.VGrid(2, 0.25 * em)
@@ -320,6 +332,13 @@ class AppWindow:
             self.update_obj_list()
 
         self.window.close_dialog()
+
+
+    def _set_mouse_mode_rotate(self):
+        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
+
+    def _set_mouse_mode_fly(self):
+        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
 
 
     def _update_scene_numbers(self):

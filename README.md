@@ -14,7 +14,7 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 # TODO:
 - [ ] Show object coordinate
 - [ ] Add score visualizer
-- [ ] Add smart view controller
+- [X] Add smart view controller
 
 Try:
 ```
