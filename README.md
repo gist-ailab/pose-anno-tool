@@ -12,11 +12,16 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Add transparency
 - [X] Show original image
 - [X] Fix camera viewpoint
-- [ ] Show mask image
+- [X] Show mask image
+- [X] Add score visualizer
 - [ ] Show object model images
 - [ ] Add logger
+- [ ] Add shortcut helper
 - [ ] Test save function 
-- [ ] Add score visualizer
+- [ ] Add original coordinate
+- [ ] Keyboard shortcuts
+- [ ] Test on window
+- [ ] Pyinstaller
 
 ```
 $ conda activate pose-anno

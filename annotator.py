@@ -28,6 +28,10 @@ from os.path import basename, dirname, abspath
 
 from requests import JSONDecodeError
 
+from bop_toolkit_lib import inout
+from bop_toolkit_lib import visualization
+from bop_toolkit_lib import renderer
+
 
 
 dist = 0.002
@@ -116,6 +120,7 @@ class AppWindow:
             self.settings.apply_material = False
         self._show_axes.checked = self.settings.show_axes
         self._highlight_obj.checked = self.settings.highlight_obj
+        self._show_coord_frame.checked = self.settings.show_coord_frame
         self._point_size.double_value = self.settings.scene_material.point_size
 
         if self.settings.show_coord_frame:
@@ -164,10 +169,9 @@ class AppWindow:
         self.current_scene_idx = None
         self.current_image_idx = None
         self.bounds = None
-
+        self.ren = None
 
         self.settings = Settings()
-
         self.window = gui.Application.instance.create_window(
             "GIST AILAB 6D Object Pose Annotation Tool", width, height)
         w = self.window  # to make the code more concise
@@ -246,14 +250,24 @@ class AppWindow:
         self._rgb_proxy = gui.WidgetProxy()
         self._rgb_proxy.set_widget(gui.ImageWidget())
         self._rgb_image.add_child(self._rgb_proxy)
+
         self._mask_image = gui.CollapsableVert("Mask", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         self._mask_image.set_is_open(False)
         self._mask_proxy = gui.WidgetProxy()
         self._mask_proxy.set_widget( gui.ImageWidget())
         self._mask_image.add_child(self._mask_proxy)
+
+        self._diff_image = gui.CollapsableVert("Difference", 0.33 * em,
+                                            gui.Margins(em, 0, 0, 0))
+        self._diff_image.set_is_open(False)
+        self._diff_proxy = gui.WidgetProxy()
+        self._diff_proxy.set_widget( gui.ImageWidget())
+        self._diff_image.add_child(self._diff_proxy)
+
         self._images_panel.add_child(self._rgb_image)
         self._images_panel.add_child(self._mask_image)
+        self._images_panel.add_child(self._diff_image)
 
         # 3D Annotation tool options
         annotation_objects = gui.CollapsableVert("Annotation Objects", 0.33 * em,
@@ -404,8 +418,8 @@ class AppWindow:
             self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + "/*.png")])
             self.current_image_idx = self.image_num_lists.index(start_image_num)
             if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
-                self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
                 self.update_obj_list()
+                self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
                 self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
                 self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
                     100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
@@ -447,7 +461,18 @@ class AppWindow:
             if event.key == gui.KeyName.T:
                 self._on_initial_viewpoint()
                 return gui.Widget.EventCallbackResult.HANDLED
-
+            if event.key == gui.KeyName.S:
+                self._on_generate()
+                return gui.Widget.EventCallbackResult.HANDLED      
+            if event.key == gui.KeyName.Q:
+                self._rgb_image.set_is_open(not self._rgb_image.get_is_open())
+                return gui.Widget.EventCallbackResult.HANDLED      
+            if event.key == gui.KeyName.W:
+                self._mask_image.set_is_open(not self._mask_image.get_is_open())
+                return gui.Widget.EventCallbackResult.HANDLED      
+            if event.key == gui.KeyName.E:
+                self._diff_image.set_is_open(not self._diff_image.get_is_open())
+                return gui.Widget.EventCallbackResult.HANDLED      
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
             self._on_error("No objects are highlighted in scene meshes")
@@ -532,6 +557,13 @@ class AppWindow:
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
                 gui.KeyModifier.ALT):
 
+            try:
+                objects = self._annotation_scene.get_objects()
+                active_obj = objects[self._meshes_used.selected_index]
+            except IndexError:
+                self._on_error("No object is selected.")
+                return gui.Widget.EventCallbackResult.HANDLED
+
             def depth_callback(depth_image):
                 # Coordinates are expressed in absolute coordinates of the
                 # window, but to dereference the image correctly we need them
@@ -587,7 +619,6 @@ class AppWindow:
 
     def _on_refine(self):
 
-        print("refine!")
         self._annotation_changed = True
 
         # if no active_mesh selected print error
@@ -630,14 +661,14 @@ class AppWindow:
 
         image_num = self._annotation_scene.image_num
         model_names = self.load_model_names()
-
         json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt.json")
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
                 try:
                     gt_6d_pose_data = json.load(gt_scene)
-                except json.decoder.JSONDecodeError:
+                except json.decoder.JSONDecodeError as e:
+                    print(e)
                     gt_6d_pose_data = {}
         else:
             gt_6d_pose_data = {}
@@ -649,7 +680,7 @@ class AppWindow:
                 transform_cam_to_object = obj.transform
                 translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
                 model_names = self.load_model_names()
-                obj_id = model_names.index(obj.obj_name[:-2]) + 1  # assuming max number of object of same object 10
+                obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
                 obj_data = {
                     "cam_R_m2c": transform_cam_to_object[0:3, 0:3].tolist(),  # rotation matrix
                     "cam_t_m2c": translation,  # translation
@@ -658,6 +689,33 @@ class AppWindow:
                 view_angle_data.append(obj_data)
             gt_6d_pose_data[str(image_num)] = view_angle_data
             json.dump(gt_6d_pose_data, gt_scene)
+
+        # visualize gt poses and calcuate the differences 
+
+        gt_poses = []
+        for i, obj_data in enumerate(view_angle_data):
+            gt_poses.append({
+                'obj_id': obj_data['obj_id'],
+                'R': np.array(obj_data['cam_R_m2c'], float).reshape((3, 3)),
+                't': np.array(obj_data['cam_t_m2c'], float).reshape((3, 1)),
+                'text_info': [
+                {'name': '', 'val': 'obj{}:id{}'.format(obj_data['obj_id'], i), 'fmt': ''}
+                ]
+            })
+
+        rgb = inout.load_im(self.rgb_path)
+        depth = inout.load_depth(self.depth_path)
+        vis_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "vis")
+        vis_rgb_path = os.path.join(vis_path, f"{image_num:06}_mask.jpg")
+        vis_depth_diff_path = os.path.join(vis_path, f"{image_num:06}_diff.jpg")
+        if not os.path.exists(vis_path):
+            os.makedirs(vis_path)
+        visualization.vis_object_poses(
+            poses=gt_poses, K=self.cam_K, renderer=self.ren, rgb=rgb, depth=depth,
+            vis_rgb_path=vis_rgb_path, vis_depth_diff_path=vis_depth_diff_path,
+            vis_rgb_resolve_visib=True)
+        self._mask_proxy.set_widget(gui.ImageWidget(vis_rgb_path))
+        self._diff_proxy.set_widget(gui.ImageWidget(vis_depth_diff_path))
 
         self._annotation_changed = False
 
@@ -725,7 +783,6 @@ class AppWindow:
                                             self.settings.annotation_obj_material,
                                             add_downsampled_copy_for_fast_rendering=True)
 
-        print(self._meshes_used.selected_index, len(objects))                                          
         active_obj = objects[self._meshes_used.selected_index]
         self._scene.scene.remove_geometry(active_obj.obj_name)
         self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
@@ -804,6 +861,7 @@ class AppWindow:
         object_geometry.transform(init_trans)
         new_mesh_instance = self._obj_instance_count(self._meshes_available.selected_value, meshes)
         new_mesh_name = str(self._meshes_available.selected_value) + '_' + str(new_mesh_instance)
+        print(self._meshes_available.selected_value)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
 
@@ -856,20 +914,20 @@ class AppWindow:
         with open(camera_params_path) as f:
             data = json.load(f)
             cam_K = data[str(image_num)]['cam_K']
-            cam_K = np.array(cam_K).reshape((3, 3))
+            self.cam_K = np.array(cam_K).reshape((3, 3))
             depth_scale = data[str(image_num)]['depth_scale']
 
-        rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}' + '.png')
-        rgb_img = cv2.imread(rgb_path)
-        depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}' + '.png')
-        depth_img = cv2.imread(depth_path, -1)
+        self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}' + '.png')
+        rgb_img = cv2.imread(self.rgb_path)
+        self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}' + '.png')
+        depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img * depth_scale / 1000)
-
-        self._rgb_proxy.set_widget(gui.ImageWidget(rgb_path))
+        self._rgb_proxy.set_widget(gui.ImageWidget(self.rgb_path))
 
         try:
-            geometry = self._make_point_cloud(rgb_img, depth_img, cam_K)
-        except Exception:
+            geometry = self._make_point_cloud(rgb_img, depth_img, self.cam_K)
+        except Exception as e:
+            print(e)
             print("Failed to load scene.")
 
         if geometry is not None:
@@ -897,7 +955,7 @@ class AppWindow:
                     data = json.load(scene_gt_file)
                 except json.decoder.JSONDecodeError:
                     self._on_error(
-                        "Filed to load the previous annotion"
+                        "Failed to load the previous annotation"
                     )
                     return
                 if str(image_num) in data.keys():
@@ -936,14 +994,27 @@ class AppWindow:
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
+        # renderer for visualization
+        if self.ren is None:
+            colors_path = os.path.join(
+            os.path.dirname(visualization.__file__), 'colors.json')
+            colors = inout.load_json(colors_path)
+            height, width, _ = rgb_img.shape
+            renderer_modalities = ["rgb", "depth"]
+            renderer_mode = '+'.join(renderer_modalities)
+            self.ren = renderer.create_renderer(width, height, 'python', mode=renderer_mode, shading='flat')
+            for obj_id in self.obj_ids:
+                model_path = os.path.join(self.scenes.objects_path, f"obj_{obj_id:06}.ply")
+                model_color = tuple(colors[(obj_id - 1) % len(colors)])
+                self.ren.add_object(obj_id, model_path, surf_color=model_color)
+
     def update_obj_list(self):
         model_names = self.load_model_names()
         self._meshes_available.set_items(model_names)
 
-
     def load_model_names(self):
-        obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + '/*.ply')])
-        model_names = ['obj_' + f'{ + obj_id:06}' for obj_id in obj_ids]
+        self.obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + '/*.ply')])
+        model_names = ['obj_' + f'{ + obj_id:06}' for obj_id in self.obj_ids]
         return model_names
 
     def _on_initial_viewpoint(self):
