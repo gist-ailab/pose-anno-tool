@@ -12,6 +12,7 @@ original repo: https://github.com/FLW-TUDO/3d_annotation_tool
 """
 
 import glob
+from cv2 import dft
 import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
@@ -145,8 +146,25 @@ class AppWindow:
                 layout_context, gui.Widget.Constraints()).height)
         self._settings_panel.frame = gui.Rect(r.get_right() - width, r.y, width,
                                               height)
+        width = min(
+            r.width,
+            self._rgb_proxy.calc_preferred_size(
+                layout_context, gui.Widget.Constraints()).width * 1.2)
+        height = min(
+            r.height,
+            self._images_panel.calc_preferred_size(
+                layout_context, gui.Widget.Constraints()).height)                                      
+        self._images_panel.frame = gui.Rect(0, r.y, width, height)                                
 
     def __init__(self, width, height):
+
+
+        self._annotation_scene = None
+        self._annotation_changed = False
+        self.current_scene_idx = None
+        self.current_image_idx = None
+        self.bounds = None
+
 
         self.settings = Settings()
 
@@ -184,18 +202,6 @@ class AppWindow:
                                          gui.Margins(em, 0, 0, 0))
         view_ctrls.set_is_open(True)
 
-        self._arcball_button = gui.Button("Arcball")
-        self._arcball_button.horizontal_padding_em = 0.5
-        self._arcball_button.vertical_padding_em = 0
-        self._arcball_button.set_on_clicked(self._set_mouse_mode_rotate)
-        view_ctrls.add_child(self._arcball_button)
-
-        self._fly_button = gui.Button("Fly")
-        self._fly_button.horizontal_padding_em = 0.5
-        self._fly_button.vertical_padding_em = 0
-        self._fly_button.set_on_clicked(self._set_mouse_mode_fly)
-        view_ctrls.add_child(self._fly_button)
-
         self._show_axes = gui.Checkbox("Show axes")
         self._show_axes.set_on_checked(self._on_show_axes)
         view_ctrls.add_child(self._show_axes)
@@ -226,9 +232,28 @@ class AppWindow:
         self._settings_panel.add_child(view_ctrls)
         # ----
 
+        self._images_panel = gui.CollapsableVert("2D Images", 0.33 * em,
+                                                 gui.Margins(em, 0, 0, 0))
+
         w.set_on_layout(self._on_layout)
         w.add_child(self._scene)
         w.add_child(self._settings_panel)
+        w.add_child(self._images_panel)
+
+        self._rgb_image = gui.CollapsableVert("RGB", 0.33 * em,
+                                                 gui.Margins(em, 0, 0, 0))
+        self._rgb_image.set_is_open(False)
+        self._rgb_proxy = gui.WidgetProxy()
+        self._rgb_proxy.set_widget(gui.ImageWidget())
+        self._rgb_image.add_child(self._rgb_proxy)
+        self._mask_image = gui.CollapsableVert("Mask", 0.33 * em,
+                                                 gui.Margins(em, 0, 0, 0))
+        self._mask_image.set_is_open(False)
+        self._mask_proxy = gui.WidgetProxy()
+        self._mask_proxy.set_widget( gui.ImageWidget())
+        self._mask_image.add_child(self._mask_proxy)
+        self._images_panel.add_child(self._rgb_image)
+        self._images_panel.add_child(self._mask_image)
 
         # 3D Annotation tool options
         annotation_objects = gui.CollapsableVert("Annotation Objects", 0.33 * em,
@@ -339,11 +364,10 @@ class AppWindow:
 
         # ---- annotation tool settings ----
         self._on_transparency(0.5)
-        self._on_point_size(1)  # set default size to 1
+        self._on_point_size(3)  # set default size to 1
 
         self._apply_settings()
 
-        self._annotation_scene = None
 
         # set callbacks for key control
         self._scene.set_on_key(self._transform)
@@ -351,11 +375,6 @@ class AppWindow:
         self._left_shift_modifier = False
 
         self._scene.set_on_mouse(self._on_mouse)
-
-        self._annotation_changed = False
-        self.current_scene_idx = None
-        self.current_image_idx = None
-        self.bounds = None
 
     def _on_slider(self, new_val):
         self._progress.value = new_val / 20.0
@@ -397,17 +416,6 @@ class AppWindow:
             self._on_error("Invalid path is selected.")
         
 
-    def _set_mouse_mode_rotate(self):
-        print("rotate mode")
-        
-        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
-
-    def _set_mouse_mode_fly(self):
-        print("fly mode")
-        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
-
-
-
     def _update_scene_numbers(self):
         self._scene_number.text = "Scene: " + f'{self._annotation_scene.scene_num:06}'
         self._image_number.text = "Image: " + f'{self._annotation_scene.image_num:06}'
@@ -431,6 +439,14 @@ class AppWindow:
                 dist = 0.005
                 deg = 1
             return gui.Widget.EventCallbackResult.HANDLED
+
+        if event.type == gui.KeyEvent.DOWN:  # only move objects with down strokes
+            if event.key == gui.KeyName.R:
+                self._on_refine()
+                return gui.Widget.EventCallbackResult.HANDLED
+            if event.key == gui.KeyName.T:
+                self._on_initial_viewpoint()
+                return gui.Widget.EventCallbackResult.HANDLED
 
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
@@ -466,11 +482,6 @@ class AppWindow:
                 self._add_coord_frame()
 
         if event.type == gui.KeyEvent.DOWN:  # only move objects with down strokes
-            # Refine
-            if event.key == gui.KeyName.R:
-                self._on_refine()
-            if event.key == gui.KeyName.T:
-                self._on_initial_viewpoint()
             # Translation
             if not self._left_shift_modifier:
                 if event.key == gui.KeyName.L:
@@ -700,7 +711,26 @@ class AppWindow:
 
 
     def _on_transparency(self, transparency): #shsh
+        
+        self.settings.transparency = transparency
+        if self._annotation_scene is None:
+            return
+        self.settings.annotation_obj_material.base_color = [0.9, 0.3 + 0.6*transparency, 0.3 + 0.6*transparency, 1]
+        self.settings.annotation_active_obj_material.base_color = [0.3 + 0.6*transparency, 0.9, 0.3 + 0.6*transparency, 1]
 
+        objects = self._annotation_scene.get_objects()
+        for obj in objects:
+            self._scene.scene.remove_geometry(obj.obj_name)
+            self._scene.scene.add_geometry(obj.obj_name, obj.obj_geometry,
+                                            self.settings.annotation_obj_material,
+                                            add_downsampled_copy_for_fast_rendering=True)
+
+        print(self._meshes_used.selected_index, len(objects))                                          
+        active_obj = objects[self._meshes_used.selected_index]
+        self._scene.scene.remove_geometry(active_obj.obj_name)
+        self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
+                                        self.settings.annotation_active_obj_material,
+                                        add_downsampled_copy_for_fast_rendering=True)                       
         self._apply_settings()
 
 
@@ -835,6 +865,8 @@ class AppWindow:
         depth_img = cv2.imread(depth_path, -1)
         depth_img = np.float32(depth_img * depth_scale / 1000)
 
+        self._rgb_proxy.set_widget(gui.ImageWidget(rgb_path))
+
         try:
             geometry = self._make_point_cloud(rgb_img, depth_img, cam_K)
         except Exception:
@@ -900,6 +932,9 @@ class AppWindow:
                         active_meshes.append(obj_name)
                     self._meshes_used.set_items(active_meshes)
         self._update_scene_numbers()
+
+        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
+        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
     def update_obj_list(self):
         model_names = self.load_model_names()

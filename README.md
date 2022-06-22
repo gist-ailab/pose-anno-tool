@@ -9,9 +9,13 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Add progressive bar
 - [X] Add smart view controller
 - [X] Move to initial viewpoint
-- [ ] Show original image
-- [ ] Add transparency
+- [X] Add transparency
+- [X] Show original image
+- [X] Fix camera viewpoint
+- [ ] Show mask image
+- [ ] Show object model images
 - [ ] Add logger
+- [ ] Test save function 
 - [ ] Add score visualizer
 
 ```
