@@ -252,6 +252,7 @@ class AppWindow:
                                                  gui.Margins(em, 0, 0, 0))
         self._object_list_panel = gui.CollapsableVert("Object List", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
+        self._object_list_panel.set_is_open(False)
 
         self._rgb_image = gui.CollapsableVert("RGB", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
@@ -1087,6 +1088,8 @@ class AppWindow:
         eye = center + np.array([0, 0, -0.5])
         up = np.array([0, -1, 0])
         self._scene.look_at(center, eye, up)
+        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
+        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
     def _check_changes(self):
         if self._annotation_changed:

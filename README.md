@@ -18,6 +18,7 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Show object model images
 - [ ] Add logger
 - [ ] Add shortcut helper
+- [ ] Relative transfrom w.r.t user's view direction
 - [ ] Test save function 
 - [ ] Keyboard shortcuts
 - [ ] Test on window
