@@ -12,7 +12,6 @@ original repo: https://github.com/FLW-TUDO/3d_annotation_tool
 """
 
 import glob
-from cv2 import dft
 import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
@@ -20,19 +19,22 @@ import open3d.visualization.rendering as rendering
 import os
 import json
 import cv2
-import random
-import warnings
 
 from pathlib import Path
-from os.path import basename, dirname, abspath
-
-from requests import JSONDecodeError
+from os.path import basename, dirname
 
 from bop_toolkit_lib import inout
 from bop_toolkit_lib import visualization
 from bop_toolkit_lib import renderer
 
-
+import pyrender
+import trimesh
+import numpy as np
+import matplotlib.pyplot as plt
+import glob
+import imgviz
+import cv2
+import os
 
 dist = 0.002
 deg = 1
@@ -128,41 +130,51 @@ class AppWindow:
         else:
             self._scene.scene.remove_geometry("coord_frame")
 
-    def _add_coord_frame(self):
+    def _add_coord_frame(self, name="coord_frame", size=0.1, origin=[0, 0, 0]):
         if self._annotation_scene is None: # shsh
             self._on_error("There is no scene selected.")
             return
         objects = self._annotation_scene.get_objects()
         active_obj = objects[self._meshes_used.selected_index]
-        self._scene.scene.remove_geometry("coord_frame")
-        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+        self._scene.scene.remove_geometry(name)
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
         coord_frame.transform(active_obj.transform)
-        self._scene.scene.add_geometry("coord_frame", coord_frame, 
+        self._scene.scene.add_geometry(name, coord_frame, 
                                         self.settings.annotation_obj_material,
                                         add_downsampled_copy_for_fast_rendering=True) 
 
     def _on_layout(self, layout_context):
         r = self.window.content_rect
         self._scene.frame = r
-        width = 17 * layout_context.theme.font_size
-        height = min(
+        width_set = 17 * layout_context.theme.font_size
+        height_set = min(
             r.height,
             self._settings_panel.calc_preferred_size(
                 layout_context, gui.Widget.Constraints()).height)
-        self._settings_panel.frame = gui.Rect(r.get_right() - width, r.y, width,
-                                              height)
-        width = min(
+        self._settings_panel.frame = gui.Rect(r.get_right() - width_set, r.y, width_set,
+                                              height_set)
+        width_im = min(
             r.width,
-            self._rgb_proxy.calc_preferred_size(
-                layout_context, gui.Widget.Constraints()).width * 1.2)
-        height = min(
+            self._images_panel.calc_preferred_size(
+                layout_context, gui.Widget.Constraints()).width * 1.1)
+        height_im = min(
             r.height,
             self._images_panel.calc_preferred_size(
-                layout_context, gui.Widget.Constraints()).height)                                      
-        self._images_panel.frame = gui.Rect(0, r.y, width, height)                                
+                layout_context, gui.Widget.Constraints()).height * 1.1)                     
+        self._images_panel.frame = gui.Rect(0, r.y, width_im, height_im)   
+
+        width_obj = min(
+                r.width,
+                self._object_list_panel.calc_preferred_size(
+                    layout_context, gui.Widget.Constraints()).width * 1.1)
+        height_obj = min(
+                r.width,
+                self._object_list_panel.calc_preferred_size(
+                    layout_context, gui.Widget.Constraints()).height * 1.1)
+        self._object_list_panel.frame = gui.Rect(r.get_right() - width_set - width_obj, r.y, width_obj, height_obj)                             
+
 
     def __init__(self, width, height):
-
 
         self._annotation_scene = None
         self._annotation_changed = False
@@ -238,11 +250,8 @@ class AppWindow:
 
         self._images_panel = gui.CollapsableVert("2D Images", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
-
-        w.set_on_layout(self._on_layout)
-        w.add_child(self._scene)
-        w.add_child(self._settings_panel)
-        w.add_child(self._images_panel)
+        self._object_list_panel = gui.CollapsableVert("Object List", 0.33 * em,
+                                                 gui.Margins(em, 0, 0, 0))
 
         self._rgb_image = gui.CollapsableVert("RGB", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
@@ -269,7 +278,19 @@ class AppWindow:
         self._images_panel.add_child(self._mask_image)
         self._images_panel.add_child(self._diff_image)
 
+        self._object_list_proxy = gui.WidgetProxy()
+        self._object_list_proxy.set_widget(gui.ImageWidget())
+        self._object_list_panel.add_child(self._object_list_proxy)
+
         # 3D Annotation tool options
+
+        w.set_on_layout(self._on_layout)
+        w.add_child(self._scene)
+        w.add_child(self._settings_panel)
+        w.add_child(self._images_panel)
+        w.add_child(self._object_list_panel)
+
+
         annotation_objects = gui.CollapsableVert("Annotation Objects", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         annotation_objects.set_is_open(True)
@@ -464,15 +485,6 @@ class AppWindow:
             if event.key == gui.KeyName.S:
                 self._on_generate()
                 return gui.Widget.EventCallbackResult.HANDLED      
-            if event.key == gui.KeyName.Q:
-                self._rgb_image.set_is_open(not self._rgb_image.get_is_open())
-                return gui.Widget.EventCallbackResult.HANDLED      
-            if event.key == gui.KeyName.W:
-                self._mask_image.set_is_open(not self._mask_image.get_is_open())
-                return gui.Widget.EventCallbackResult.HANDLED      
-            if event.key == gui.KeyName.E:
-                self._diff_image.set_is_open(not self._diff_image.get_is_open())
-                return gui.Widget.EventCallbackResult.HANDLED      
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
             self._on_error("No objects are highlighted in scene meshes")
@@ -640,7 +652,7 @@ class AppWindow:
                                                           o3d.pipelines.registration.TransformationEstimationPointToPlane(),
                                                           o3d.pipelines.registration.ICPConvergenceCriteria(
                                                               max_iteration=50))
-        # print("ICP trans sum:", np.sum(np.abs(reg.transformation[:, 3])))                                           
+        print("ICP trans sum:", np.sum(np.abs(reg.transformation[:, 3])))                                           
         if np.sum(np.abs(reg.transformation[:, 3])) < 3:
             active_obj.obj_geometry.transform(reg.transformation)
             # active_obj.obj_geometry.paint_uniform_color([0,1,0])  # Debug
@@ -702,22 +714,21 @@ class AppWindow:
                 {'name': '', 'val': 'obj{}:id{}'.format(obj_data['obj_id'], i), 'fmt': ''}
                 ]
             })
-
-        rgb = inout.load_im(self.rgb_path)
-        depth = inout.load_depth(self.depth_path)
-        vis_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "vis")
-        vis_rgb_path = os.path.join(vis_path, f"{image_num:06}_mask.jpg")
-        vis_depth_diff_path = os.path.join(vis_path, f"{image_num:06}_diff.jpg")
-        if not os.path.exists(vis_path):
-            os.makedirs(vis_path)
-        visualization.vis_object_poses(
-            poses=gt_poses, K=self.cam_K, renderer=self.ren, rgb=rgb, depth=depth,
-            vis_rgb_path=vis_rgb_path, vis_depth_diff_path=vis_depth_diff_path,
-            vis_rgb_resolve_visib=True)
-        self._mask_proxy.set_widget(gui.ImageWidget(vis_rgb_path))
-        self._diff_proxy.set_widget(gui.ImageWidget(vis_depth_diff_path))
-
-        self._annotation_changed = False
+        if len(gt_poses) > 0:
+            rgb = inout.load_im(self.rgb_path)
+            depth = inout.load_depth(self.depth_path)
+            vis_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "vis")
+            vis_rgb_path = os.path.join(vis_path, f"{image_num:06}_mask.jpg")
+            vis_depth_diff_path = os.path.join(vis_path, f"{image_num:06}_diff.jpg")
+            if not os.path.exists(vis_path):
+                os.makedirs(vis_path)
+            visualization.vis_object_poses(
+                poses=gt_poses, K=self.cam_K, renderer=self.ren, rgb=rgb, depth=depth,
+                vis_rgb_path=vis_rgb_path, vis_depth_diff_path=vis_depth_diff_path,
+                vis_rgb_resolve_visib=True)
+            self._mask_proxy.set_widget(gui.ImageWidget(vis_rgb_path))
+            self._diff_proxy.set_widget(gui.ImageWidget(vis_depth_diff_path))
+            self._annotation_changed = False
 
     def _on_error(self, err_msg):
         dlg = gui.Dialog("Error")
@@ -861,7 +872,6 @@ class AppWindow:
         object_geometry.transform(init_trans)
         new_mesh_instance = self._obj_instance_count(self._meshes_available.selected_value, meshes)
         new_mesh_name = str(self._meshes_available.selected_value) + '_' + str(new_mesh_instance)
-        print(self._meshes_available.selected_value)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
 
@@ -1009,8 +1019,57 @@ class AppWindow:
                 self.ren.add_object(obj_id, model_path, surf_color=model_color)
 
     def update_obj_list(self):
+        self.load_object_list_image()
         model_names = self.load_model_names()
         self._meshes_available.set_items(model_names)
+
+    def load_object_list_image(self):
+
+        imgs = []
+        for obj_path in glob.glob(self.scenes.objects_path + '/*.ply'):
+            obj_name = os.path.basename(obj_path).split(".")[0]
+            fuze_trimesh = trimesh.load(obj_path)
+            matrix = np.eye(4)
+            matrix[:3, :3] /= 1000
+            fuze_trimesh.apply_transform(matrix)
+            mesh = pyrender.Mesh.from_trimesh(fuze_trimesh)
+            scene = pyrender.Scene()
+            scene.add(mesh)
+            camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=1.0)
+            extent = np.max(mesh.extents)
+            s = np.sqrt(2)/2
+            camera_pose = np.array([
+                    [0.0, -s,   s,   extent*1.2],
+                    [1.0,  0.0, 0.0, 0.0],
+                    [0.0,  s,   s,   extent*1.2],
+                    [0.0,  0.0, 0.0, 1.0],
+                    ])
+            scene.add(camera, pose=camera_pose)
+            light = pyrender.SpotLight(color=np.ones(3), intensity=0.2,
+                                            innerConeAngle=np.pi/16.0,
+                                            outerConeAngle=np.pi/6.0)
+            scene.add(light, pose=camera_pose)
+            r = pyrender.OffscreenRenderer(400, 400)
+            img, _ = r.render(scene)
+            img = np.array(img, dtype=np.uint8)
+            img = cv2.putText(img, obj_name,  (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            imgs.append(img)
+
+        tiled = imgviz.tile(imgs=imgs, border=(255, 255, 255), cval=(255, 255, 255))
+        plt.figure(dpi=700)
+        plt.imshow(tiled)
+        plt.axis("off")
+        img = imgviz.io.pyplot_to_numpy()
+        plt.close()
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        img_path = os.path.join(self.scenes.objects_path, "obj_list.png")
+        h, w, _ = img.shape
+        w_t = int(self._scene.frame.width*0.3)
+        h_t = int(h*w_t/w)
+        img = cv2.resize(img, (w_t, h_t))
+        cv2.imwrite(img_path, img)
+        self._object_list_proxy.set_widget(gui.ImageWidget(img_path))
+
 
     def load_model_names(self):
         self.obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + '/*.ply')])

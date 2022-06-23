@@ -14,11 +14,11 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Fix camera viewpoint
 - [X] Show mask image
 - [X] Add score visualizer
-- [ ] Show object model images
+- [X] Add original coordinate
+- [X] Show object model images
 - [ ] Add logger
 - [ ] Add shortcut helper
 - [ ] Test save function 
-- [ ] Add original coordinate
 - [ ] Keyboard shortcuts
 - [ ] Test on window
 - [ ] Pyinstaller
