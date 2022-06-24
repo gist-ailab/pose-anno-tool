@@ -16,10 +16,11 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Add score visualizer
 - [X] Add original coordinate
 - [X] Show object model images
+- [ ] Fix key error
+- [ ] Visualize the key direction
+- [ ] Automatic save and backup
 - [ ] Add logger
 - [ ] Add shortcut helper
-- [ ] Relative transfrom w.r.t user's view direction
-- [ ] Test save function 
 - [ ] Keyboard shortcuts
 - [ ] Test on window
 - [ ] Pyinstaller

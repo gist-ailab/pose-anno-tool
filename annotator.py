@@ -126,19 +126,30 @@ class AppWindow:
         self._point_size.double_value = self.settings.scene_material.point_size
 
         if self.settings.show_coord_frame:
-            self._add_coord_frame()
+            self._add_coord_frame("obj_coord_frame", size=0.1)
+            self._add_coord_frame("world_coord_frame")
         else:
-            self._scene.scene.remove_geometry("coord_frame")
+            self._scene.scene.remove_geometry("obj_coord_frame")
+            self._scene.scene.remove_geometry("world_coord_frame")
 
-    def _add_coord_frame(self, name="coord_frame", size=0.1, origin=[0, 0, 0]):
+    def _add_coord_frame(self, name="coord_frame", size=0.2, origin=[0, 0, 0]):
         if self._annotation_scene is None: # shsh
             self._on_error("There is no scene selected.")
             return
         objects = self._annotation_scene.get_objects()
-        active_obj = objects[self._meshes_used.selected_index]
+        try:
+            active_obj = objects[self._meshes_used.selected_index]
+        except IndexError:
+            self._on_error("There no object selected.")
+            return
         self._scene.scene.remove_geometry(name)
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
-        coord_frame.transform(active_obj.transform)
+        if "world" in name:
+            transform = np.eye(4)
+            transform[:3, 3] = active_obj.transform[:3, 3]
+            coord_frame.transform(transform)
+        else:
+            coord_frame.transform(active_obj.transform)
         self._scene.scene.add_geometry(name, coord_frame, 
                                         self.settings.annotation_obj_material,
                                         add_downsampled_copy_for_fast_rendering=True) 
@@ -400,7 +411,7 @@ class AppWindow:
 
         # ---- annotation tool settings ----
         self._on_transparency(0.5)
-        self._on_point_size(3)  # set default size to 1
+        self._on_point_size(5)  # set default size to 1
 
         self._apply_settings()
 
@@ -476,16 +487,15 @@ class AppWindow:
                 deg = 1
             return gui.Widget.EventCallbackResult.HANDLED
 
-        if event.type == gui.KeyEvent.DOWN:  # only move objects with down strokes
-            if event.key == gui.KeyName.R:
-                self._on_refine()
-                return gui.Widget.EventCallbackResult.HANDLED
-            if event.key == gui.KeyName.T:
-                self._on_initial_viewpoint()
-                return gui.Widget.EventCallbackResult.HANDLED
-            if event.key == gui.KeyName.S:
-                self._on_generate()
-                return gui.Widget.EventCallbackResult.HANDLED      
+        if event.key == gui.KeyName.R:
+            self._on_refine()
+            return gui.Widget.EventCallbackResult.HANDLED
+        if event.key == gui.KeyName.T:
+            self._on_initial_viewpoint()
+            return gui.Widget.EventCallbackResult.HANDLED
+        if event.key == gui.KeyName.S:
+            self._on_generate()
+            return gui.Widget.EventCallbackResult.HANDLED      
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
             self._on_error("No objects are highlighted in scene meshes")
@@ -517,50 +527,37 @@ class AppWindow:
             active_obj.transform = np.matmul(h_transform, active_obj.transform)
 
             if self.settings.show_coord_frame:
-                self._add_coord_frame()
+                self._add_coord_frame("obj_coord_frame", size=0.1)
+                self._add_coord_frame("world_coord_frame")
 
-        if event.type == gui.KeyEvent.DOWN:  # only move objects with down strokes
-            # Translation
-            if not self._left_shift_modifier:
-                if event.key == gui.KeyName.L:
-                    print("L pressed: translate in +ve X direction")
-                    move(dist, 0, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.J:
-                    print("J pressed: translate in -ve X direction")
-                    move(-dist, 0, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.K:
-                    print("K pressed: translate in +ve Y direction")
-                    move(0, dist, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.I:
-                    print("I pressed: translate in -ve Y direction")
-                    move(0, -dist, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.O:
-                    print("O pressed: translate in +ve Z direction")
-                    move(0, 0, dist, 0, 0, 0)
-                elif event.key == gui.KeyName.U:
-                    print("U pressed: translate in -ve Z direction")
-                    move(0, 0, -dist, 0, 0, 0)
-            # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
-            else:
-                print("Left-Shift is clicked; rotation mode")
-                if event.key == gui.KeyName.L:
-                    print("L pressed: rotate around +ve X direction")
-                    move(0, 0, 0, 0, 0, deg * np.pi / 180)
-                elif event.key == gui.KeyName.J:
-                    print("J pressed: rotate around -ve X direction")
-                    move(0, 0, 0, 0, 0, -deg * np.pi / 180)
-                elif event.key == gui.KeyName.U:
-                    print("U pressed: rotate around +ve Y direction")
-                    move(0, 0, 0, 0, deg * np.pi / 180, 0)
-                elif event.key == gui.KeyName.O:
-                    print("O pressed: rotate around -ve Y direction")
-                    move(0, 0, 0, 0, -deg * np.pi / 180, 0)
-                elif event.key == gui.KeyName.K:
-                    print("K pressed: rotate around +ve Z direction")
-                    move(0, 0, 0, deg * np.pi / 180, 0, 0)
-                elif event.key == gui.KeyName.I:
-                    print("I pressed: rotate around -ve Z direction")
-                    move(0, 0, 0, -deg * np.pi / 180, 0, 0)
+        # Translation
+        if not self._left_shift_modifier:
+            if event.key == gui.KeyName.L:
+                move(dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.J:
+                move(-dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.K:
+                move(0, dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.I:
+                move(0, -dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.O:
+                move(0, 0, dist, 0, 0, 0)
+            elif event.key == gui.KeyName.U:
+                move(0, 0, -dist, 0, 0, 0)
+        # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
+        else:
+            if event.key == gui.KeyName.L:
+                move(0, 0, 0, 0, 0, deg * np.pi / 180)
+            elif event.key == gui.KeyName.J:
+                move(0, 0, 0, 0, 0, -deg * np.pi / 180)
+            elif event.key == gui.KeyName.U:
+                move(0, 0, 0, 0, deg * np.pi / 180, 0)
+            elif event.key == gui.KeyName.O:
+                move(0, 0, 0, 0, -deg * np.pi / 180, 0)
+            elif event.key == gui.KeyName.K:
+                move(0, 0, 0, deg * np.pi / 180, 0, 0)
+            elif event.key == gui.KeyName.I:
+                move(0, 0, 0, -deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.HANDLED
 
@@ -608,7 +605,9 @@ class AppWindow:
                                                 add_downsampled_copy_for_fast_rendering=True)
                     # update values stored of object
                     active_obj.transform = np.matmul(h_transform, active_obj.transform)
-
+                    if self.settings.show_coord_frame:
+                        self._add_coord_frame("obj_coord_frame", size=0.1)
+                        self._add_coord_frame("world_coord_frame")
             self._scene.scene.scene.render_to_depth_image(depth_callback)
 
 
@@ -653,7 +652,6 @@ class AppWindow:
                                                           o3d.pipelines.registration.TransformationEstimationPointToPlane(),
                                                           o3d.pipelines.registration.ICPConvergenceCriteria(
                                                               max_iteration=50))
-        print("ICP trans sum:", np.sum(np.abs(reg.transformation[:, 3])))                                           
         if np.sum(np.abs(reg.transformation[:, 3])) < 3:
             active_obj.obj_geometry.transform(reg.transformation)
             # active_obj.obj_geometry.paint_uniform_color([0,1,0])  # Debug
@@ -664,7 +662,8 @@ class AppWindow:
             active_obj.transform = np.matmul(reg.transformation, active_obj.transform)
 
             if self.settings.show_coord_frame:
-                self._add_coord_frame()
+                self._add_coord_frame("obj_coord_frame", size=0.1)
+                self._add_coord_frame("world_coord_frame")
 
 
     def _on_generate(self):
@@ -1027,7 +1026,8 @@ class AppWindow:
     def load_object_list_image(self):
 
         imgs = []
-        for obj_path in glob.glob(self.scenes.objects_path + '/*.ply'):
+        obj_paths = sorted(glob.glob(self.scenes.objects_path + '/*.ply'), key=lambda x: int(basename(x).split("_")[1][:-4]))
+        for obj_path in obj_paths:
             obj_name = os.path.basename(obj_path).split(".")[0]
             fuze_trimesh = trimesh.load(obj_path)
             matrix = np.eye(4)
