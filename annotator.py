@@ -148,6 +148,17 @@ class AppWindow:
             transform = np.eye(4)
             transform[:3, 3] = active_obj.transform[:3, 3]
             coord_frame.transform(transform)
+            for label in self.labels:
+                self._scene.remove_3d_label(label)
+            self.labels = []
+            size = size * 0.6
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "J (-x)"))
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "K (+y)"))
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "I (-y)"))
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "U (+z)"))
+            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "O (-z)"))
+
         else:
             coord_frame.transform(active_obj.transform)
         self._scene.scene.add_geometry(name, coord_frame, 
@@ -193,7 +204,7 @@ class AppWindow:
         self.current_image_idx = None
         self.bounds = None
         self.ren = None
-
+        self.labels = []
         self.settings = Settings()
         self.window = gui.Application.instance.create_window(
             "GIST AILAB 6D Object Pose Annotation Tool", width, height)
@@ -540,19 +551,19 @@ class AppWindow:
                 move(0, dist, 0, 0, 0, 0)
             elif event.key == gui.KeyName.I:
                 move(0, -dist, 0, 0, 0, 0)
-            elif event.key == gui.KeyName.O:
-                move(0, 0, dist, 0, 0, 0)
             elif event.key == gui.KeyName.U:
+                move(0, 0, dist, 0, 0, 0)
+            elif event.key == gui.KeyName.O:
                 move(0, 0, -dist, 0, 0, 0)
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
-            if event.key == gui.KeyName.L:
+            if event.key == gui.KeyName.O:
                 move(0, 0, 0, 0, 0, deg * np.pi / 180)
-            elif event.key == gui.KeyName.J:
-                move(0, 0, 0, 0, 0, -deg * np.pi / 180)
             elif event.key == gui.KeyName.U:
+                move(0, 0, 0, 0, 0, -deg * np.pi / 180)
+            elif event.key == gui.KeyName.J:
                 move(0, 0, 0, 0, deg * np.pi / 180, 0)
-            elif event.key == gui.KeyName.O:
+            elif event.key == gui.KeyName.L:
                 move(0, 0, 0, 0, -deg * np.pi / 180, 0)
             elif event.key == gui.KeyName.K:
                 move(0, 0, 0, deg * np.pi / 180, 0, 0)

@@ -14,10 +14,10 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Fix camera viewpoint
 - [X] Show mask image
 - [X] Add score visualizer
-- [X] Add original coordinate
+- [X] Add world coordinate
 - [X] Show object model images
+- [X] Visualize the key direction
 - [ ] Fix key error
-- [ ] Visualize the key direction
 - [ ] Automatic save and backup
 - [ ] Add logger
 - [ ] Add shortcut helper
