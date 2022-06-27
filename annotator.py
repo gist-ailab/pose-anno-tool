@@ -78,6 +78,7 @@ class Settings:
         self.bg_color = gui.Color(1, 1, 1)
         self.show_axes = False
         self.show_coord_frame = False
+        self.show_mesh_names = False
         self.highlight_obj = True
         self.transparency = 0.5
 
@@ -123,6 +124,7 @@ class AppWindow:
         self._show_axes.checked = self.settings.show_axes
         self._highlight_obj.checked = self.settings.highlight_obj
         self._show_coord_frame.checked = self.settings.show_coord_frame
+        self._show_mesh_names.checked = self.settings.show_mesh_names
         self._point_size.double_value = self.settings.scene_material.point_size
 
         if self.settings.show_coord_frame:
@@ -131,6 +133,19 @@ class AppWindow:
         else:
             self._scene.scene.remove_geometry("obj_coord_frame")
             self._scene.scene.remove_geometry("world_coord_frame")
+
+        if self.settings.show_mesh_names:
+            self._update_and_show_mesh_name()
+        else:
+            for inst_label in self.mesh_names:
+                self._scene.remove_3d_label(inst_label)
+
+    def _update_and_show_mesh_name(self):
+        meshes = self._annotation_scene.get_objects()  # get new list after deletion
+        for inst_label in self.mesh_names:
+            self._scene.remove_3d_label(inst_label)
+        for mesh in meshes:
+            self.mesh_names.append(self._scene.add_3d_label(mesh.transform[:3, 3], mesh.obj_name))
 
     def _add_coord_frame(self, name="coord_frame", size=0.2, origin=[0, 0, 0]):
         if self._annotation_scene is None: # shsh
@@ -148,16 +163,16 @@ class AppWindow:
             transform = np.eye(4)
             transform[:3, 3] = active_obj.transform[:3, 3]
             coord_frame.transform(transform)
-            for label in self.labels:
+            for label in self.coord_labels:
                 self._scene.remove_3d_label(label)
-            self.labels = []
+            self.coord_labels = []
             size = size * 0.6
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "J (-x)"))
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "K (+y)"))
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "I (-y)"))
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "U (+z)"))
-            self.labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "O (-z)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "J (-x)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "K (+y)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "I (-y)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "U (+z)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "O (-z)"))
 
         else:
             coord_frame.transform(active_obj.transform)
@@ -204,7 +219,8 @@ class AppWindow:
         self.current_image_idx = None
         self.bounds = None
         self.ren = None
-        self.labels = []
+        self.coord_labels = []
+        self.mesh_names = []
         self.settings = Settings()
         self.window = gui.Application.instance.create_window(
             "GIST AILAB 6D Object Pose Annotation Tool", width, height)
@@ -251,6 +267,10 @@ class AppWindow:
         self._show_coord_frame = gui.Checkbox("Show coordinate frame")
         self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
         view_ctrls.add_child(self._show_coord_frame)
+
+        self._show_mesh_names = gui.Checkbox("Show mesh names")
+        self._show_mesh_names.set_on_checked(self._on_show_mesh_names)
+        view_ctrls.add_child(self._show_mesh_names)
 
         self._transparency = gui.Slider(gui.Slider.DOUBLE)
         self._transparency.set_limits(0, 1)
@@ -314,22 +334,30 @@ class AppWindow:
         w.add_child(self._object_list_panel)
 
 
-        annotation_objects = gui.CollapsableVert("Annotation Objects", 0.33 * em,
-                                                 gui.Margins(em, 0, 0, 0))
+        annotation_objects = gui.CollapsableVert("Annotation Objects", 0.25 * em,
+                                                 gui.Margins(0.25*em, 0, 0, 0))
         annotation_objects.set_is_open(True)
         self._meshes_available = gui.ListView()
-        # mesh_available.set_items(["bottle", "can"])
         self._meshes_used = gui.ListView()
         self._meshes_used.set_on_selection_changed(self._on_selection_changed)
-        # mesh_used.set_items(["can_0", "can_1", "can_1", "can_1"])
         add_mesh_button = gui.Button("Add Mesh")
         remove_mesh_button = gui.Button("Remove Mesh")
         add_mesh_button.set_on_clicked(self._add_mesh)
         remove_mesh_button.set_on_clicked(self._remove_mesh)
         annotation_objects.add_child(self._meshes_available)
-        annotation_objects.add_child(add_mesh_button)
+        hz = gui.Horiz(spacing=5)
+        hz.add_child(add_mesh_button)
+        hz.add_child(remove_mesh_button)
+        annotation_objects.add_child(hz)
         annotation_objects.add_child(self._meshes_used)
-        annotation_objects.add_child(remove_mesh_button)
+        inst_grid = gui.VGrid(3, 0.25 * em)
+        self.inst_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
+        self.inst_id_edit.int_value = 0
+        self.inst_id_edit.set_limits(0, 30)
+        self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
+        inst_grid.add_child(gui.Label("Instance ID"))
+        inst_grid.add_child(self.inst_id_edit)
+        annotation_objects.add_child(inst_grid)
         self._settings_panel.add_child(annotation_objects)
 
         self._scene_control = gui.CollapsableVert("Scene Control", 0.33 * em,
@@ -423,16 +451,23 @@ class AppWindow:
         # ---- annotation tool settings ----
         self._on_transparency(0.5)
         self._on_point_size(5)  # set default size to 1
-
         self._apply_settings()
 
 
         # set callbacks for key control
         self._scene.set_on_key(self._transform)
-
         self._left_shift_modifier = False
-
         self._scene.set_on_mouse(self._on_mouse)
+
+    def _on_inst_value_changed(self, new_val):
+        idx = self._meshes_used.selected_index
+        obj_name = self._annotation_scene.get_objects()[idx].obj_name
+        self._annotation_scene.get_objects()[idx].obj_instance = int(new_val)
+        self._annotation_scene.get_objects()[idx].obj_name = "obj_" + obj_name.split("_")[1] + "_" + str(int(new_val))
+        meshes = self._annotation_scene.get_objects()  # update list after adding current object
+        meshes = [i.obj_name for i in meshes]
+        self._meshes_used.set_items(meshes)
+        self._meshes_used.selected_index = idx
 
     def _on_slider(self, new_val):
         self._progress.value = new_val / 20.0
@@ -514,7 +549,6 @@ class AppWindow:
 
         def move(x, y, z, rx, ry, rz):
             self._annotation_changed = True
-
             objects = self._annotation_scene.get_objects()
             active_obj = objects[self._meshes_used.selected_index]
             # translation or rotation
@@ -540,6 +574,8 @@ class AppWindow:
             if self.settings.show_coord_frame:
                 self._add_coord_frame("obj_coord_frame", size=0.1)
                 self._add_coord_frame("world_coord_frame")
+            if self.settings.show_mesh_names:
+                self._update_and_show_mesh_name()
 
         # Translation
         if not self._left_shift_modifier:
@@ -619,6 +655,8 @@ class AppWindow:
                     if self.settings.show_coord_frame:
                         self._add_coord_frame("obj_coord_frame", size=0.1)
                         self._add_coord_frame("world_coord_frame")
+                    if self.settings.show_mesh_names:
+                        self._on_show_mesh_names()
             self._scene.scene.scene.render_to_depth_image(depth_callback)
 
 
@@ -638,6 +676,7 @@ class AppWindow:
         self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                     self.settings.annotation_active_obj_material,
                                     add_downsampled_copy_for_fast_rendering=True)
+        self.inst_id_edit.set_value(int(active_obj.obj_name.split("_")[-1]))
         self._apply_settings()
 
     def _on_refine(self):
@@ -665,7 +704,6 @@ class AppWindow:
                                                               max_iteration=50))
         if np.sum(np.abs(reg.transformation[:, 3])) < 3:
             active_obj.obj_geometry.transform(reg.transformation)
-            # active_obj.obj_geometry.paint_uniform_color([0,1,0])  # Debug
             self._scene.scene.remove_geometry(active_obj.obj_name)
             self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                         self.settings.annotation_active_obj_material,
@@ -675,6 +713,9 @@ class AppWindow:
             if self.settings.show_coord_frame:
                 self._add_coord_frame("obj_coord_frame", size=0.1)
                 self._add_coord_frame("world_coord_frame")
+            if self.settings.show_mesh_names:
+                self._on_show_mesh_names()
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
 
 
     def _on_generate(self):
@@ -704,10 +745,12 @@ class AppWindow:
                 translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
                 model_names = self.load_model_names()
                 obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
+                inst_id = int(obj.obj_name.split("_")[2])
                 obj_data = {
                     "cam_R_m2c": transform_cam_to_object[0:3, 0:3].tolist(),  # rotation matrix
                     "cam_t_m2c": translation,  # translation
-                    "obj_id": obj_id
+                    "obj_id": obj_id,
+                    "inst_id": inst_id
                 }
                 view_angle_data.append(obj_data)
             gt_6d_pose_data[str(image_num)] = view_angle_data
@@ -722,7 +765,7 @@ class AppWindow:
                 'R': np.array(obj_data['cam_R_m2c'], float).reshape((3, 3)),
                 't': np.array(obj_data['cam_t_m2c'], float).reshape((3, 1)),
                 'text_info': [
-                {'name': '', 'val': 'obj{}:id{}'.format(obj_data['obj_id'], i), 'fmt': ''}
+                {'name': '', 'val': 'obj{}_inst{}'.format(obj_data['obj_id'], obj_data['inst_id']), 'fmt': ''}
                 ]
             })
         if len(gt_poses) > 0:
@@ -766,6 +809,10 @@ class AppWindow:
 
     def _on_show_coord_frame(self, show):
         self.settings.show_coord_frame = show
+        self._apply_settings()
+
+    def _on_show_mesh_names(self, show):
+        self.settings.show_mesh_names = show
         self._apply_settings()
 
     def _on_highlight_obj(self, light):
@@ -885,8 +932,10 @@ class AppWindow:
         new_mesh_name = str(self._meshes_available.selected_value) + '_' + str(new_mesh_instance)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
-
         self._annotation_scene.add_obj(object_geometry, new_mesh_name, new_mesh_instance, transform=init_trans)
+        if self.settings.show_mesh_names:
+            self.mesh_names.append(self._scene.add_3d_label(center, f"{new_mesh_name}"))
+
         meshes = self._annotation_scene.get_objects()  # update list after adding current object
         meshes = [i.obj_name for i in meshes]
         self._meshes_used.set_items(meshes)
@@ -907,6 +956,8 @@ class AppWindow:
         meshes = self._annotation_scene.get_objects()  # get new list after deletion
         meshes = [i.obj_name for i in meshes]
         self._meshes_used.set_items(meshes)
+        if self.settings.show_mesh_names:
+            self._update_and_show_mesh_name()
 
     def _make_point_cloud(self, rgb_img, depth_img, cam_K):
         # convert images to open3d types
@@ -989,7 +1040,10 @@ class AppWindow:
                         obj_geometry.points = o3d.utility.Vector3dVector(
                             np.array(obj_geometry.points) / 1000)  # convert mm to meter
                         model_name = 'obj_' + f'{ + obj["obj_id"]:06}'
-                        obj_instance = self._obj_instance_count(model_name, active_meshes)
+                        if "inst_id" in obj.keys():
+                            obj_instance = int(obj["inst_id"])
+                        else:
+                            obj_instance = self._obj_instance_count(model_name, active_meshes)
                         obj_name = model_name + '_' + str(obj_instance)
                         translation = np.array(np.array(obj['cam_t_m2c']), dtype=np.float64) / 1000  # convert to meter
                         orientation = np.array(np.array(obj['cam_R_m2c']), dtype=np.float64)
@@ -1171,7 +1225,7 @@ def main():
 
 
     gui.Application.instance.initialize()
-    w = AppWindow(2048, 1536)
+    w = AppWindow(1920, 1080)
     gui.Application.instance.run()
 
 

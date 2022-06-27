@@ -17,6 +17,7 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Add world coordinate
 - [X] Show object model images
 - [X] Visualize the key direction
+- [X] Add instance label
 - [ ] Fix key error
 - [ ] Automatic save and backup
 - [ ] Add logger
