@@ -35,6 +35,8 @@ import glob
 import imgviz
 import cv2
 import os
+import sys
+
 
 dist = 0.002
 deg = 1
@@ -224,7 +226,9 @@ class AppWindow:
         self.settings = Settings()
         self.window = gui.Application.instance.create_window(
             "GIST AILAB 6D Object Pose Annotation Tool", width, height)
-        w = self.window  # to make the code more concise
+        w = self.window  # to make the code more 
+        
+        self.spl = "\\" if sys.platform.startswith("win") else "/"
 
         # 3D widget
         self._scene = gui.SceneWidget()
@@ -475,8 +479,8 @@ class AppWindow:
     def _on_filedlg_button(self):
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "Select file",
                                  self.window.theme)
-        filedlg.add_filter(".png .jpg", "RGB Image (.png, .jpg)")
-        filedlg.add_filter("", "All files")
+        # filedlg.add_filter(".png .jpg", "RGB Image (.png, .jpg)")
+        # filedlg.add_filter("", "All files")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         self.window.show_dialog(filedlg)
@@ -492,9 +496,9 @@ class AppWindow:
         try: 
             start_scene_num = int(basename(str(Path(rgb_path).parent.parent)))
             start_image_num = int(basename(rgb_path)[:-4])
-            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + "/*")])
+            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + self.spl + "*")])
             self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
-            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + "/*.png")])
+            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
             self.current_image_idx = self.image_num_lists.index(start_image_num)
             if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
                 self.update_obj_list()
@@ -656,7 +660,7 @@ class AppWindow:
                         self._add_coord_frame("obj_coord_frame", size=0.1)
                         self._add_coord_frame("world_coord_frame")
                     if self.settings.show_mesh_names:
-                        self._on_show_mesh_names()
+                        self._update_and_show_mesh_name()
             self._scene.scene.scene.render_to_depth_image(depth_callback)
 
 
@@ -714,8 +718,7 @@ class AppWindow:
                 self._add_coord_frame("obj_coord_frame", size=0.1)
                 self._add_coord_frame("world_coord_frame")
             if self.settings.show_mesh_names:
-                self._on_show_mesh_names()
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
+                self._update_and_show_mesh_name()
 
 
     def _on_generate(self):
@@ -1091,7 +1094,7 @@ class AppWindow:
     def load_object_list_image(self):
 
         imgs = []
-        obj_paths = sorted(glob.glob(self.scenes.objects_path + '/*.ply'), key=lambda x: int(basename(x).split("_")[1][:-4]))
+        obj_paths = sorted(glob.glob(self.scenes.objects_path + self.spl + '*.ply'), key=lambda x: int(basename(x).split("_")[1][:-4]))
         for obj_path in obj_paths:
             obj_name = os.path.basename(obj_path).split(".")[0]
             fuze_trimesh = trimesh.load(obj_path)
@@ -1130,7 +1133,7 @@ class AppWindow:
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         img_path = os.path.join(self.scenes.objects_path, "obj_list.png")
         h, w, _ = img.shape
-        w_t = int(self._scene.frame.width*0.3)
+        w_t = int(self._scene.frame.width*0.35)
         h_t = int(h*w_t/w)
         img = cv2.resize(img, (w_t, h_t))
         cv2.imwrite(img_path, img)
@@ -1138,7 +1141,7 @@ class AppWindow:
 
 
     def load_model_names(self):
-        self.obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + '/*.ply')])
+        self.obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + self.spl + '*.ply')])
         model_names = ['obj_' + f'{ + obj_id:06}' for obj_id in self.obj_ids]
         return model_names
 

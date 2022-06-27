@@ -1,14 +1,16 @@
 .qt_for_python/
-  
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+datasets/
 .vscode/
 data/
 tmp/
 *.png
 *.json
+bop_toolkit_lib
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
 # C extensions
 *.so
