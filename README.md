@@ -29,16 +29,16 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 
 ## Install and Run
 
-In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.com/ko-KR/download/details.aspx?id=48159)
+In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.com/ko-KR/download/details.aspx?id=48159) [link](https://visualstudio.microsoft.com/ko/visual-cpp-build-tools/)
 
 ```
 $ conda create -n pose-anno python=3.7
 $ conda activate pose-anno
-$ pip install matplotlib==2.2.5 opencv-python open3d cython pyrender imgviz pypng triangle glumpy==1.1.0 PyOpenGL glfw scipy==1.5.1 kiwisolver==1.3.1
+$ pip install -r requirements.txt
+$ pip install numpy matplotlib==2.2.5 open3d glumpy pyrender imgviz 
 $ pip install git+https://github.com/thodan/bop_toolkit.git
 $ python annotator.py
-
 $ pip install pyinstaller
-$ pyinstall -F -w annotator.py
+$ pyinstaller -F -w annotator.py
 ```
 
