@@ -1,3 +1,6 @@
+# Author: Seunghyeok Back (shback@gm.gist.ac.kr)
+# GIST AILAB, Republic of Korea
+# Modified from the codes of 
 # Author: Anas Gouda (anas.gouda@tu-dortmund.de)
 # FLW, TU Dortmund, Germany
 
@@ -19,6 +22,7 @@ import open3d.visualization.rendering as rendering
 import os
 import json
 import cv2
+import pyglet 
 
 from pathlib import Path
 from os.path import basename, dirname
@@ -135,9 +139,16 @@ class AppWindow:
         else:
             self._scene.scene.remove_geometry("obj_coord_frame")
             self._scene.scene.remove_geometry("world_coord_frame")
+            for label in self.coord_labels:
+                self._scene.remove_3d_label(label)
+            self.coord_labels = []
 
         if self.settings.show_mesh_names:
-            self._update_and_show_mesh_name()
+            try:
+                self._update_and_show_mesh_name()
+            except:
+                self._on_error("라벨링 대상 파일을 선택하세요 (error at _apply_settings")
+                pass
         else:
             for inst_label in self.mesh_names:
                 self._scene.remove_3d_label(inst_label)
@@ -151,13 +162,13 @@ class AppWindow:
 
     def _add_coord_frame(self, name="coord_frame", size=0.2, origin=[0, 0, 0]):
         if self._annotation_scene is None: # shsh
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_coord_frame)")
             return
         objects = self._annotation_scene.get_objects()
         try:
             active_obj = objects[self._meshes_used.selected_index]
         except IndexError:
-            self._on_error("There no object selected.")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _add_coord_frame)")
             return
         self._scene.scene.remove_geometry(name)
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
@@ -227,7 +238,7 @@ class AppWindow:
         self.window = gui.Application.instance.create_window(
             "GIST AILAB 6D Object Pose Annotation Tool", width, height)
         w = self.window  # to make the code more 
-        
+
         self.spl = "\\" if sys.platform.startswith("win") else "/"
 
         # 3D widget
@@ -249,30 +260,30 @@ class AppWindow:
         filedlgbutton.set_on_clicked(self._on_filedlg_button)
 
         fileedit_layout = gui.Horiz()
-        fileedit_layout.add_child(gui.Label("File path"))
+        fileedit_layout.add_child(gui.Label("파일 경로"))
         fileedit_layout.add_child(self._fileedit)
         fileedit_layout.add_fixed(0.25 * em)
         fileedit_layout.add_child(filedlgbutton)
         self._settings_panel.add_child(fileedit_layout)
 
 
-        view_ctrls = gui.CollapsableVert("View control", 0,
+        view_ctrls = gui.CollapsableVert("편의 기능", 0,
                                          gui.Margins(em, 0, 0, 0))
         view_ctrls.set_is_open(True)
 
-        self._show_axes = gui.Checkbox("Show axes")
+        self._show_axes = gui.Checkbox("카메라 좌표계 보기")
         self._show_axes.set_on_checked(self._on_show_axes)
         view_ctrls.add_child(self._show_axes)
 
-        self._highlight_obj = gui.Checkbox("Highligh annotation objects")
+        self._highlight_obj = gui.Checkbox("라벨링 대상 물체 강조하기")
         self._highlight_obj.set_on_checked(self._on_highlight_obj)
         view_ctrls.add_child(self._highlight_obj)
 
-        self._show_coord_frame = gui.Checkbox("Show coordinate frame")
+        self._show_coord_frame = gui.Checkbox("물체 좌표계 보기")
         self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
         view_ctrls.add_child(self._show_coord_frame)
 
-        self._show_mesh_names = gui.Checkbox("Show mesh names")
+        self._show_mesh_names = gui.Checkbox("물체 이름 보기")
         self._show_mesh_names.set_on_checked(self._on_show_mesh_names)
         view_ctrls.add_child(self._show_mesh_names)
 
@@ -285,36 +296,36 @@ class AppWindow:
         self._point_size.set_on_value_changed(self._on_point_size)
 
         grid = gui.VGrid(2, 0.25 * em)
-        grid.add_child(gui.Label("Transparency"))
+        grid.add_child(gui.Label("투명도"))
         grid.add_child(self._transparency)
-        grid.add_child(gui.Label("Point size"))
+        grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._point_size)
         view_ctrls.add_child(grid)
 
         self._settings_panel.add_child(view_ctrls)
         # ----
 
-        self._images_panel = gui.CollapsableVert("2D Images", 0.33 * em,
+        self._images_panel = gui.CollapsableVert("이미지 보기", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
-        self._object_list_panel = gui.CollapsableVert("Object List", 0.33 * em,
+        self._object_list_panel = gui.CollapsableVert("라벨링 대상 물체 보기", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         self._object_list_panel.set_is_open(False)
 
-        self._rgb_image = gui.CollapsableVert("RGB", 0.33 * em,
+        self._rgb_image = gui.CollapsableVert("이미지", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         self._rgb_image.set_is_open(False)
         self._rgb_proxy = gui.WidgetProxy()
         self._rgb_proxy.set_widget(gui.ImageWidget())
         self._rgb_image.add_child(self._rgb_proxy)
 
-        self._mask_image = gui.CollapsableVert("Mask", 0.33 * em,
+        self._mask_image = gui.CollapsableVert("마스크", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         self._mask_image.set_is_open(False)
         self._mask_proxy = gui.WidgetProxy()
         self._mask_proxy.set_widget( gui.ImageWidget())
         self._mask_image.add_child(self._mask_proxy)
 
-        self._diff_image = gui.CollapsableVert("Difference", 0.33 * em,
+        self._diff_image = gui.CollapsableVert("에러값", 0.33 * em,
                                             gui.Margins(em, 0, 0, 0))
         self._diff_image.set_is_open(False)
         self._diff_proxy = gui.WidgetProxy()
@@ -338,14 +349,14 @@ class AppWindow:
         w.add_child(self._object_list_panel)
 
 
-        annotation_objects = gui.CollapsableVert("Annotation Objects", 0.25 * em,
+        annotation_objects = gui.CollapsableVert("라벨링 대상 물체", 0.25 * em,
                                                  gui.Margins(0.25*em, 0, 0, 0))
         annotation_objects.set_is_open(True)
         self._meshes_available = gui.ListView()
         self._meshes_used = gui.ListView()
         self._meshes_used.set_on_selection_changed(self._on_selection_changed)
-        add_mesh_button = gui.Button("Add Mesh")
-        remove_mesh_button = gui.Button("Remove Mesh")
+        add_mesh_button = gui.Button("물체 추가하기")
+        remove_mesh_button = gui.Button("물체 삭제하기")
         add_mesh_button.set_on_clicked(self._add_mesh)
         remove_mesh_button.set_on_clicked(self._remove_mesh)
         annotation_objects.add_child(self._meshes_available)
@@ -359,31 +370,31 @@ class AppWindow:
         self.inst_id_edit.int_value = 0
         self.inst_id_edit.set_limits(0, 30)
         self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
-        inst_grid.add_child(gui.Label("Instance ID"))
+        inst_grid.add_child(gui.Label("인스턴스 아이디"))
         inst_grid.add_child(self.inst_id_edit)
         annotation_objects.add_child(inst_grid)
         self._settings_panel.add_child(annotation_objects)
 
-        self._scene_control = gui.CollapsableVert("Scene Control", 0.33 * em,
+        self._scene_control = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
                                                   gui.Margins(em, 0, 0, 0))
         self._scene_control.set_is_open(True)
 
-        self._images_buttons_label = gui.Label("Images:")
-        self._samples_buttons_label = gui.Label("Scene: ")
+        self._images_buttons_label = gui.Label("이미지:")
+        self._samples_buttons_label = gui.Label("작업 폴더: ")
 
-        self._pre_image_button = gui.Button("Previous")
+        self._pre_image_button = gui.Button("이전")
         self._pre_image_button.horizontal_padding_em = 0.8
         self._pre_image_button.vertical_padding_em = 0
         self._pre_image_button.set_on_clicked(self._on_previous_image)
-        self._next_image_button = gui.Button("Next")
+        self._next_image_button = gui.Button("다음")
         self._next_image_button.horizontal_padding_em = 0.8
         self._next_image_button.vertical_padding_em = 0
         self._next_image_button.set_on_clicked(self._on_next_image)
-        self._pre_sample_button = gui.Button("Previous")
+        self._pre_sample_button = gui.Button("이전")
         self._pre_sample_button.horizontal_padding_em = 0.8
         self._pre_sample_button.vertical_padding_em = 0
         self._pre_sample_button.set_on_clicked(self._on_previous_scene)
-        self._next_sample_button = gui.Button("Next")
+        self._next_sample_button = gui.Button("다음")
         self._next_sample_button.horizontal_padding_em = 0.8
         self._next_sample_button.vertical_padding_em = 0
         self._next_sample_button.set_on_clicked(self._on_next_scene)
@@ -409,26 +420,26 @@ class AppWindow:
                 # self._image_number = gui.Label("Image: " + f'{0:06}')
         prog_layout = gui.Vert(em)
         prog_layout.add_child(self._progress)
-        self._progress_str = gui.Label("Progress: 0.0% [0/0]")
+        self._progress_str = gui.Label("진행률: 0.0% [0/0]")
         progress_ctrls.add_child(self._progress_str)
         progress_ctrls.add_child(self._progress)
         self._scene_control.add_child(progress_ctrls)
 
         self._view_numbers = gui.Horiz(0.4 * em)
-        self._image_number = gui.Label("Image: " + f'{0:06}')
-        self._scene_number = gui.Label("Scene: " + f'{0:06}')
+        self._image_number = gui.Label("이미지: " + f'{0:06}')
+        self._scene_number = gui.Label("작업폴더: " + f'{0:06}')
 
         self._view_numbers.add_child(self._image_number)
         self._view_numbers.add_child(self._scene_number)
         self._scene_control.add_child(self._view_numbers)
 
         self._settings_panel.add_child(self._scene_control)
-        initial_viewpoint = gui.Button("Go to initial viewpoint")
+        initial_viewpoint = gui.Button("처음 시점으로 이동하기")
         initial_viewpoint.set_on_clicked(self._on_initial_viewpoint)
         self._scene_control.add_child(initial_viewpoint)
-        refine_position = gui.Button("Refine position")
+        refine_position = gui.Button("자동 정렬하기")
         refine_position.set_on_clicked(self._on_refine)
-        generate_save_annotation = gui.Button("generate annotation - save/update")
+        generate_save_annotation = gui.Button("저장 및 시각화")
         generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(refine_position)
         self._scene_control.add_child(generate_save_annotation)
@@ -437,15 +448,15 @@ class AppWindow:
         if gui.Application.instance.menubar is None:
             file_menu = gui.Menu()
             file_menu.add_separator()
-            file_menu.add_item("Quit", AppWindow.MENU_QUIT)
+            file_menu.add_item("종료하기", AppWindow.MENU_QUIT)
             settings_menu = gui.Menu()
             settings_menu.set_checked(AppWindow.MENU_SHOW_SETTINGS, True)
             help_menu = gui.Menu()
-            help_menu.add_item("About", AppWindow.MENU_ABOUT)
+            help_menu.add_item("제작자 정보", AppWindow.MENU_ABOUT)
 
             menu = gui.Menu()
-            menu.add_menu("File", file_menu)
-            menu.add_menu("Help", help_menu)
+            menu.add_menu("파일", file_menu)
+            menu.add_menu("도움말", help_menu)
             gui.Application.instance.menubar = menu
 
         w.set_on_menu_item_activated(AppWindow.MENU_QUIT, self._on_menu_quit)
@@ -477,10 +488,10 @@ class AppWindow:
         self._progress.value = new_val / 20.0
 
     def _on_filedlg_button(self):
-        filedlg = gui.FileDialog(gui.FileDialog.OPEN, "Select file",
+        filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
                                  self.window.theme)
-        # filedlg.add_filter(".png .jpg", "RGB Image (.png, .jpg)")
-        # filedlg.add_filter("", "All files")
+        filedlg.add_filter(".png .jpg", "RGB Image (.png, .jpg)")
+        filedlg.add_filter("", "모든 파일")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         self.window.show_dialog(filedlg)
@@ -504,18 +515,18 @@ class AppWindow:
                 self.update_obj_list()
                 self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
                 self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-                self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+                self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
                     100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
                     self.current_image_idx + 1, len(self.image_num_lists))
             self.window.close_dialog()
         except Exception as e:
             print(e)
-            self._on_error("Invalid path is selected.")
+            self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
         
 
     def _update_scene_numbers(self):
-        self._scene_number.text = "Scene: " + f'{self._annotation_scene.scene_num:06}'
-        self._image_number.text = "Image: " + f'{self._annotation_scene.image_num:06}'
+        self._scene_number.text = "작업 폴더: " + f'{self._annotation_scene.scene_num:06}'
+        self._image_number.text = "이미지: " + f'{self._annotation_scene.image_num:06}'
 
     def _transform(self, event):
 
@@ -548,7 +559,7 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.HANDLED      
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
-            self._on_error("No objects are highlighted in scene meshes")
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _transform)")
             return gui.Widget.EventCallbackResult.HANDLED
 
         def move(x, y, z, rx, ry, rz):
@@ -622,7 +633,7 @@ class AppWindow:
                 objects = self._annotation_scene.get_objects()
                 active_obj = objects[self._meshes_used.selected_index]
             except IndexError:
-                self._on_error("No object is selected.")
+                self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_mouse)")
                 return gui.Widget.EventCallbackResult.HANDLED
 
             def depth_callback(depth_image):
@@ -689,7 +700,7 @@ class AppWindow:
 
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
-            self._on_error("No objects are highlighted in scene meshes")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_refine)")
             return gui.Widget.EventCallbackResult.HANDLED
 
         target = self._annotation_scene.annotation_scene
@@ -723,7 +734,7 @@ class AppWindow:
 
     def _on_generate(self):
         if self._annotation_scene is None: # shsh
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_generate)")
             return
 
         image_num = self._annotation_scene.image_num
@@ -831,7 +842,7 @@ class AppWindow:
 
         # update current object visualization
         if self._annotation_scene is None: # shsh
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_highlight_obj)")
             return
         meshes = self._annotation_scene.get_objects()
         for mesh in meshes:
@@ -917,7 +928,7 @@ class AppWindow:
 
     def _add_mesh(self):
         if self._annotation_scene is None: # shsh
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_mesh)")
             return
 
         meshes = self._annotation_scene.get_objects()
@@ -946,10 +957,10 @@ class AppWindow:
 
     def _remove_mesh(self):
         if self._annotation_scene is None: # shsh
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _remove_mesh)")
             return
         if not self._annotation_scene.get_objects():
-            print("There are no object to be deleted.")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _remove_mesh)")
             return
         meshes = self._annotation_scene.get_objects()
         active_obj = meshes[self._meshes_used.selected_index]
@@ -1029,9 +1040,7 @@ class AppWindow:
                 try:
                     data = json.load(scene_gt_file)
                 except json.decoder.JSONDecodeError:
-                    self._on_error(
-                        "Failed to load the previous annotation"
-                    )
+                    self._on_error("저장된 라벨링 파일을 불러오지 못했습니다. (error at _scene_load)")
                     return
                 if str(image_num) in data.keys():
                     scene_data = data[str(image_num)]
@@ -1114,7 +1123,7 @@ class AppWindow:
                     [0.0,  0.0, 0.0, 1.0],
                     ])
             scene.add(camera, pose=camera_pose)
-            light = pyrender.SpotLight(color=np.ones(3), intensity=0.2,
+            light = pyrender.SpotLight(color=np.ones(3), intensity=0.1,
                                             innerConeAngle=np.pi/16.0,
                                             outerConeAngle=np.pi/6.0)
             scene.add(light, pose=camera_pose)
@@ -1133,7 +1142,7 @@ class AppWindow:
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         img_path = os.path.join(self.scenes.objects_path, "obj_list.png")
         h, w, _ = img.shape
-        w_t = int(self._scene.frame.width*0.35)
+        w_t = int(self._scene.frame.width*0.7)
         h_t = int(h*w_t/w)
         img = cv2.resize(img, (w_t, h_t))
         cv2.imwrite(img_path, img)
@@ -1147,9 +1156,7 @@ class AppWindow:
 
     def _on_initial_viewpoint(self):
         if self.bounds is None:
-            self._on_error(
-                "There is no scene selected."
-            )
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
         self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
         center = np.array([0, 0, 0])
@@ -1161,8 +1168,7 @@ class AppWindow:
 
     def _check_changes(self):
         if self._annotation_changed:
-            self._on_error(
-                "Annotation changed but not saved. If you want to ignore the changes click the navigation button again.")
+            self._on_error("라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
             self._annotation_changed = False
             return True
         else:
@@ -1172,10 +1178,10 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_scene_idx is None:
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_scene)")
             return
         if self.current_scene_idx >= len(self.scene_num_lists) - 1:
-            self._on_error("There is no next scene.")
+            self._on_error("다음 Scene이 존재하지 않습니다.")
             return
         self.current_scene_idx += 1
         self.scene_load(self.scenes.scenes_path, self.current_scene_idx, 0)  # open next scene on the first image
@@ -1184,10 +1190,10 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_scene_idx is None:
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_scene)")
             return
         if self.current_scene_idx <= 0:
-            self._on_error("There is no scene number before scene 1.")
+            self._on_error("이전 Scene이 존재하지 않습니다.")
             return
         self.current_scene_idx -= 1
         self.scene_load(self.scenes.scenes_path, self.current_scene_idx, 0)  # open next scene on the first image
@@ -1196,10 +1202,10 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_image_idx is None:
-            self._on_error("There is no image selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_image)")
             return
         if self.current_image_idx  > len(self.image_num_lists) - 1:
-            self._on_error("There is no next image.")
+            self._on_error("다음 이미지가 존재하지 않습니다.")
             return
         self.current_image_idx += 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
@@ -1212,10 +1218,10 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_image_idx is None:
-            self._on_error("There is no scene selected.")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_image)")
             return
         if self.current_image_idx < 0:
-            self._on_error("There is no image number before image 0.")
+            self._on_error("이전 이미지가 존재하지 않습니다.")
             return
         self.current_image_idx -= 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
@@ -1228,8 +1234,14 @@ def main():
 
 
     gui.Application.instance.initialize()
+    hangeul = "C:\\Windows\\Fonts\\malgun.ttf"
+    font = gui.FontDescription(hangeul)
+    font.add_typeface_for_language(hangeul, "ko")
+    gui.Application.instance.set_font(gui.Application.DEFAULT_FONT_ID, font)
+
     w = AppWindow(1920, 1080)
     gui.Application.instance.run()
+    pyglet.app.exit()
 
 
 if __name__ == "__main__":

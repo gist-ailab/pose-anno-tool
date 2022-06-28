@@ -35,10 +35,14 @@ In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.
 $ conda create -n pose-anno python=3.7
 $ conda activate pose-anno
 $ pip install -r requirements.txt
-$ pip install numpy matplotlib==2.2.5 open3d glumpy pyrender imgviz 
-$ pip install git+https://github.com/thodan/bop_toolkit.git
+$ pip install numpy matplotlib==2.2.5 open3d glumpy pyrender imgviz pyglet
+$ pip install opencv-python==4.5.3.56
+$ pip install git+https://github.com/SeungBack/bop_toolkit
+
 $ python annotator.py
-$ pip install pyinstaller
-$ pyinstaller -F -w annotator.py
+
+$ pip install --upgrade cx_Freeze
+
+$ python setup.py bdist_msi
 ```
 
