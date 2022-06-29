@@ -1234,7 +1234,10 @@ def main():
 
 
     gui.Application.instance.initialize()
-    hangeul = "C:\\Windows\\Fonts\\malgun.ttf"
+    if sys.platform.startswith("win"):
+        hangeul = "C:\\Windows\\Fonts\\malgun.ttf"
+    else:
+        hangeul = "./assets/NanumGothic.ttf" # for ubuntu, test
     font = gui.FontDescription(hangeul)
     font.add_typeface_for_language(hangeul, "ko")
     gui.Application.instance.set_font(gui.Application.DEFAULT_FONT_ID, font)
