@@ -7,6 +7,8 @@ tmp/
 *.json
 bop_toolkit_lib
 output
+*.cmd
+*.build/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

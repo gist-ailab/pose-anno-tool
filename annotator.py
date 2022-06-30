@@ -1,7 +1,6 @@
 # Author: Seunghyeok Back (shback@gm.gist.ac.kr)
 # GIST AILAB, Republic of Korea
-# Modified from the codes of 
-# Author: Anas Gouda (anas.gouda@tu-dortmund.de)
+# Modified the codes of Anas Gouda (anas.gouda@tu-dortmund.de)
 # FLW, TU Dortmund, Germany
 
 """Manual annotation tool for datasets with BOP format
@@ -41,10 +40,36 @@ import cv2
 import os
 import sys
 
+import configparser
+import logging
+import sys
+from pathlib import Path
+from logging.handlers import TimedRotatingFileHandler
+from threading import Timer
 
 dist = 0.002
 deg = 1
 
+
+
+class LoggerWriter:
+    def __init__(self, level):
+        # self.level is really like using log.debug(message)
+        # at least in my case
+        self.level = level
+
+    def write(self, message):
+        # if statement reduces the amount of newlines that are
+        # printed to the logger
+        if message != '\n':
+            self.level(message)
+
+    def flush(self):
+        # create a flush method so things can be flushed when
+        # the system wants to. Not sure if simply 'printing'
+        # sys.stderr is the correct way to do it, but it seemed
+        # to work properly for me.
+        self.level(sys.stderr)
 
 class Dataset:
     def __init__(self, dataset_path, dataset_split):
@@ -504,7 +529,7 @@ class AppWindow:
         dataset_path = str(Path(rgb_path).parent.parent.parent.parent)
         split_and_type = basename(str(Path(rgb_path).parent.parent.parent))
         self.scenes = Dataset(dataset_path, split_and_type)
-        try: 
+        try:
             start_scene_num = int(basename(str(Path(rgb_path).parent.parent)))
             start_image_num = int(basename(rgb_path)[:-4])
             self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + self.spl + "*")])
@@ -1096,7 +1121,7 @@ class AppWindow:
                 self.ren.add_object(obj_id, model_path, surf_color=model_color)
 
     def update_obj_list(self):
-        self.load_object_list_image()
+        # self.load_object_list_image()
         model_names = self.load_model_names()
         self._meshes_available.set_items(model_names)
 
@@ -1232,6 +1257,20 @@ class AppWindow:
 
 def main():
 
+
+    # Create Logger if doesn't exist
+    # Path("log").mkdir(parents=True, exist_ok=True)
+    # formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    # handler = TimedRotatingFileHandler('log/error.log', when="midnight", 
+    # interval=1, encoding='utf8')
+    # handler.suffix = "%Y-%m-%d"
+    # handler.setFormatter(formatter)
+    # logger = logging.getLogger()
+    # logger.setLevel(logging.ERROR)
+    # logger.addHandler(handler)
+    # sys.stdout = LoggerWriter(logging.debug)
+    # sys.stderr = LoggerWriter(logging.warning)
+    
 
     gui.Application.instance.initialize()
     if sys.platform.startswith("win"):
