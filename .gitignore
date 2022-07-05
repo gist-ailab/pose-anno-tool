@@ -3,7 +3,6 @@ datasets/
 .vscode/
 data/
 tmp/
-*.png
 *.json
 bop_toolkit_lib
 output
