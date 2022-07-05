@@ -6,6 +6,7 @@
 # TODO:
 - [ ] Adjust far plane 
 - [ ] Support texture.png
+- [ ] Error on different model datasets
 
 ## Install and Run
 

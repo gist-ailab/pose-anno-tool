@@ -20,12 +20,12 @@ os.environ['TK_LIBRARY'] = r'C:\\Users\\user\\Anaconda3\\envs\\pose-anno\\tcl\\t
 base = None
 
 setup(
-    name="gist-ailab-pose-annotator",
+    name="gist-ailab-object-viewer",
     version="0.1",
-    description="GIST AILAB 6D Object Pose Annotation Tool",
+    description="GIST AILAB Object Viewer",
     author="Seunghyeok Back, GIST AILAB, shback@gm.gist.ac.kr",
     options={"build_exe": build_exe_options},
-    executables=[Executable("object_pose_annotator.py", 
+    executables=[Executable("object_viewer.py", 
                             copyright="MIT License, Seunghyeok Back, GIST AILAB",
                             icon="./lib/icon.ico",
                             base=base)],

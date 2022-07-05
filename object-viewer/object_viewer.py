@@ -42,7 +42,7 @@ class AppWindow:
         self.coord_labels = []
         self.mesh_names = []
         self.window = gui.Application.instance.create_window(
-            "3D Object Viewer by GIST AILAB", width, height)
+            "GIST AILAB Object Viewer", width, height)
         w = self.window  # to make the code more 
         self.spl = "\\" if sys.platform.startswith("win") else "/"
 
@@ -273,7 +273,7 @@ class AppWindow:
         dlg = gui.Dialog("About")
         # Add the text
         dlg_layout = gui.Vert(em, gui.Margins(em, em, em, em))
-        dlg_layout.add_child(gui.Label("6D Object Pose Annotator by GIST AILAB.\nCopyright (c) 2022 Seunghyeok Back\nGwangju Institute of Science and Technology (GIST)\nshback@gm.gist.ac.kr"))
+        dlg_layout.add_child(gui.Label("GIST AILAB Object Viewer.\nCopyright (c) 2022 Seunghyeok Back\nGwangju Institute of Science and Technology (GIST)\nshback@gm.gist.ac.kr"))
         # Add the Ok button. We need to define a callback function to handle
         # the click.
         ok = gui.Button("OK")

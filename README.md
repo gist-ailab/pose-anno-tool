@@ -1,7 +1,10 @@
 # Pose Anno Tool
 
-Object and Hand pose annotation toolit for occluded dataset project.
+Object and Hand pose annotation toolkit for occluded dataset project.
 
+- [ ] Create icon per program
+- [ ] User test
+- [ ] Support GIST BOP format
 
 ## Object Viewer
 ```
