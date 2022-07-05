@@ -1,8 +1,7 @@
-# 6DPoseAnnotator
+# Object Pose Annotator
 
-An interactive 6 degree-of-freedom pose annotation tool using point cloud processings.
+<img src="./lib/object_pose_annotator.png" height="400">
 
-<!-- <img src="./example.png" width="5000px"> -->
 
 # TODO:
 - [X] Show object coordinate
@@ -18,10 +17,10 @@ An interactive 6 degree-of-freedom pose annotation tool using point cloud proces
 - [X] Show object model images
 - [X] Visualize the key direction
 - [X] Add instance label
-- [ ] Automatic save and backup
 - [X] Add logger
 - [X] Test on window
 - [X] Cx_freeze
+- [ ] Automatic save and backup
 
 
 ## Install and Run

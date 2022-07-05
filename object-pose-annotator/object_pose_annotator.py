@@ -1,17 +1,7 @@
 # Author: Seunghyeok Back (shback@gm.gist.ac.kr)
 # GIST AILAB, Republic of Korea
-# Modified the codes of Anas Gouda (anas.gouda@tu-dortmund.de)
+# Modified from the codes of Anas Gouda (anas.gouda@tu-dortmund.de)
 # FLW, TU Dortmund, Germany
-
-"""Manual annotation tool for datasets with BOP format
-
-Using RGB, Depth and Models the tool will generate the "scene_gt.json" annotation file
-
-Other annotations can be generated usign other scripts [calc_gt_info.py, calc_gt_masks.py, ....]
-
-original repo: https://github.com/FLW-TUDO/3d_annotation_tool
-
-"""
 
 import glob
 import numpy as np
@@ -320,13 +310,13 @@ class AppWindow:
         self.inst_id_edit.int_value = 0
         self.inst_id_edit.set_limits(0, 30)
         self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
-        inst_grid.add_child(gui.Label("인스턴스 아이디"))
+        inst_grid.add_child(gui.Label("인스턴스 아이디", ))
         inst_grid.add_child(self.inst_id_edit)
         annotation_objects.add_child(inst_grid)
         self._settings_panel.add_child(annotation_objects)
 
         self._scene_control = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
-                                                  gui.Margins(em, 0, 0, 0))
+                                                  gui.Margins(0.25 * em, 0, 0, 0))
         self._scene_control.set_is_open(True)
 
         self._images_buttons_label = gui.Label("이미지:")
@@ -399,8 +389,6 @@ class AppWindow:
             file_menu = gui.Menu()
             file_menu.add_separator()
             file_menu.add_item("종료하기", AppWindow.MENU_QUIT)
-            settings_menu = gui.Menu()
-            settings_menu.set_checked(AppWindow.MENU_SHOW_SETTINGS, True)
             help_menu = gui.Menu()
             help_menu.add_item("제작자 정보", AppWindow.MENU_ABOUT)
 

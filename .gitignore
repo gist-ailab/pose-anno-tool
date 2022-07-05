@@ -9,6 +9,7 @@ bop_toolkit_lib
 output
 *.cmd
 *.build/
+models/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -26,7 +27,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
