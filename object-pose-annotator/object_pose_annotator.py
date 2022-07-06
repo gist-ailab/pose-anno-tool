@@ -159,12 +159,12 @@ class AppWindow:
                 self._scene.remove_3d_label(label)
             self.coord_labels = []
             size = size * 0.6
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "L (+x)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "J (-x)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "K (+y)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "I (-y)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "U (+z)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "O (-z)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E"))
 
         else:
             coord_frame.transform(active_obj.transform)
@@ -379,7 +379,7 @@ class AppWindow:
         self._scene_control.add_child(initial_viewpoint)
         refine_position = gui.Button("자동 정렬하기 (R)")
         refine_position.set_on_clicked(self._on_refine)
-        generate_save_annotation = gui.Button("저장 및 시각화 (F)")
+        generate_save_annotation = gui.Button("저장하기 (F)")
         generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(refine_position)
         self._scene_control.add_child(generate_save_annotation)
@@ -419,6 +419,8 @@ class AppWindow:
         meshes = [i.obj_name for i in meshes]
         self._meshes_used.set_items(meshes)
         self._meshes_used.selected_index = idx
+        if self.settings.show_mesh_names:
+            self._update_and_show_mesh_name()
         self._log.text = "\t인스턴스 아이디를 변경했습니다."
 
     def _on_filedlg_button(self):
@@ -668,7 +670,9 @@ class AppWindow:
                 self._add_coord_frame("world_coord_frame")
             if self.settings.show_mesh_names:
                 self._update_and_show_mesh_name()
-        self._log.text = "\t자동 정렬을 완료했습니다."
+            self._log.text = "\t자동 정렬을 완료했습니다."
+        else:
+            self._log.text = "\t자동 정렬에 실패했습니다. 물체 위치를 조정한 후 다시 시도하세요."
 
     def _on_generate(self):
         self._log.text = "\t라벨링 결과를 저장 중입니다."
@@ -835,6 +839,9 @@ class AppWindow:
         if self._annotation_scene is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_mesh)")
             return
+        if len(self._meshes_available.selected_value) == 0:
+            self._on_error("라벨링 물체를 선택하세요. (error at _add_mesh)")
+            return   
 
         self._log.text = "\t 라벨링 물체를 추가합니다."
         meshes = self._annotation_scene.get_objects()
