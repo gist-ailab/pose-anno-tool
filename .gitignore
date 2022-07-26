@@ -9,6 +9,8 @@ output
 *.cmd
 *.build/
 models/
+*.zip
+sample_dataset
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
