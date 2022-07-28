@@ -1000,7 +1000,7 @@ class AppWindow:
         rgb_img = cv2.imread(self.rgb_path)
         self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}' + '.png')
         depth_img = cv2.imread(self.depth_path, -1)
-        depth_img = np.float32(depth_img) * depth_scale / 1000
+        depth_img = np.float32(depth_img) / depth_scale / 1000
         self._rgb_proxy.set_widget(gui.ImageWidget(self.rgb_path))
 
         try:
@@ -1011,12 +1011,12 @@ class AppWindow:
 
         if geometry is not None:
             print("[Info] Successfully read scene ", scene_num)
+            geometry = geometry.voxel_down_sample(0.002)
             if not geometry.has_normals():
                 geometry.estimate_normals()
             geometry.normalize_normals()
         else:
             print("[WARNING] Failed to read points")
-
         self._scene.scene.add_geometry("annotation_scene", geometry, self.settings.scene_material,
                                         add_downsampled_copy_for_fast_rendering=True)
         self.bounds = geometry.get_axis_aligned_bounding_box()
@@ -1143,7 +1143,7 @@ class AppWindow:
         self.current_image_idx += 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
@@ -1160,7 +1160,7 @@ class AppWindow:
         self.current_image_idx -= 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
