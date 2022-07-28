@@ -159,12 +159,12 @@ class AppWindow:
                 self._scene.remove_3d_label(label)
             self.coord_labels = []
             size = size * 0.6
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D"))
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A"))
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S"))
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W"))
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q"))
-            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E (-)"))
 
         else:
             coord_frame.transform(active_obj.transform)
@@ -602,17 +602,17 @@ class AppWindow:
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
             self._log.text = "\t물체 방향을 조정 중 입니다."
-            if event.key == gui.KeyName.Q:
+            if event.key == gui.KeyName.E:
                 self.move( 0, 0, 0, 0, 0, deg * np.pi / 180)
-            elif event.key == gui.KeyName.E:
+            elif event.key == gui.KeyName.Q:
                 self.move( 0, 0, 0, 0, 0, -deg * np.pi / 180)
-            elif event.key == gui.KeyName.W:
-                self.move( 0, 0, 0, 0, deg * np.pi / 180, 0)
-            elif event.key == gui.KeyName.S:
-                self.move( 0, 0, 0, 0, -deg * np.pi / 180, 0)
-            elif event.key == gui.KeyName.D:
-                self.move( 0, 0, 0, deg * np.pi / 180, 0, 0)
             elif event.key == gui.KeyName.A:
+                self.move( 0, 0, 0, 0, deg * np.pi / 180, 0)
+            elif event.key == gui.KeyName.D:
+                self.move( 0, 0, 0, 0, -deg * np.pi / 180, 0)
+            elif event.key == gui.KeyName.S:
+                self.move( 0, 0, 0, deg * np.pi / 180, 0, 0)
+            elif event.key == gui.KeyName.W:
                 self.move( 0, 0, 0, -deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.HANDLED
