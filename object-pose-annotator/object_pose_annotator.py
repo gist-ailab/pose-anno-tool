@@ -8,18 +8,18 @@ import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
+import shutil
 import os
 import json
 import cv2
-
+import datetime
+import numpy as np
+import os
+import sys
 from pathlib import Path
 from os.path import basename, dirname
 
-import numpy as np
-import glob
-import cv2
-import os
-import sys
+
 
 dist = 0.002
 deg = 1
@@ -159,12 +159,12 @@ class AppWindow:
                 self._scene.remove_3d_label(label)
             self.coord_labels = []
             size = size * 0.6
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E (-)"))
 
         else:
             coord_frame.transform(active_obj.transform)
@@ -305,14 +305,42 @@ class AppWindow:
         hz.add_child(remove_mesh_button)
         annotation_objects.add_child(hz)
         annotation_objects.add_child(self._meshes_used)
+
+        # x, y, z axis
+        x_grid = gui.VGrid(3, 0.25 * em)
+        self._x_rot = gui.Slider(gui.Slider.DOUBLE)
+        self._x_rot.set_limits(-0.5, 0.5)
+        self._x_rot.set_on_value_changed(self._on_x_rot)
+        x_grid.add_child(gui.Label("x축",))
+        x_grid.add_child(self._x_rot)
+        annotation_objects.add_child(x_grid)
+
+        y_grid = gui.VGrid(3, 0.25 * em)
+        self._y_rot = gui.Slider(gui.Slider.DOUBLE)
+        self._y_rot.set_limits(-0.5, 0.5)
+        self._y_rot.set_on_value_changed(self._on_y_rot)
+        y_grid.add_child(gui.Label("y축",))
+        y_grid.add_child(self._y_rot)
+        annotation_objects.add_child(y_grid)
+
+        z_grid = gui.VGrid(3, 0.25 * em)
+        self._z_rot = gui.Slider(gui.Slider.DOUBLE)
+        self._z_rot.set_limits(-0.5, 0.5)
+        self._z_rot.set_on_value_changed(self._on_z_rot)
+        z_grid.add_child(gui.Label("z축",))
+        z_grid.add_child(self._z_rot)
+        annotation_objects.add_child(z_grid)
+
         inst_grid = gui.VGrid(3, 0.25 * em)
         self.inst_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
         self.inst_id_edit.int_value = 0
         self.inst_id_edit.set_limits(0, 30)
         self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
+
         inst_grid.add_child(gui.Label("인스턴스 아이디", ))
         inst_grid.add_child(self.inst_id_edit)
         annotation_objects.add_child(inst_grid)
+
         self._settings_panel.add_child(annotation_objects)
 
         self._scene_control = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
@@ -399,6 +427,7 @@ class AppWindow:
 
         w.set_on_menu_item_activated(AppWindow.MENU_QUIT, self._on_menu_quit)
         w.set_on_menu_item_activated(AppWindow.MENU_ABOUT, self._on_menu_about)
+        
         # ---- annotation tool settings ----
         self._on_transparency(0.5)
         self._on_point_size(5)  # set default size to 1
@@ -409,6 +438,27 @@ class AppWindow:
         self._left_shift_modifier = False
         self._scene.set_on_mouse(self._on_mouse)
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
+
+    def _on_x_rot(self, new_val):
+        try:
+            self.move( 0, 0, 0, new_val * np.pi / 180, 0, 0)
+        except:
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_x_rot).")
+        self._x_rot.int_value = 0      
+
+    def _on_y_rot(self, new_val):
+        try:
+            self.move( 0, 0, 0, 0, new_val * np.pi / 180, 0)
+        except:
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_y_rot).")
+        self._y_rot.int_value = 0     
+
+    def _on_z_rot(self, new_val):
+        try:
+            self.move( 0, 0, 0, 0, 0, new_val * np.pi / 180)
+        except:
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_z_rot).")
+        self._z_rot.int_value = 0     
 
     def _on_inst_value_changed(self, new_val):
         idx = self._meshes_used.selected_index
@@ -443,7 +493,7 @@ class AppWindow:
         try:
             start_scene_num = int(basename(str(Path(rgb_path).parent.parent)))
             start_image_num = int(basename(rgb_path)[:-4])
-            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + self.spl + "*")])
+            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(rgb_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
             self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
             self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
             self.current_image_idx = self.image_num_lists.index(start_image_num)
@@ -467,8 +517,42 @@ class AppWindow:
         self._scene_number.text = "작업 폴더: " + f'{self._annotation_scene.scene_num:06}'
         self._image_number.text = "이미지: " + f'{self._annotation_scene.image_num:06}'
 
+    def move(self, x, y, z, rx, ry, rz):
+        self._annotation_changed = True
+        objects = self._annotation_scene.get_objects()
+        active_obj = objects[self._meshes_used.selected_index]
+        # translation or rotation
+        if x != 0 or y != 0 or z != 0:
+            h_transform = np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]])
+        else:  # elif rx!=0 or ry!=0 or rz!=0:
+            center = active_obj.obj_geometry.get_center()
+            rot_mat_obj_center = active_obj.obj_geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
+            T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
+            R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
+            T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
+            h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
+        active_obj.obj_geometry.transform(h_transform)
+        center = active_obj.obj_geometry.get_center()
+        self._scene.scene.remove_geometry(active_obj.obj_name)
+        self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
+                                        self.settings.annotation_active_obj_material,
+                                        add_downsampled_copy_for_fast_rendering=True)
+                                    
+        # update values stored of object
+        active_obj.transform = np.matmul(h_transform, active_obj.transform)
+
+        if self.settings.show_coord_frame:
+            self._add_coord_frame("obj_coord_frame", size=0.1)
+            self._add_coord_frame("world_coord_frame")
+        if self.settings.show_mesh_names:
+            self._update_and_show_mesh_name()
+
+
     def _transform(self, event):
-        if event.key == gui.KeyName.LEFT_SHIFT:
+        if event.key == gui.KeyName.ESCAPE:
+            self._on_generate()
+            return gui.Widget.EventCallbackResult.HANDLED
+        if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
             elif event.type == gui.KeyEvent.UP:
@@ -477,7 +561,7 @@ class AppWindow:
 
         # if ctrl is pressed then increase translation and angle values
         global dist, deg
-        if event.key == gui.KeyName.LEFT_CONTROL:
+        if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
             if event.type == gui.KeyEvent.DOWN:
                 dist = 0.05
                 deg = 15
@@ -500,66 +584,36 @@ class AppWindow:
             self._on_error("라벨링 대상 물체를 선택하세요 (error at _transform)")
             return gui.Widget.EventCallbackResult.HANDLED
 
-        def move(x, y, z, rx, ry, rz):
-            self._annotation_changed = True
-            objects = self._annotation_scene.get_objects()
-            active_obj = objects[self._meshes_used.selected_index]
-            # translation or rotation
-            if x != 0 or y != 0 or z != 0:
-                h_transform = np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]])
-            else:  # elif rx!=0 or ry!=0 or rz!=0:
-                center = active_obj.obj_geometry.get_center()
-                rot_mat_obj_center = active_obj.obj_geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
-                T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
-                R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
-                T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
-                h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
-            active_obj.obj_geometry.transform(h_transform)
-            center = active_obj.obj_geometry.get_center()
-            self._scene.scene.remove_geometry(active_obj.obj_name)
-            self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
-                                           self.settings.annotation_active_obj_material,
-                                           add_downsampled_copy_for_fast_rendering=True)
-                                        
-            # update values stored of object
-            active_obj.transform = np.matmul(h_transform, active_obj.transform)
-
-            if self.settings.show_coord_frame:
-                self._add_coord_frame("obj_coord_frame", size=0.1)
-                self._add_coord_frame("world_coord_frame")
-            if self.settings.show_mesh_names:
-                self._update_and_show_mesh_name()
-
         # Translation
         if not self._left_shift_modifier:
             self._log.text = "\t물체 위치를 조정 중 입니다."
             if event.key == gui.KeyName.D:
-                move(dist, 0, 0, 0, 0, 0)
+                self.move( dist, 0, 0, 0, 0, 0)
             elif event.key == gui.KeyName.A:
-                move(-dist, 0, 0, 0, 0, 0)
+                self.move( -dist, 0, 0, 0, 0, 0)
             elif event.key == gui.KeyName.S:
-                move(0, dist, 0, 0, 0, 0)
+                self.move( 0, dist, 0, 0, 0, 0)
             elif event.key == gui.KeyName.W:
-                move(0, -dist, 0, 0, 0, 0)
+                self.move( 0, -dist, 0, 0, 0, 0)
             elif event.key == gui.KeyName.Q:
-                move(0, 0, dist, 0, 0, 0)
+                self.move( 0, 0, dist, 0, 0, 0)
             elif event.key == gui.KeyName.E:
-                move(0, 0, -dist, 0, 0, 0)
+                self.move( 0, 0, -dist, 0, 0, 0)
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
             self._log.text = "\t물체 방향을 조정 중 입니다."
             if event.key == gui.KeyName.E:
-                move(0, 0, 0, 0, 0, deg * np.pi / 180)
+                self.move( 0, 0, 0, 0, 0, deg * np.pi / 180)
             elif event.key == gui.KeyName.Q:
-                move(0, 0, 0, 0, 0, -deg * np.pi / 180)
+                self.move( 0, 0, 0, 0, 0, -deg * np.pi / 180)
             elif event.key == gui.KeyName.A:
-                move(0, 0, 0, 0, deg * np.pi / 180, 0)
+                self.move( 0, 0, 0, 0, deg * np.pi / 180, 0)
             elif event.key == gui.KeyName.D:
-                move(0, 0, 0, 0, -deg * np.pi / 180, 0)
+                self.move( 0, 0, 0, 0, -deg * np.pi / 180, 0)
             elif event.key == gui.KeyName.S:
-                move(0, 0, 0, deg * np.pi / 180, 0, 0)
+                self.move( 0, 0, 0, deg * np.pi / 180, 0, 0)
             elif event.key == gui.KeyName.W:
-                move(0, 0, 0, -deg * np.pi / 180, 0, 0)
+                self.move( 0, 0, 0, -deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.HANDLED
 
@@ -689,30 +743,55 @@ class AppWindow:
                 try:
                     gt_6d_pose_data = json.load(gt_scene)
                 except json.decoder.JSONDecodeError as e:
+                    date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = json_6d_path.replace(".json", "_backup_{}.json".fomrat(date_time))
+                    shutil.copy(json_6d_path, backup_path)
                     print(e)
                     gt_6d_pose_data = {}
         else:
             gt_6d_pose_data = {}
 
         # wrtie/update "scene_gt.json"
-        with open(json_6d_path, 'w+') as gt_scene:
-            view_angle_data = list()
-            for obj in self._annotation_scene.get_objects():
-                transform_cam_to_object = obj.transform
-                translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
-                model_names = self.load_model_names()
-                obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
-                inst_id = int(obj.obj_name.split("_")[2])
-                obj_data = {
-                    "cam_R_m2c": transform_cam_to_object[0:3, 0:3].tolist(),  # rotation matrix
-                    "cam_t_m2c": translation,  # translation
-                    "obj_id": obj_id,
-                    "inst_id": inst_id
-                }
-                view_angle_data.append(obj_data)
-            gt_6d_pose_data[str(image_num)] = view_angle_data
-            json.dump(gt_6d_pose_data, gt_scene)
-        self._log.text = "\t라벨링 결과를 저장했습니다."
+        try:
+            with open(json_6d_path, 'w+') as gt_scene:
+                view_angle_data = list()
+                for obj in self._annotation_scene.get_objects():
+                    transform_cam_to_object = obj.transform
+                    translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
+                    model_names = self.load_model_names()
+                    obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
+                    inst_id = int(obj.obj_name.split("_")[2])
+                    obj_data = {
+                        "cam_R_m2c": transform_cam_to_object[0:3, 0:3].tolist(),  # rotation matrix
+                        "cam_t_m2c": translation,  # translation
+                        "obj_id": obj_id,
+                        "inst_id": inst_id
+                    }
+                    view_angle_data.append(obj_data)
+                gt_6d_pose_data[str(image_num)] = view_angle_data
+                json.dump(gt_6d_pose_data, gt_scene)
+            self._log.text = "\t라벨링 결과를 저장했습니다."
+        except Exception as e:
+            date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_backup_{}.json".format(date_time))
+            with open(json_6d_path, 'w+') as gt_scene:
+                view_angle_data = list()
+                for obj in self._annotation_scene.get_objects():
+                    transform_cam_to_object = obj.transform
+                    translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
+                    model_names = self.load_model_names()
+                    obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
+                    inst_id = int(obj.obj_name.split("_")[2])
+                    obj_data = {
+                        "cam_R_m2c": transform_cam_to_object[0:3, 0:3].tolist(),  # rotation matrix
+                        "cam_t_m2c": translation,  # translation
+                        "obj_id": obj_id,
+                        "inst_id": inst_id
+                    }
+                    view_angle_data.append(obj_data)
+                gt_6d_pose_data[str(image_num)] = view_angle_data
+                json.dump(gt_6d_pose_data, gt_scene)
+            self._log.text = "\t라벨링 결과를 저장했습니다."
         self._annotation_changed = False
 
     def _on_error(self, err_msg):
@@ -921,7 +1000,7 @@ class AppWindow:
         rgb_img = cv2.imread(self.rgb_path)
         self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}' + '.png')
         depth_img = cv2.imread(self.depth_path, -1)
-        depth_img = np.float32(depth_img * depth_scale / 1000)
+        depth_img = np.float32(depth_img) / depth_scale / 1000
         self._rgb_proxy.set_widget(gui.ImageWidget(self.rgb_path))
 
         try:
@@ -932,12 +1011,12 @@ class AppWindow:
 
         if geometry is not None:
             print("[Info] Successfully read scene ", scene_num)
+            geometry = geometry.voxel_down_sample(0.002)
             if not geometry.has_normals():
                 geometry.estimate_normals()
             geometry.normalize_normals()
         else:
             print("[WARNING] Failed to read points")
-
         self._scene.scene.add_geometry("annotation_scene", geometry, self.settings.scene_material,
                                         add_downsampled_copy_for_fast_rendering=True)
         self.bounds = geometry.get_axis_aligned_bounding_box()
@@ -1057,14 +1136,14 @@ class AppWindow:
         if self.current_image_idx is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_image)")
             return
-        if self.current_image_idx  > len(self.image_num_lists) - 1:
+        if self.current_image_idx  >= len(self.image_num_lists) - 1:
             self._on_error("다음 이미지가 존재하지 않습니다.")
             return
         self._log.text = "\t 다음 이미지로 이동했습니다."
         self.current_image_idx += 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
@@ -1081,7 +1160,7 @@ class AppWindow:
         self.current_image_idx -= 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 

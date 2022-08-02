@@ -3,6 +3,7 @@
 Object and Hand pose annotation toolkit for occluded dataset project.
 
 - [ ] Create icon per program
+- [ ] Annotation verification program
 - [ ] User test
 - [ ] Support GIST BOP format
 
