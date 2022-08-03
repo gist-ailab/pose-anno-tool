@@ -54,9 +54,27 @@ class DexYCB:
     ]
 
 class HandModel:
+    
+    LINK = [
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [0, 9], [9, 10], [10, 11], [11, 12],
+        [0, 13], [13, 14], [14, 15], [15, 16],
+        [0, 17], [17, 18], [18, 19], [19, 20]
+    ]
+    END_TIPS = [0, 4, 8, 12, 16, 20]
+    
+    OPTIMIZE_TRANS = 0
+    OPTIMIZE_TIPS = 1
+    OPTIMIZE_DETAIL = 2
+
     def __init__(self, side, shape_param=None):
         self.side = side
-        self.shape_param = shape_param
+        
+        if shape_param is None:
+            self.shape_param = torch.rand(1, 10)
+        else:
+            self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
         
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
                             use_pca=False, flat_hand_mean=False)
@@ -65,21 +83,95 @@ class HandModel:
         self.pose_param.requires_grad = True
         self.trans_param = torch.zeros(1, 3)+1e-3
         self.trans_param.requires_grad = True
-        self.lr = 1e-2
-        self.optimizer = optim.Adam([self.trans_param, self.pose_param], lr=self.lr)
+
+        self.optimizer = {
+            self.OPTIMIZE_TRANS: optim.Adam([self.trans_param], lr=1e-2),
+            self.OPTIMIZE_TIPS: optim.Adam([self.pose_param], lr=1e-3),
+            self.OPTIMIZE_DETAIL: optim.Adam([self.pose_param], lr=1e-3),
+        }
+        self.criterion = {
+            self.OPTIMIZE_TRANS: self._trans_loss,
+            self.OPTIMIZE_TIPS: self._tips_loss,
+            self.OPTIMIZE_DETAIL: self._detail_loss,
+        }
         
         self.verts, self.joints = self.mano_layer(self.pose_param)
         self.faces = self.mano_layer.th_faces
+        
+        self.optimize_state = self.OPTIMIZE_TRANS
+    
+    def optimize_to_target(self, targets):
+        optimizer = self.optimizer[self.optimize_state]
+        optimizer.zero_grad()
+        # forward
+        self.verts, self.joints = self.mano_layer(th_pose_coeffs=self.pose_param,
+                                                  th_betas=self.shape_param,
+                                                  th_trans=self.trans_param)
+        self.faces = self.mano_layer.th_faces
+        # loss term
+        loss = self.criterion[self.optimize_state](targets)
+        loss.backward()
+        optimizer.step()
+    
+    def _trans_loss(self, targets):
+        targets = torch.Tensor(targets[0]).unsqueeze(0)
+        targets.requires_grad = True
+        return torch.norm(targets-self.joints[:, :1])
+    
+    def _tips_loss(self, targets):
+        targets = targets[self.END_TIPS]
+        targets = torch.Tensor(targets).unsqueeze(0)
+        targets.requires_grad = True
+        return torch.norm(targets-self.joints[:, self.END_TIPS])
+        
+    def _detail_loss(self, targets):
+        detail_idx = list(set(range(21))-set(self.END_TIPS))
+        targets = targets[detail_idx]
+        targets = torch.Tensor(targets[0]).unsqueeze(0)
+        targets.requires_grad = True
+        return torch.norm(targets-self.joints[:, detail_idx])
+        
+    def get_optimize_state(self):
+        return self.optimize_state
+    
+    def set_optimize_state(self, state):
+        self.optimize_state = state
     
     def set_shape_param(self, shape_param):
-        self.shape_param = shape_param
+        self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
+        
+    def get_geometry(self):
+        return {
+            "mesh": self._get_mesh(),
+            "links": self._get_links()
+        }
+        
+    def _get_mesh(self):
+        verts = self.verts.cpu().detach()[0, :]
+        faces = self.faces.cpu().detach()
+        verts = o3d.utility.Vector3dVector(verts)
+        faces = o3d.utility.Vector3iVector(faces)
+        tri_mesh = o3d.geometry.TriangleMesh(vertices=verts, triangles=faces)
+        lineset = o3d.geometry.LineSet.create_from_triangle_mesh(tri_mesh)
+        
+        return lineset
     
-    
+    def _get_links(self):
+        joints = self.joints.cpu().detach()[0, :]
+        joints = o3d.utility.Vector3dVector(joints)
+        lines = o3d.utility.Vector2iVector(np.array(HandModel.LINK))
+        lineset = o3d.geometry.LineSet(lines=lines, points=joints)
+        
+        return lineset
+
 class SceneObject:
     pass
 
-
 class Camera:
+    # DexYCB Toolkit
+    # Copyright (C) 2021 NVIDIA Corporation
+    # Licensed under the GNU General Public License v3.0 [see LICENSE for details]
+    
     def __init__(self, name, intrinsic, extrinsic, device="cpu"):
         self.name = name
         self.intrinsic = intrinsic
@@ -99,9 +191,7 @@ class Camera:
         self._t = self._T[:, 3]
         self._R_inv = torch.inverse(self._R)
         self._t_inv = torch.mv(self._R_inv, self._t)
-        
-
-        
+              
 class DexYCBDataset:
     # DexYCB Toolkit
     # Copyright (C) 2021 NVIDIA Corporation
@@ -219,10 +309,35 @@ class DexYCBDataset:
 
         return subject_id, scene_id, camera_id, frame_id
 
-
-        
-
 class Scene:
+    
+    class Frame:
+        def __init__(self, pcd, hands, objs, label=None):
+            self.scene_pcd = pcd
+            
+            self.hands = hands
+            self.objs = objs
+            
+            self.label = label
+            
+            self._initialize_frame()
+    
+        def _initialize_frame(self):
+            center = self.pcd.get_center()
+            
+            
+            if self.label is not None:
+                hand_transform = self.label['hand']
+            
+            
+            
+            
+            
+            else:
+                pass    
+            
+            
+    
     
     def __init__(self, scene_dir, camera, hands, total_frame, current_frame):
         self._scene_dir = scene_dir
@@ -300,7 +415,7 @@ class Scene:
         np.save(self._label, self._label_path)
 
     @property
-    def _data_path(self):
+    def _frame_path(self):
         return os.path.join(self._scene_dir, self._data_format.format(self.frame_id))
     
     @property
@@ -339,6 +454,7 @@ class Settings:
         self.hand_link_material = rendering.MaterialRecord()
         self.hand_link_material.base_color = [1.0, 0.0, 0.0, 1.0]
         self.hand_link_material.shader = Settings.SHADER_LINE
+        self.hand_link_material.point_size = 5.0
         self.hand_link_material.line_width = 2.0
         
         # ----- hand label setting
