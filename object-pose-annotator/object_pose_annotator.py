@@ -449,6 +449,11 @@ class AppWindow:
         self._scene.set_on_mouse(self._on_mouse)
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
 
+        self.offscreen_render = rendering.OffscreenRenderer(640, 480)
+        img = self.offscreen_render.render_to_image()
+        o3d.io.write_image("test.png", img, 9)
+
+
 
 
 
