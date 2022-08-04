@@ -21,8 +21,8 @@ from os.path import basename, dirname
 
 
 
-dist = 0.002
-deg = 1
+
+
 
 
 class Dataset:
@@ -202,6 +202,7 @@ class AppWindow:
         self._annotation_changed = False
         self.current_scene_idx = None
         self.current_image_idx = None
+        self.upscale_responsiveness = False
         self.bounds = None
         self.coord_labels = []
         self.mesh_names = []
@@ -262,11 +263,20 @@ class AppWindow:
         self._point_size.set_limits(1, 10)
         self._point_size.set_on_value_changed(self._on_point_size)
 
+        self.dist = 0.0004 * 5
+        self.deg = 0.2 * 5
+        self._responsiveness = gui.Slider(gui.Slider.INT)
+        self._responsiveness.set_limits(1, 20)
+        self._responsiveness.set_on_value_changed(self._on_responsiveness)
+        self._responsiveness.double_value = 5.0
+
         grid = gui.VGrid(2, 0.25 * em)
         grid.add_child(gui.Label("투명도"))
         grid.add_child(self._transparency)
         grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._point_size)
+        grid.add_child(gui.Label("민감도"))
+        grid.add_child(self._responsiveness)
         view_ctrls.add_child(grid)
 
         self._settings_panel.add_child(view_ctrls)
@@ -439,6 +449,9 @@ class AppWindow:
         self._scene.set_on_mouse(self._on_mouse)
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
 
+
+
+
     def _on_x_rot(self, new_val):
         try:
             self.move( 0, 0, 0, new_val * np.pi / 180, 0, 0)
@@ -560,24 +573,48 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.HANDLED
 
         # if ctrl is pressed then increase translation and angle values
-        global dist, deg
         if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
             if event.type == gui.KeyEvent.DOWN:
-                dist = 0.05
-                deg = 15
+                if not self.upscale_responsiveness:
+                    self.dist = self.dist * 15
+                    self.deg = self.deg * 15
+                    self.upscale_responsiveness = True
             elif event.type == gui.KeyEvent.UP:
-                dist = 0.005
-                deg = 1
+                if self.upscale_responsiveness:
+                    self.dist = self.dist / 15
+                    self.deg = self.deg / 15
+                    self.upscale_responsiveness = False
             return gui.Widget.EventCallbackResult.HANDLED
 
-        if event.key == gui.KeyName.R:
+        if event.key == gui.KeyName.R and event.type == gui.KeyEvent.DOWN:
             self._on_refine()
             return gui.Widget.EventCallbackResult.HANDLED
-        if event.key == gui.KeyName.T:
+        if event.key == gui.KeyName.T and event.type == gui.KeyEvent.DOWN:
             self._on_initial_viewpoint()
             return gui.Widget.EventCallbackResult.HANDLED
-        if event.key == gui.KeyName.F:
+        if event.key == gui.KeyName.F and event.type == gui.KeyEvent.DOWN:
             self._on_generate()
+            return gui.Widget.EventCallbackResult.HANDLED      
+        if event.key == gui.KeyName.V and event.type == gui.KeyEvent.DOWN:
+            is_open = self._images_panel.get_is_open()
+            self._images_panel.set_is_open(not is_open)
+            self.window.set_needs_layout()
+            return gui.Widget.EventCallbackResult.HANDLED      
+        if event.key == gui.KeyName.ONE and event.type == gui.KeyEvent.DOWN:
+            if self._responsiveness.double_value >= 2:
+                self._responsiveness.double_value -= 1
+            else:
+                self._responsiveness.double_value = 1
+            self.dist = 0.0004 * self._responsiveness.double_value
+            self.deg = 0.2 * self._responsiveness.double_value
+            return gui.Widget.EventCallbackResult.HANDLED      
+        if event.key == gui.KeyName.TWO and event.type == gui.KeyEvent.DOWN:
+            if self._responsiveness.double_value <= 19:
+                self._responsiveness.double_value += 1
+            else:
+                self._responsiveness.double_value = 20
+            self.dist = 0.0004 * self._responsiveness.double_value
+            self.deg = 0.2 * self._responsiveness.double_value
             return gui.Widget.EventCallbackResult.HANDLED      
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
@@ -588,32 +625,32 @@ class AppWindow:
         if not self._left_shift_modifier:
             self._log.text = "\t물체 위치를 조정 중 입니다."
             if event.key == gui.KeyName.D:
-                self.move( dist, 0, 0, 0, 0, 0)
+                self.move( self.dist, 0, 0, 0, 0, 0)
             elif event.key == gui.KeyName.A:
-                self.move( -dist, 0, 0, 0, 0, 0)
+                self.move( -self.dist, 0, 0, 0, 0, 0)
             elif event.key == gui.KeyName.S:
-                self.move( 0, dist, 0, 0, 0, 0)
+                self.move( 0, self.dist, 0, 0, 0, 0)
             elif event.key == gui.KeyName.W:
-                self.move( 0, -dist, 0, 0, 0, 0)
+                self.move( 0, -self.dist, 0, 0, 0, 0)
             elif event.key == gui.KeyName.Q:
-                self.move( 0, 0, dist, 0, 0, 0)
+                self.move( 0, 0, self.dist, 0, 0, 0)
             elif event.key == gui.KeyName.E:
-                self.move( 0, 0, -dist, 0, 0, 0)
+                self.move( 0, 0, -self.dist, 0, 0, 0)
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
             self._log.text = "\t물체 방향을 조정 중 입니다."
             if event.key == gui.KeyName.E:
-                self.move( 0, 0, 0, 0, 0, deg * np.pi / 180)
+                self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
             elif event.key == gui.KeyName.Q:
-                self.move( 0, 0, 0, 0, 0, -deg * np.pi / 180)
+                self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
             elif event.key == gui.KeyName.A:
-                self.move( 0, 0, 0, 0, deg * np.pi / 180, 0)
+                self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
             elif event.key == gui.KeyName.D:
-                self.move( 0, 0, 0, 0, -deg * np.pi / 180, 0)
+                self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
             elif event.key == gui.KeyName.S:
-                self.move( 0, 0, 0, deg * np.pi / 180, 0, 0)
+                self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
             elif event.key == gui.KeyName.W:
-                self.move( 0, 0, 0, -deg * np.pi / 180, 0, 0)
+                self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.HANDLED
 
@@ -711,7 +748,7 @@ class AppWindow:
                                                           o3d.pipelines.registration.TransformationEstimationPointToPlane(),
                                                           o3d.pipelines.registration.ICPConvergenceCriteria(
                                                               max_iteration=50))
-        if np.sum(np.abs(reg.transformation[:, 3])) < 3:
+        if np.sum(np.abs(reg.transformation[:3, 3])) < 0.2:
             active_obj.obj_geometry.transform(reg.transformation)
             self._scene.scene.remove_geometry(active_obj.obj_name)
             self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
@@ -878,6 +915,10 @@ class AppWindow:
         self.settings.apply_material = True
         self._apply_settings()
 
+    def _on_responsiveness(self, responsiveness):
+        self.dist = 0.0004 * responsiveness
+        self.deg = 0.2 * responsiveness
+
     def _on_menu_quit(self):
         gui.Application.instance.quit()
 
@@ -1001,7 +1042,11 @@ class AppWindow:
         self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}' + '.png')
         depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img) / depth_scale / 1000
-        self._rgb_proxy.set_widget(gui.ImageWidget(self.rgb_path))
+        H, W, _ = rgb_img.shape
+        ratio = 640 / W
+        _rgb_img = cv2.resize(rgb_img.copy(), (640, int(H*ratio)))
+        _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
+        self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
 
         try:
             geometry = self._make_point_cloud(rgb_img, depth_img, self.cam_K)
