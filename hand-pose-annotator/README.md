@@ -4,7 +4,7 @@
 
 
 # TODO:
-- [ ] Move Each Hand by ALT + Click
+- [X] Move Each Hand by ALT + Click
 - [ ] Move Each Hand by Keyboard 
 - [ ] Optimze Hand Pose by End-Tips
 - [ ] Optimze Hand Pose by Detail fingers

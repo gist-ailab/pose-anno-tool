@@ -70,24 +70,17 @@ class HandModel:
     ]
     
     # index of finger or tips
-    IDX_ROOT   = [0]
-    IDX_TIPS   = [4,8,12,16,20]
-    IDX_THUMB  = [1,2,3,4]
-    IDX_FORE   = [5,6,7,8]
-    IDX_MIDDLE = [9,10,11,12]
-    IDX_RING   = [13,14,15,16]
-    IDX_LITTLE = [17,18,19,20]
-    
-    # optimze state
-    OPTIMIZE_NONE   = -1
-    OPTIMIZE_TRANS  = 0
-    OPTIMIZE_TIPS   = 1
-    OPTIMIZE_THUMB  = 2
-    OPTIMIZE_FORE   = 3
-    OPTIMIZE_MIDDLE = 4
-    OPTIMIZE_RING   = 5
-    OPTIMIZE_LITTLE = 6
-    OPTIMIZE_WHOLE  = 7
+    _IDX_OF_HANDS = {
+        'none'   : [],
+        'root'   : [0],
+        'tips'   : [4,8,12,16,20],
+        'thumb'  : [1,2,3,4],
+        'fore'   : [5,6,7,8],
+        'middle' : [9,10,11,12],
+        'ring'   : [13,14,15,16],
+        'little' : [17,18,19,20],
+        'whole'  : list(range(21))
+    }
 
     def __init__(self, side, shape_param=None):
         self.side = side
@@ -115,11 +108,13 @@ class HandModel:
         
         self.targets = torch.empty_like(self.joints).copy_(self.joints)
         
-        self.optimize_state = self.OPTIMIZE_NONE
+        self.optimize_state = 'none'
+        self.active_joints = None
+        self.contorl_joint = None
     
     def reset(self, shape_param=None):
         if shape_param is None:
-            self.shape_param.zero_()
+            pass
         else:
             self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
 
@@ -135,10 +130,14 @@ class HandModel:
         self.verts, self.joints = self.mano_layer(self.pose_param)
         self.faces = self.mano_layer.th_faces
         self.targets = torch.empty_like(self.joints).copy_(self.joints)
-        self.optimize_state = self.OPTIMIZE_NONE
+        
+        self.optimize_state = 'none'
+        self.active_joints = None
+        self.contorl_joint = None
+    
     
     def optimize_to_target(self):
-        if self.optimize_state == self.OPTIMIZE_TRANS:
+        if self.optimize_state == 'root':
             optimizer = self.optimizer["trans"]
         else:
             optimizer = self.optimizer["pose"]
@@ -158,25 +157,10 @@ class HandModel:
     
     def set_target(self, targets):
         self.targets = torch.Tensor(targets).unsqueeze(0)
+        self.targets.requires_grad = True
 
     def _mse_loss(self):
-        
-        if self.optimize_state == self.OPTIMIZE_TRANS:
-            target_idx = self.IDX_ROOT
-        elif self.optimize_state == self.OPTIMIZE_TIPS:
-            target_idx = self.IDX_TIPS
-        elif self.optimize_state == self.OPTIMIZE_THUMB:
-            target_idx = self.IDX_THUMB
-        elif self.optimize_state == self.OPTIMIZE_FORE:
-            target_idx = self.IDX_FORE
-        elif self.optimize_state == self.OPTIMIZE_MIDDLE:
-            target_idx = self.IDX_MIDDLE
-        elif self.optimize_state == self.OPTIMIZE_RING:
-            target_idx = self.IDX_RING
-        elif self.optimize_state == self.OPTIMIZE_LITTLE:
-            target_idx = self.IDX_LITTLE
-        else:
-            target_idx = []
+        target_idx = self._IDX_OF_HANDS[self.optimize_state]
         return torch.norm(self.targets[:, target_idx]-self.joints[:, target_idx])
         
     def get_optimize_state(self):
@@ -184,6 +168,8 @@ class HandModel:
     
     def set_optimize_state(self, state):
         self.optimize_state = state
+        self.active_joints = self._IDX_OF_HANDS[self.optimize_state]
+        self.contorl_joint = self.active_joints[0]
     
     def get_geometry(self):
         return {
@@ -192,10 +178,31 @@ class HandModel:
             "link": self._get_links()
         }
 
+    def move_control_joint(self, xyz):
+        if self.contorl_joint is None:
+            return False
+        joints = self.get_target()
+        if self.optimize_state == 'root':
+            delta_root = torch.Tensor(xyz) - joints[0]
+            joints = joints + delta_root
+        else:    
+            joints[self.contorl_joint] = torch.Tensor(xyz)
+        
+        self.set_target(joints)
+        
+        return True
+        
+    
     def get_target_geometry(self):
         return {
             "joint": self._get_target_joints(),
-            "link": self._get_target_links()
+            "link": self._get_target_links(),
+        }
+    def get_active_geometry(self):
+        return {
+            "joint": self._get_target_joints(self.active_joints),
+            "link": None,
+            "control": self._get_target_joints([self.contorl_joint])
         }
     
     def _get_mesh(self):
@@ -222,8 +229,11 @@ class HandModel:
         
         return lineset
 
-    def _get_target_joints(self):
-        joints = self.targets.cpu().detach()[0, :]
+    def _get_target_joints(self, idx=None):
+        if idx is None:
+            joints = self.targets.cpu().detach()[0, :]
+        else:
+            joints = self.targets.cpu().detach()[0, idx]
         joints = o3d.utility.Vector3dVector(joints)
         pcd = o3d.geometry.PointCloud(points=joints)
         return pcd
@@ -517,9 +527,12 @@ class Settings:
         self.active_target_link_material.shader = Settings.SHADER_POINT
         self.active_target_link_material.point_size = 5.0
         
-        
+        self.control_target_joint_material = rendering.MaterialRecord()
+        self.control_target_joint_material.base_color = [0.0, 1.0, 0.0, 1.0]
+        self.control_target_joint_material.shader = Settings.SHADER_POINT
+        self.control_target_joint_material.point_size = 20.0
 
-
+      
 class AppWindow:
     
     def _initialize_background(self):
@@ -595,6 +608,10 @@ class AppWindow:
         self._target_joint_name = "target_joint"
         self._target_link_name = "target_link"
         
+        #----- active/control geometry name
+        self._active_joint_name = "active_joint"
+        self._active_link_name = "active_link"
+        self._control_joint_name = "control_joint"
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
         w = self.window
@@ -636,8 +653,12 @@ class AppWindow:
         self._on_hand_point_size(5) # set default size to 5
         self._on_hand_line_size(2) # set default size to 2
         
+        self._scene.set_on_mouse(self._on_mouse)
+        self._scene.set_on_key(self._on_key)
+        
         self._labeling_stage = LabelingStage.LOADING
         self._hands = None
+        self._active_hand = None
    
     #region Layout and Callback
    
@@ -782,11 +803,19 @@ class AppWindow:
             return 
         self._labeling_stage = labeling_stage
         self._current_stage_str.text = "현재 상태: {}".format(self._labeling_stage)
-
+        if labeling_stage==LabelingStage.TRANSLATION:
+            self._active_hand.set_optimize_state('root')
+        elif labeling_stage==LabelingStage.HAND_TIP:
+            self._active_hand.set_optimize_state('tips')
+        elif labeling_stage==LabelingStage.HAND_DETAIL:
+            self._active_hand.set_optimize_state('thumb')
+        
     # labeling hand edit
     def _init_handedit_layout(self):
         em = self.window.theme.font_size
-        self._current_hand_id = 1 # 1 is right, -1 is left
+        self._is_right_hand = True # default is right
+        self._hand_visible = True
+        
         handedit_layout = gui.CollapsableVert("라벨 대상(손) 조절", 0.33*em,
                                                   gui.Margins(0.25*em, 0, 0, 0))
         handedit_layout.set_is_open(True)
@@ -803,8 +832,8 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_hand)")
             return 
 
-        self._current_hand_id *= -1
-        if self._current_hand_id > 0:
+        self._is_right_hand = not self._is_right_hand
+        if self._is_right_hand:
             self._current_hand_str.text = "현재 대상: 오른손"
             active_side = 'right'
         else:
@@ -823,11 +852,9 @@ class AppWindow:
                 self._set_geometry_material(self._left_hand_mesh_name, self.settings.hand_mesh_material)
         
         self._active_hand = self._hands[active_side]
-        target_geo = self._active_hand.get_target_geometry()
-        self._add_geometry(self._target_joint_name, 
-                           target_geo['joint'], self.settings.target_joint_material)
-        self._add_geometry(self._target_link_name, 
-                           target_geo['link'], self.settings.target_link_material)
+        self._convert_stage(self._labeling_stage)
+        
+        self._update_target_hand()
     
     #endregion
     def _load_scene(self):
@@ -839,7 +866,7 @@ class AppWindow:
         self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
         # visualize hand
         hands = self._frame.hands
-        if self._current_hand_id > 0:
+        if self._is_right_hand > 0:
             active_side = 'right'
         else:
             active_side = 'left'
@@ -873,8 +900,12 @@ class AppWindow:
 
         self._convert_stage(LabelingStage.TRANSLATION)
         
-    
-    
+        active_geo = self._active_hand.get_active_geometry()
+        self._add_geometry(self._active_joint_name, 
+                           active_geo['joint'], self.settings.active_target_joint_material)
+        self._add_geometry(self._control_joint_name, 
+                           active_geo['control'], self.settings.control_target_joint_material)
+        
     def _next_scene(self):
         pcd = self.annotation_scene.get_next_frame()
     
@@ -928,7 +959,7 @@ class AppWindow:
     
     #endregion
     
-    def _on_mouse_widget3d(self, event):
+    def _on_mouse(self, event):
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
@@ -951,35 +982,63 @@ class AppWindow:
                     depth = np.mean(depth_area[depth_area!=1.0])
                 
                     world_xyz = self._scene.scene.camera.unproject(
-                        event.x, event.y, depth, self.scene_widget.frame.width,
-                        self.scene_widget.frame.height)
-                    self._move_target(world_xyz)
+                        event.x, event.y, depth, self._scene.frame.width,
+                        self._scene.frame.height)
+                    self._move_control_joint(world_xyz)
                     
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             
-            return gui.Widget.EventCallbackResult.HANDLED
-
+            
         elif event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_button_down(gui.MouseButton.RIGHT):
-            self.toggle_label_visible()
+            self._toggle_hand_visible()
 
         return gui.Widget.EventCallbackResult.IGNORED
 
-    def _move_target(xyz):
-        #TODO:
-        if self.move_joint == 0:
-            delta_root = torch.Tensor(world) - self.targets[0]
-            self.targets = self.targets + delta_root
+    def _move_control_joint(self, xyz):
+        self._active_hand.move_control_joint(xyz)
+        self._update_target_hand()
+        
+    def _update_target_hand(self):
+        target_geo = self._active_hand.get_target_geometry()
+        self._add_geometry(self._target_joint_name, 
+                           target_geo['joint'], self.settings.target_joint_material)
+        self._add_geometry(self._target_link_name, 
+                           target_geo['link'], self.settings.target_link_material)
+        active_geo = self._active_hand.get_active_geometry()
+        self._add_geometry(self._active_joint_name, 
+                           active_geo['joint'], self.settings.active_target_joint_material)
+        self._add_geometry(self._control_joint_name, 
+                           active_geo['control'], self.settings.control_target_joint_material)
+    
+    def _update_activate_hand(self):
+        hand_geo = self._active_hand.get_geometry()
+        side = self._active_hand.side
+        if side == 'right':
+            mesh_name = self._right_hand_mesh_name
+            joint_name = self._right_hand_joint_name
+            link_name = self._right_hand_link_name
+        elif side == 'left':
+            mesh_name = self._left_hand_mesh_name
+            joint_name = self._left_hand_joint_name
+            link_name = self._left_hand_link_name
         else:
-            self.targets[self.move_joint] = torch.Tensor(world)
+            assert False, "visualize hand error"
+        mesh_mat = self.settings.active_hand_mesh_material
+        self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
+        self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
+        self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
 
-    def _on_key_widget3d(self, event):
+    def _toggle_hand_visible(self):
+        pass
+        
+    def _on_key(self, event):
         # optimze
         if event.key == gui.KeyName.SPACE:
-            self.optimize_to_target()
-        # reset target
-        elif event.key == gui.KeyName.HOME:
-            self.initialize_target()
-
+            if self._active_hand is None:
+                pass
+            self._active_hand.optimize_to_target()
+            self._update_activate_hand()
+        
         return gui.Widget.EventCallbackResult.IGNORED
 
     
