@@ -21,10 +21,6 @@ from os.path import basename, dirname
 
 
 
-
-
-
-
 class Dataset:
     def __init__(self, dataset_path, dataset_split):
         self.scenes_path = os.path.join(dataset_path, dataset_split)
@@ -182,6 +178,17 @@ class AppWindow:
                 layout_context, gui.Widget.Constraints()).height)
         self._settings_panel.frame = gui.Rect(r.get_right() - width_set, r.y, width_set,
                                               height_set)
+
+        width_val = 20 * layout_context.theme.font_size
+        height_val = min(
+            r.height,
+            self._validation_panel.calc_preferred_size(
+                layout_context, gui.Widget.Constraints()).height)
+    
+        self._validation_panel.frame = gui.Rect(r.get_right() - width_set - width_val, r.y, width_val,
+                                              height_val)
+        
+                                              
         width_im = min(
             r.width,
             self._images_panel.calc_preferred_size(
@@ -194,7 +201,7 @@ class AppWindow:
 
         width_obj = 1.5 * width_set
         height_obj = 1.5 * layout_context.theme.font_size
-        self._log_panel.frame = gui.Rect(r.get_right() - width_set - width_obj, r.y, width_obj, height_obj) 
+        self._log_panel.frame = gui.Rect(0, r.get_bottom() - height_obj, width_obj, height_obj) 
 
     def __init__(self, width, height):
 
@@ -203,22 +210,35 @@ class AppWindow:
         self.current_scene_idx = None
         self.current_image_idx = None
         self.upscale_responsiveness = False
+        self.scene_obj_info = None
         self.bounds = None
         self.coord_labels = []
         self.mesh_names = []
         self.settings = Settings()
         self.window = gui.Application.instance.create_window(
             "6D Object Pose Annotator by GIST AILAB", width, height)
-        w = self.window  # to make the code more 
+        w = self.window  
 
         self.spl = "\\" if sys.platform.startswith("win") else "/"
 
         # 3D widget
         self._scene = gui.SceneWidget()
         self._scene.scene = rendering.Open3DScene(w.renderer)
+        em = w.theme.font_size
+
+        # ---- Validation panel ----
+        self._validation_panel = gui.Vert(
+            0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
+        self.scene_obj_info_panel = gui.CollapsableVert("라벨링 검증 도구", 0,
+                                         gui.Margins(em, 0, 0, 0))
+        self.scene_obj_info_panel.set_is_open(True)
+        self.scene_obj_info_table = gui.ListView()
+        self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
+        self._validation_panel.add_child(self.scene_obj_info_panel)
+
+
 
         # ---- Settings panel ----
-        em = w.theme.font_size
         self._settings_panel = gui.Vert(
             0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
 
@@ -297,6 +317,7 @@ class AppWindow:
         w.add_child(self._settings_panel)
         w.add_child(self._images_panel)
         w.add_child(self._log_panel)
+        w.add_child(self._validation_panel)
         w.set_on_layout(self._on_layout)
 
         annotation_objects = gui.CollapsableVert("라벨링 대상 물체", 0.25 * em,
@@ -454,8 +475,44 @@ class AppWindow:
         o3d.io.write_image("test.png", img, 9)
 
 
+    def update_scene_obj_info_table(self):
 
+        scene_obj_info_table = []
 
+        # update table data from annotation_scene
+        cur_obj_names = []
+        cur_inst_counts = []
+        for scene_obj in self._annotation_scene.get_objects():
+            obj_name = '_'.join(scene_obj.obj_name.split('_')[:-1])
+            if scene_obj.obj_name not in cur_obj_names:
+                cur_obj_names.append(obj_name)
+                cur_inst_counts.append(1)
+            else:
+                idx = cur_obj_names.index(obj_name)
+                cur_inst_counts[idx] += 1
+
+        target_obj_names = []
+        for table_data in self.scene_obj_info_table_data:
+            target_obj_name = table_data[0]
+            target_obj_names.append(target_obj_name)
+            if target_obj_name in cur_obj_names:
+                table_data[1] = cur_inst_counts[cur_obj_names.index(target_obj_name)]
+
+        for i, table_data in enumerate(self.scene_obj_info_table_data):
+            if i == 0:
+                row = " {} | {} | {} | {} | {} ".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
+                scene_obj_info_table.append(row)
+                row = '-' * len(row)
+                scene_obj_info_table.append(row)
+            else:
+                row = "{}: [{:02d}/{:02d}] {} ({:.5f})".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
+                scene_obj_info_table.append(row)
+        
+        # check whether there is invalid objects
+        for cur_obj_name in cur_obj_names:
+            if cur_obj_name not in target_obj_names:
+                scene_obj_info_table.append('{}: 삭제 필요'.format(cur_obj_name))
+        self.scene_obj_info_table.set_items(scene_obj_info_table)
 
     def _on_x_rot(self, new_val):
         try:
@@ -1034,7 +1091,6 @@ class AppWindow:
         geometry = None
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-
         camera_params_path = os.path.join(scene_path, 'scene_camera.json')
         with open(camera_params_path) as f:
             data = json.load(f)
@@ -1120,6 +1176,18 @@ class AppWindow:
                         active_meshes.append(obj_name)
                     self._meshes_used.set_items(active_meshes)
         self._update_scene_numbers()
+
+        # load scene_obj_info.json
+        scene_obj_info_path = os.path.join(scene_path, 'scene_obj_info.json')
+        with open(scene_obj_info_path, 'r') as f:
+            self.scene_obj_info = json.load(f)
+        # initialize the table data
+        self.scene_obj_info_table_data = [["물체 번호", "필요 개수", "현재 개수", "에러 값", "수정 필요"]]
+        for obj_info in self.scene_obj_info:
+            obj_id = int(obj_info["obj_id"])
+            num_inst = int(obj_info["num_inst"])
+            self.scene_obj_info_table_data.append([f'obj_{obj_id:06}', 0, num_inst, "라벨링 필요", 0])
+        self.update_scene_obj_info_table()
 
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
