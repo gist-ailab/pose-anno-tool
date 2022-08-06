@@ -5,8 +5,11 @@
 
 # TODO:
 - [X] Move Each Hand by ALT + Click
-- [ ] Move Each Hand by Keyboard 
-- [ ] Optimze Hand Pose by End-Tips
-- [ ] Optimze Hand Pose by Detail fingers
+- [X] Move Each Hand by Keyboard
+- [X] Optimze Hand Pose by End-Tips
+- [X] Optimze Hand Pose by Detail fingers
+
+- [ ] CTRL+Z -> control joint back
+
 
 

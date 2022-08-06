@@ -31,8 +31,8 @@ MANO_PATH = os.path.join(str(Path(__file__).parent), 'models/mano')
 class LabelingStage:
     LOADING = "준비중"
     TRANSLATION = "1. 손 이동"
-    HAND_TIP =    "2. 손가락 끝 위치 조정"
-    HAND_DETAIL = "3. 손가락 세부 위치 조정"
+    HAND_TIP =    "2. 손가락 끝 위치 조정(ZXCVB)"
+    HAND_DETAIL = "3. 손가락 세부 위치 조정(ZXCV)"
 
 class DexYCB:
     """Dex-YCB"""
@@ -135,6 +135,8 @@ class HandModel:
         self.active_joints = None
         self.contorl_joint = None
     
+    def reset_target(self):
+        self.targets = torch.empty_like(self.joints).copy_(self.joints)
     
     def optimize_to_target(self):
         if self.optimize_state == 'root':
@@ -171,6 +173,10 @@ class HandModel:
         self.active_joints = self._IDX_OF_HANDS[self.optimize_state]
         self.contorl_joint = self.active_joints[0]
     
+    def set_control_joint(self, idx):
+        assert len(self.active_joints) > 0, "set_control_joint error"
+        self.contorl_joint = self.active_joints[idx]
+    
     def get_geometry(self):
         return {
             "mesh": self._get_mesh(),
@@ -191,7 +197,9 @@ class HandModel:
         self.set_target(joints)
         
         return True
-        
+    def get_control_joint(self):
+        joints = self.get_target()
+        return np.array(joints[self.contorl_joint])
     
     def get_target_geometry(self):
         return {
@@ -475,6 +483,9 @@ class Settings:
 
     def __init__(self):
         self.bg_color = gui.Color(1, 1, 1)
+        self.show_axes = False
+        self.show_coord_frame = False
+        self.show_hand = True
 
         # ----- Material Settings -----
         self.apply_material = True  # clear to False after processing
@@ -502,7 +513,7 @@ class Settings:
         self.hand_link_material.line_width = 2.0
         
         self.active_hand_mesh_material = rendering.MaterialRecord()
-        self.active_hand_mesh_material.base_color = [0.0, 1.0, 0.0, 0.5]
+        self.active_hand_mesh_material.base_color = [0.0, 1.0, 0.75, 0.5]
         self.active_hand_mesh_material.shader = Settings.SHADER_LINE
         self.active_hand_mesh_material.line_width = 2.0
 
@@ -518,21 +529,20 @@ class Settings:
         self.target_link_material.line_width = 3.0
         
         self.active_target_joint_material = rendering.MaterialRecord()
-        self.active_target_joint_material.base_color = [0.0, 1.0, 0.0, 1.0]
+        self.active_target_joint_material.base_color = [1.0, 0.75, 0.75, 1.0]
         self.active_target_joint_material.shader = Settings.SHADER_POINT
         self.active_target_joint_material.point_size = 20.0
         
         self.active_target_link_material = rendering.MaterialRecord()
-        self.active_target_link_material.base_color = [0.0, 1.0, 0.0, 1.0]
+        self.active_target_link_material.base_color = [0.0, 0.7, 0.0, 1.0]
         self.active_target_link_material.shader = Settings.SHADER_POINT
         self.active_target_link_material.point_size = 5.0
         
         self.control_target_joint_material = rendering.MaterialRecord()
         self.control_target_joint_material.base_color = [0.0, 1.0, 0.0, 1.0]
         self.control_target_joint_material.shader = Settings.SHADER_POINT
-        self.control_target_joint_material.point_size = 20.0
+        self.control_target_joint_material.point_size = 30.0
 
-      
 class AppWindow:
     
     def _initialize_background(self):
@@ -613,6 +623,13 @@ class AppWindow:
         self._active_link_name = "active_link"
         self._control_joint_name = "control_joint"
         
+        #----- intialize values
+        self._labeling_stage = LabelingStage.LOADING
+        self._hands = None
+        self._active_hand = None
+        self.upscale_responsiveness = False
+        self.coord_labels = []
+        
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
         w = self.window
         
@@ -652,14 +669,12 @@ class AppWindow:
         self._on_scene_point_size(5) # set default size to 1
         self._on_hand_point_size(5) # set default size to 5
         self._on_hand_line_size(2) # set default size to 2
+        self._on_responsiveness(5) # set default responsiveness to 5
         
         self._scene.set_on_mouse(self._on_mouse)
         self._scene.set_on_key(self._on_key)
         
-        self._labeling_stage = LabelingStage.LOADING
-        self._hands = None
-        self._active_hand = None
-   
+        
     #region Layout and Callback
    
     # file edit        
@@ -714,6 +729,20 @@ class AppWindow:
         sceneedit_layout = gui.CollapsableVert("편의 기능", 0.33*em,
                                           gui.Margins(em, 0, 0, 0))
         sceneedit_layout.set_is_open(True)
+        
+        self._show_axes = gui.Checkbox("카메라 좌표계 보기")
+        self._show_axes.set_on_checked(self._on_show_axes)
+        sceneedit_layout.add_child(self._show_axes)
+
+        self._show_coord_frame = gui.Checkbox("조작 중인 조인트 좌표계 보기")
+        self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
+        sceneedit_layout.add_child(self._show_coord_frame)
+
+        self._show_hands = gui.Checkbox("손 라벨 보기")
+        self._show_hands.set_on_checked(self._on_show_hand)
+        sceneedit_layout.add_child(self._show_hands)
+
+        
         grid = gui.VGrid(2, 0.25 * em)
         self._scene_point_size = gui.Slider(gui.Slider.INT)
         self._scene_point_size.set_limits(1, 20)
@@ -733,9 +762,63 @@ class AppWindow:
         grid.add_child(gui.Label("손 연결선 두께"))
         grid.add_child(self._hand_line_size)
         
+        self._responsiveness = gui.Slider(gui.Slider.INT)
+        self._responsiveness.set_limits(1, 20)
+        self._responsiveness.set_on_value_changed(self._on_responsiveness)
+        grid.add_child(gui.Label("민감도"))
+        grid.add_child(self._responsiveness)
+        
         sceneedit_layout.add_child(grid)
         
         self._settings_panel.add_child(sceneedit_layout)
+    def _on_show_axes(self, show):
+        self.settings.show_axes = show
+        self._scene.scene.show_axes(self.settings.show_axes)
+    def _on_show_hand(self, show):
+        if self._active_hand is None: # shsh
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_show_hand)")
+            return
+        
+        self.settings.show_hand = show
+        self._update_activate_hand()
+    def _on_show_coord_frame(self, show):
+        self.settings.show_coord_frame = show
+        if show:
+            self._add_coord_frame("world_coord_frame")
+        else:
+            self._scene.scene.remove_geometry("world_coord_frame")
+            for label in self.coord_labels:
+                self._scene.remove_3d_label(label)
+            self.coord_labels = []
+    def _add_coord_frame(self, name="coord_frame", size=0.2, origin=[0, 0, 0]):
+        if self._active_hand is None: # shsh
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_coord_frame)")
+            return
+        self._scene.scene.remove_geometry(name)
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
+        if "world" in name:
+            transform = np.eye(4)*1000
+            transform[:3, 3] = self._active_hand.get_control_joint().T
+            coord_frame.transform(transform)
+            for label in self.coord_labels:
+                self._scene.remove_3d_label(label)
+            self.coord_labels = []
+            size = size * 0.6 * 1000
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([size, 0, 0]), "D (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([-size, 0, 0]), "A (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([0, size, 0]), "S (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([0, -size, 0]), "W (-)"))
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([0, 0, size]), "Q (+)"))
+            self.coord_labels.append(self._scene.add_3d_label(self._active_hand.get_control_joint().T + np.array([0, 0, -size]), "E (-)"))
+
+        else:
+            transform = np.eye(4)*1000
+            transform[:3, 3] = self._active_hand.get_control_joint().T
+            coord_frame.transform(transform)
+            
+        self._scene.scene.add_geometry(name, coord_frame, 
+                                        self.settings.active_target_link_material,
+                                        add_downsampled_copy_for_fast_rendering=True) 
     def _on_scene_point_size(self, size):
         mat = self.settings.scene_material
         mat.point_size = int(size)
@@ -759,6 +842,14 @@ class AppWindow:
         if self._check_geometry(self._left_hand_mesh_name):
             self._set_geometry_material(self._left_hand_mesh_name, mat)
 
+        if self._active_hand is not None:
+            mat = self.settings.active_hand_mesh_material
+            mat.line_width = int(size)
+            active_side = self._active_hand.side
+            if active_side == 'right':
+                self._set_geometry_material(self._right_hand_mesh_name, mat)
+            else:
+                self._set_geometry_material(self._left_hand_mesh_name, mat)
         # link        
         mat = self.settings.hand_link_material
         mat.line_width = int(size)
@@ -768,11 +859,14 @@ class AppWindow:
             self._set_geometry_material(self._left_hand_link_name, mat)
 
         self._hand_line_size.double_value = size
+    def _on_responsiveness(self, responsiveness):
+        self.dist = 0.4 * responsiveness
+        self._responsiveness.double_value = responsiveness
     
     # labeling stage edit
     def _init_stageedit_layout(self):
         em = self.window.theme.font_size
-        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택", 0.33*em,
+        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택(숫자 1,2,3)", 0.33*em,
                                                   gui.Margins(0.25*em, 0, 0, 0))
         stageedit_layout.set_is_open(True)
         self._current_stage_str = gui.Label("현재 상태: 준비중")
@@ -809,6 +903,7 @@ class AppWindow:
             self._active_hand.set_optimize_state('tips')
         elif labeling_stage==LabelingStage.HAND_DETAIL:
             self._active_hand.set_optimize_state('thumb')
+        self._update_target_hand()
         
     # labeling hand edit
     def _init_handedit_layout(self):
@@ -905,7 +1000,7 @@ class AppWindow:
                            active_geo['joint'], self.settings.active_target_joint_material)
         self._add_geometry(self._control_joint_name, 
                            active_geo['control'], self.settings.control_target_joint_material)
-        
+        self.control_joint_geo = active_geo['control']
     def _next_scene(self):
         pcd = self.annotation_scene.get_next_frame()
     
@@ -994,6 +1089,13 @@ class AppWindow:
 
         return gui.Widget.EventCallbackResult.IGNORED
 
+    def move(self, x, y, z):
+        current_xyz = self._active_hand.get_control_joint()
+        xyz = current_xyz + np.array([x, y, z])
+        self._active_hand.move_control_joint(xyz)
+        self._update_target_hand()
+        
+    
     def _move_control_joint(self, xyz):
         self._active_hand.move_control_joint(xyz)
         self._update_target_hand()
@@ -1004,34 +1106,66 @@ class AppWindow:
                            target_geo['joint'], self.settings.target_joint_material)
         self._add_geometry(self._target_link_name, 
                            target_geo['link'], self.settings.target_link_material)
+        
         active_geo = self._active_hand.get_active_geometry()
         self._add_geometry(self._active_joint_name, 
                            active_geo['joint'], self.settings.active_target_joint_material)
         self._add_geometry(self._control_joint_name, 
                            active_geo['control'], self.settings.control_target_joint_material)
-    
+        self.control_joint_geo = active_geo['control']
     def _update_activate_hand(self):
-        hand_geo = self._active_hand.get_geometry()
-        side = self._active_hand.side
-        if side == 'right':
-            mesh_name = self._right_hand_mesh_name
-            joint_name = self._right_hand_joint_name
-            link_name = self._right_hand_link_name
-        elif side == 'left':
-            mesh_name = self._left_hand_mesh_name
-            joint_name = self._left_hand_joint_name
-            link_name = self._left_hand_link_name
+        if self.settings.show_hand:
+            hand_geo = self._active_hand.get_geometry()
+            side = self._active_hand.side
+            if side == 'right':
+                mesh_name = self._right_hand_mesh_name
+                joint_name = self._right_hand_joint_name
+                link_name = self._right_hand_link_name
+            elif side == 'left':
+                mesh_name = self._left_hand_mesh_name
+                joint_name = self._left_hand_joint_name
+                link_name = self._left_hand_link_name
+            else:
+                assert False, "visualize hand error"
+            mesh_mat = self.settings.active_hand_mesh_material
+            self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
+            self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
+            self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
         else:
-            assert False, "visualize hand error"
-        mesh_mat = self.settings.active_hand_mesh_material
-        self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
-        self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
-        self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
-
+            side = self._active_hand.side
+            if side == 'right':
+                mesh_name = self._right_hand_mesh_name
+                joint_name = self._right_hand_joint_name
+                link_name = self._right_hand_link_name
+            elif side == 'left':
+                mesh_name = self._left_hand_mesh_name
+                joint_name = self._left_hand_joint_name
+                link_name = self._left_hand_link_name
+            self._remove_geometry(mesh_name)
+            self._remove_geometry(joint_name)
+            self._remove_geometry(link_name)
+            
+            
     def _toggle_hand_visible(self):
         pass
         
     def _on_key(self, event):
+        if self._labeling_stage == LabelingStage.LOADING:
+            return gui.Widget.EventCallbackResult.IGNORED
+        
+        
+        # if ctrl is pressed then increase translation
+        if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
+            if event.type == gui.KeyEvent.DOWN:
+                if not self.upscale_responsiveness:
+                    self.dist = self.dist * 15
+                    self.upscale_responsiveness = True
+            elif event.type == gui.KeyEvent.UP:
+                if self.upscale_responsiveness:
+                    self.dist = self.dist / 15
+                    self.upscale_responsiveness = False
+            return gui.Widget.EventCallbackResult.HANDLED
+        
         # optimze
         if event.key == gui.KeyName.SPACE:
             if self._active_hand is None:
@@ -1039,11 +1173,64 @@ class AppWindow:
             self._active_hand.optimize_to_target()
             self._update_activate_hand()
         
+        # reset guide pose
+        elif event.key == gui.KeyName.HOME:
+            self._active_hand.reset_target()
+            self._update_target_hand()
+        
+        # convert hand
+        elif (event.key == gui.KeyName.TAB) and (event.type==gui.KeyEvent.DOWN):
+            self._convert_hand()
+        
+        # stage change
+        elif event.key == gui.KeyName.ONE:
+            self._convert_stage(LabelingStage.TRANSLATION)
+        elif event.key == gui.KeyName.TWO:
+            self._convert_stage(LabelingStage.HAND_TIP)
+        elif event.key == gui.KeyName.THREE:
+            self._convert_stage(LabelingStage.HAND_DETAIL)
+
+        # change control joint
+        if self._labeling_stage==LabelingStage.HAND_TIP:
+            if event.key == gui.KeyName.Z:
+                self._active_hand.set_control_joint(0)
+            elif event.key == gui.KeyName.X:
+                self._active_hand.set_control_joint(1)
+            elif event.key == gui.KeyName.C:
+                self._active_hand.set_control_joint(2)
+            elif event.key == gui.KeyName.V:
+                self._active_hand.set_control_joint(3)
+            elif event.key == gui.KeyName.B:
+                self._active_hand.set_control_joint(4)
+            self._update_target_hand()
+        elif self._labeling_stage==LabelingStage.HAND_DETAIL:
+            if event.key == gui.KeyName.Z:
+                self._active_hand.set_control_joint(0)
+            elif event.key == gui.KeyName.X:
+                self._active_hand.set_control_joint(1)
+            elif event.key == gui.KeyName.C:
+                self._active_hand.set_control_joint(2)
+            elif event.key == gui.KeyName.V:
+                self._active_hand.set_control_joint(3)
+            self._update_target_hand()
+        
+        
+        # Translation
+        if event.key == gui.KeyName.D:
+            self.move( self.dist, 0, 0)
+        elif event.key == gui.KeyName.A:
+            self.move( -self.dist, 0, 0)
+        elif event.key == gui.KeyName.S:
+            self.move( 0, self.dist, 0)
+        elif event.key == gui.KeyName.W:
+            self.move( 0, -self.dist, 0)
+        elif event.key == gui.KeyName.Q:
+            self.move( 0, 0, self.dist)
+        elif event.key == gui.KeyName.E:
+            self.move( 0, 0, -self.dist)
+        
         return gui.Widget.EventCallbackResult.IGNORED
 
-    
-    
-    
         
 def main():
     gui.Application.instance.initialize()
