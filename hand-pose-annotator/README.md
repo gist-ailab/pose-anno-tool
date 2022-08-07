@@ -18,19 +18,24 @@
 In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.com/ko-KR/download/details.aspx?id=48159) [link](https://visualstudio.microsoft.com/ko/visual-cpp-build-tools/)
 
 ```
+# install requirements
 $ conda create -n pose-anno python=3.7
 $ conda activate pose-anno
 $ pip install -r requirements.txt
 $ pip install numpy matplotlib==2.2.5 glumpy pyrender imgviz pyglet
 $ pip install open3d==0.15.2
 $ pip install opencv-python==4.5.3.56
-$ pip3 install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+
+# install torch
+$ (linux) pip3 install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+$ (window) pip3 install torch torchvision torchaudio
+
+# install mano
 $ pip install git+https://github.com/hassony2/chumpy.git
 $ pip install git+https://github.com/hassony2/manopth
 
+
 $ python hand_pose_annotator.py
-
 $ pip install --upgrade cx_Freeze
-
 $ python setup.py build
 ```
