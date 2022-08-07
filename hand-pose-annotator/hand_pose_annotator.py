@@ -18,10 +18,8 @@ from torch import optim
 
 import numpy as np
 
-from os.path import basename, dirname
-from typing import Optional
+from os.path import basename 
 import yaml
-import copy
 
 from utils.file_utils import *
 
@@ -91,19 +89,23 @@ class HandModel:
             self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
         
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=False)
+                            use_pca=True, flat_hand_mean=False)
         
-        self.pose_param = torch.zeros(1, 45 + 3)
+        self.pose_param = torch.zeros(1, 6)
         self.pose_param.requires_grad = True
+        self.rot_param = torch.zeros(1, 3)
+        self.rot_param.requires_grad = True
         self.trans_param = torch.zeros(1, 3)+1e-3
         self.trans_param.requires_grad = True
 
         self.optimizer = {
-            "trans": optim.Adam([self.trans_param], lr=1e-2),
-            "pose": optim.Adam([self.pose_param], lr=1e-3)
+            "trans": optim.Adam([self.rot_param], lr=1e-2),
+            "pose": optim.Adam([self.pose_param, self.rot_param], lr=1e-3)
         }
-        
-        self.verts, self.joints = self.mano_layer(self.pose_param)
+        pose_param = torch.concat((self.rot_param, self.pose_param), dim=1)
+        self.verts, self.joints = self.mano_layer(th_pose_coeffs=pose_param,
+                                                  th_betas=self.shape_param,
+                                                  th_trans=self.trans_param)
         self.faces = self.mano_layer.th_faces
         
         self.targets = torch.empty_like(self.joints).copy_(self.joints)
@@ -145,9 +147,11 @@ class HandModel:
             optimizer = self.optimizer["pose"]
         optimizer.zero_grad()
         # forward
-        self.verts, self.joints = self.mano_layer(th_pose_coeffs=self.pose_param,
+        pose_param = torch.concat((self.rot_param, self.pose_param), dim=1)
+        self.verts, self.joints = self.mano_layer(th_pose_coeffs=pose_param,
                                                   th_betas=self.shape_param,
                                                   th_trans=self.trans_param)
+        
         self.faces = self.mano_layer.th_faces
         # loss term
         loss = self._mse_loss()
@@ -162,7 +166,11 @@ class HandModel:
         self.targets.requires_grad = True
 
     def _mse_loss(self):
-        target_idx = self._IDX_OF_HANDS[self.optimize_state]
+        if self.optimize_state=='root':
+            # target_idx = self._IDX_OF_HANDS['root'] + self._IDX_OF_HANDS['tips']
+            target_idx = self._IDX_OF_HANDS['whole']
+        else:
+            target_idx = self._IDX_OF_HANDS[self.optimize_state]
         return torch.norm(self.targets[:, target_idx]-self.joints[:, target_idx])
         
     def get_optimize_state(self):
@@ -628,6 +636,7 @@ class AppWindow:
         self._hands = None
         self._active_hand = None
         self.upscale_responsiveness = False
+        self._left_shift_modifier = False
         self.coord_labels = []
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
@@ -861,6 +870,7 @@ class AppWindow:
         self._hand_line_size.double_value = size
     def _on_responsiveness(self, responsiveness):
         self.dist = 0.4 * responsiveness
+        self.deg = 0.2 * responsiveness
         self._responsiveness.double_value = responsiveness
     
     # labeling stage edit
@@ -1089,10 +1099,22 @@ class AppWindow:
 
         return gui.Widget.EventCallbackResult.IGNORED
 
-    def move(self, x, y, z):
+    def move(self, x, y, z, rx, ry, rz):
         current_xyz = self._active_hand.get_control_joint()
-        xyz = current_xyz + np.array([x, y, z])
-        self._active_hand.move_control_joint(xyz)
+        if x != 0 or y != 0 or z != 0:
+            # convert x, y, z cam to world
+            R = self._scene.scene.camera.get_view_matrix()[:3,:3]
+            R_inv = np.linalg.inv(R)
+            xyz = np.dot(R_inv, np.array([x, y, z]))
+            # xyz[1] *= -1#TODO: ... why -y
+            xyz = current_xyz + xyz
+            self._active_hand.move_control_joint(xyz)
+        else:
+            joints_pcd = self._active_hand.get_target_geometry()['joint']
+            joints_pcd.rotate(joints_pcd.get_rotation_matrix_from_xyz((rx, ry, rz)), current_xyz)
+            
+            self._active_hand.set_target(np.asarray(joints_pcd.points))
+        
         self._update_target_hand()
         
     
@@ -1153,16 +1175,24 @@ class AppWindow:
         if self._labeling_stage == LabelingStage.LOADING:
             return gui.Widget.EventCallbackResult.IGNORED
         
+        if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
+            if event.type == gui.KeyEvent.DOWN:
+                self._left_shift_modifier = True
+            elif event.type == gui.KeyEvent.UP:
+                self._left_shift_modifier = False
+            return gui.Widget.EventCallbackResult.HANDLED
         
         # if ctrl is pressed then increase translation
         if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
             if event.type == gui.KeyEvent.DOWN:
                 if not self.upscale_responsiveness:
                     self.dist = self.dist * 15
+                    self.deg = self.deg * 15
                     self.upscale_responsiveness = True
             elif event.type == gui.KeyEvent.UP:
                 if self.upscale_responsiveness:
                     self.dist = self.dist / 15
+                    self.deg = self.deg / 15
                     self.upscale_responsiveness = False
             return gui.Widget.EventCallbackResult.HANDLED
         
@@ -1216,19 +1246,37 @@ class AppWindow:
         
         
         # Translation
-        if event.key == gui.KeyName.D:
-            self.move( self.dist, 0, 0)
-        elif event.key == gui.KeyName.A:
-            self.move( -self.dist, 0, 0)
-        elif event.key == gui.KeyName.S:
-            self.move( 0, self.dist, 0)
-        elif event.key == gui.KeyName.W:
-            self.move( 0, -self.dist, 0)
-        elif event.key == gui.KeyName.Q:
-            self.move( 0, 0, self.dist)
-        elif event.key == gui.KeyName.E:
-            self.move( 0, 0, -self.dist)
-        
+        if not self._left_shift_modifier:
+            self._log.text = "\t물체 위치를 조정 중 입니다."
+            if event.key == gui.KeyName.D:
+                self.move( self.dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.A:
+                self.move( -self.dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.S:
+                self.move( 0, self.dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.W:
+                self.move( 0, -self.dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.Q:
+                self.move( 0, 0, self.dist, 0, 0, 0)
+            elif event.key == gui.KeyName.E:
+                self.move( 0, 0, -self.dist, 0, 0, 0)
+        # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
+        else:
+            if self._labeling_stage==LabelingStage.TRANSLATION:
+                self._log.text = "\t물체 방향을 조정 중 입니다."
+                if event.key == gui.KeyName.E:
+                    self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
+                elif event.key == gui.KeyName.Q:
+                    self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
+                elif event.key == gui.KeyName.A:
+                    self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
+                elif event.key == gui.KeyName.D:
+                    self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
+                elif event.key == gui.KeyName.S:
+                    self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
+                elif event.key == gui.KeyName.W:
+                    self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
+
         return gui.Widget.EventCallbackResult.IGNORED
 
         
