@@ -608,7 +608,7 @@ class AppWindow:
                     obj_inst_names.append(obj_inst_name)
             if len(obj_inst_names) != 0:
                 err = max([self.depth_diff_means[obj_inst_name] for obj_inst_name in obj_inst_names])
-            if err < self.ok_delta:
+            if np.abs(err) < self.ok_delta:
                 text = "완료"
             else:
                 text = "검수 필요"
@@ -1092,13 +1092,12 @@ class AppWindow:
             mask_obj = render.render_to_image()
             # mask_obj = cv2.cvtColor(np.array(mask_obj), cv2.COLOR_RGBA2BGRA)
             mask_obj = np.array(mask_obj)
+
             # save in dictionary
             obj_masks[source_obj.obj_name] = mask_obj.copy()
             # clear geometry
             render.scene.clear_geometry()
 
-            # visualize for debugging
-            cv2.imwrite("/home/seung/tmp_mask_{}.png".format(source_obj.obj_name), mask_obj)
 
         depth_captured = cv2.imread(self.depth_path, -1)
         depth_captured = np.float32(depth_captured) / self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"]
@@ -1131,7 +1130,6 @@ class AppWindow:
             cnd_obj = 1 - cnd_bg.copy() 
             valid_mask = cnd_obj.astype(bool)
             valid_mask = valid_mask * copy.deepcopy(valid_depth_mask)
-
             # get only object depth of captured depth
             depth_captured_obj = depth_captured.copy()
             depth_captured_obj[cnd_bg] = 0
@@ -1157,7 +1155,11 @@ class AppWindow:
             depth_abs_diff_mean = depth_abs_diff.mean() 
             depth_diff_vis = np.dstack(
                 [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
-            diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
+            try:
+                diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
+            except:
+                self._on_error("{}의 마스크를 생성하는데 실패했습니다.".format(source_obj.obj_name))
+                continue
             texts.append("{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2])))
             ys, xs = valid_mask.nonzero()
             bb_min = [int(ratio*xs.min()), int(ratio*ys.min())]
@@ -1337,6 +1339,7 @@ class AppWindow:
         meshes = [i.obj_name for i in meshes]
         self._meshes_used.set_items(meshes)
         self._meshes_used.selected_index = len(meshes) - 1
+        self._annotation_changed = True
 
     def _remove_mesh(self):
         if self._annotation_scene is None: # shsh
@@ -1357,6 +1360,7 @@ class AppWindow:
         self._meshes_used.set_items(meshes)
         if self.settings.show_mesh_names:
             self._update_and_show_mesh_name()
+        self._annotation_changed = True
 
     def _make_point_cloud(self, rgb_img, depth_img, cam_K):
         # convert images to open3d types
@@ -1379,7 +1383,7 @@ class AppWindow:
         geometry = None
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'scene_camera.json') # !TODO: change to scene_camera.json
+        camera_params_path = os.path.join(scene_path, 'new_scene_camera.json') # !TODO: change to scene_camera.json
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
