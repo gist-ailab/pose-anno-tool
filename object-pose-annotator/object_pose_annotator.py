@@ -1383,7 +1383,7 @@ class AppWindow:
         geometry = None
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'new_scene_camera.json') # !TODO: change to scene_camera.json
+        camera_params_path = os.path.join(scene_path, 'scene_camera.json') # !TODO: change to scene_camera.json
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
