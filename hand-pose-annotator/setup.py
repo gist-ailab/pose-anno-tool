@@ -1,3 +1,4 @@
+
 import sys
 from cx_Freeze import setup, Executable
 import scipy
@@ -22,11 +23,11 @@ base = None
 setup(
     name="gist-ailab-pose-annotator",
     version="0.1",
-    description="GIST AILAB 6D Object Pose Annotation Tool",
-    author="Seunghyeok Back, GIST AILAB, shback@gm.gist.ac.kr",
+    description="GIST AILAB 3D Hand Pose Annotation Tool",
+    author="Raeyoung Kang, GIST AILAB, raeyo@gm.gist.ac.kr",
     options={"build_exe": build_exe_options},
-    executables=[Executable("object_pose_annotator.py", 
-                            copyright="MIT License, Seunghyeok Back, GIST AILAB",
+    executables=[Executable("hand_pose_annotator.py", 
+                            copyright="MIT License, Raeyoung Kang, GIST AILAB",
                             icon="./lib/icon.ico",
                             base=base)],
 )
