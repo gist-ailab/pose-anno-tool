@@ -9,6 +9,7 @@
 - [X] Optimze Hand Pose by End-Tips
 - [X] Optimze Hand Pose by Detail fingers
 
+- [ ] Edit log
 - [ ] CTRL+Z -> control joint back
 
 
@@ -39,3 +40,6 @@ $ python hand_pose_annotator.py
 $ pip install --upgrade cx_Freeze
 $ python setup.py build
 ```
+
+
+
