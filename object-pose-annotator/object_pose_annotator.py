@@ -17,6 +17,7 @@ import numpy as np
 import os
 import sys
 import copy
+
 from pathlib import Path
 from os.path import basename, dirname
 
@@ -188,8 +189,7 @@ class AppWindow:
     
         self._validation_panel.frame = gui.Rect(r.get_right() - width_set - width_val, r.y, width_val,
                                               height_val)
-        
-                                              
+                                        
         width_im = min(
             r.width,
             self._images_panel.calc_preferred_size(
@@ -216,6 +216,7 @@ class AppWindow:
         self.coord_labels = []
         self.mesh_names = []
         self.settings = Settings()
+        self.ok_delta = 15
         self.window = gui.Application.instance.create_window(
             "6D Object Pose Annotator by GIST AILAB", width, height)
         w = self.window  
@@ -348,7 +349,12 @@ class AppWindow:
         self._rgb_proxy.set_widget(gui.ImageWidget())
         self._images_panel.add_child(self._rgb_proxy)
         self._images_panel.set_is_open(False)
-        
+        self._diff_proxy = gui.WidgetProxy()
+        self._diff_proxy.set_widget(gui.ImageWidget())
+        self._images_panel.add_child(self._diff_proxy)
+        self._images_panel.set_is_open(False)
+
+
         self._log_panel = gui.VGrid(1, em)
         self._log = gui.Label("\t 라벨링 대상 파일을 선택하세요. ")
         self._log_panel.add_child(self._log)
@@ -480,7 +486,7 @@ class AppWindow:
         self._scene_control.add_child(initial_viewpoint)
         refine_position = gui.Button("자동 정렬하기 (R)")
         refine_position.set_on_clicked(self._on_refine)
-        generate_save_annotation = gui.Button("저장하기 (F)")
+        generate_save_annotation = gui.Button("라벨링 결과 저장하기 (F)")
         generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(refine_position)
         self._scene_control.add_child(generate_save_annotation)
@@ -513,9 +519,6 @@ class AppWindow:
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
 
-        self.offscreen_render = rendering.OffscreenRenderer(640, 480)
-        img = self.offscreen_render.render_to_image()
-        o3d.io.write_image("test.png", img, 9)
 
     def _on_source_id_edit(self, new_val):
         self.source_image_num = int(new_val)
@@ -560,13 +563,13 @@ class AppWindow:
         scene_camera_info = copy.deepcopy(self.scene_camera_info)
         se3_base_to_source[:3, :3] = np.array(scene_camera_info[str(int(self.source_image_num))]["cam_R_w2c"]).reshape(3, 3)
         se3_base_to_source[:3, 3] = np.array(scene_camera_info[str(int(self.source_image_num))]["cam_t_w2c"])
-        se3_base_to_source[:3, 3] = se3_base_to_source[:3, 3] * 1000  # !TODO: fix this at camera_info
+        se3_base_to_source[:3, 3] = se3_base_to_source[:3, 3]  # !TODO: fix this at camera_info
 
 
         se3_base_to_target = np.eye(4)
         se3_base_to_target[:3, :3] = np.array(scene_camera_info[str(int(self.target_image_num))]["cam_R_w2c"]).reshape(3, 3)
         se3_base_to_target[:3, 3] = np.array(scene_camera_info[str(int(self.target_image_num))]["cam_t_w2c"])
-        se3_base_to_target[:3, 3] = se3_base_to_target[:3, 3] * 1000   # !TODO: fix this at camera_info
+        se3_base_to_target[:3, 3] = se3_base_to_target[:3, 3]   # !TODO: fix this at camera_info
 
         se3_target_to_source = np.matmul(np.linalg.inv(se3_base_to_target), se3_base_to_source)
 
@@ -594,6 +597,23 @@ class AppWindow:
 
     def update_scene_obj_info_table(self):
 
+        self.scene_obj_info_table_data = []
+        for obj_info in self.scene_obj_info:
+            obj_id = int(obj_info["obj_id"])
+            num_inst = int(obj_info["num_inst"])
+            err = -1
+            obj_inst_names = []
+            for obj_inst_name in self.depth_diff_means.keys():
+                if f'obj_{obj_id:06}' in obj_inst_name:
+                    obj_inst_names.append(obj_inst_name)
+            if len(obj_inst_names) != 0:
+                err = max([self.depth_diff_means[obj_inst_name] for obj_inst_name in obj_inst_names])
+            if np.abs(err) < self.ok_delta:
+                text = "완료"
+            else:
+                text = "검수 필요"
+            self.scene_obj_info_table_data.append([f'obj_{obj_id:06}', 0, num_inst, text, err])
+
         scene_obj_info_table = []
 
         # update table data from annotation_scene
@@ -614,16 +634,12 @@ class AppWindow:
             target_obj_names.append(target_obj_name)
             if target_obj_name in cur_obj_names:
                 table_data[1] = cur_inst_counts[cur_obj_names.index(target_obj_name)]
+            if table_data[1] != table_data[2]:
+                table_data[3] = "라벨링 필요"
 
         for i, table_data in enumerate(self.scene_obj_info_table_data):
-            if i == 0:
-                row = " {} | {} | {} | {} | {} ".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
-                scene_obj_info_table.append(row)
-                row = '-' * len(row)
-                scene_obj_info_table.append(row)
-            else:
-                row = "{}: [{:02d}/{:02d}] {} ({:.5f})".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
-                scene_obj_info_table.append(row)
+            row = "{}: [{:02d}/{:02d}] {} ({:.1f})".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
+            scene_obj_info_table.append(row)
         
         # check whether there is invalid objects
         for cur_obj_name in cur_obj_names:
@@ -694,7 +710,7 @@ class AppWindow:
         if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
             self.update_obj_list()
             self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
-            self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+            self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
             self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
                 100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
                 self.current_image_idx + 1, len(self.image_num_lists))
@@ -933,7 +949,7 @@ class AppWindow:
                                                           o3d.pipelines.registration.TransformationEstimationPointToPlane(),
                                                           o3d.pipelines.registration.ICPConvergenceCriteria(
                                                               max_iteration=50))
-        if np.sum(np.abs(reg.transformation[:3, 3])) < 0.2:
+        if np.sum(np.abs(reg.transformation[:3, 3])) < 0.25:
             active_obj.obj_geometry.transform(reg.transformation)
             self._scene.scene.remove_geometry(active_obj.obj_name)
             self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
@@ -1020,6 +1036,148 @@ class AppWindow:
             self._log.text = "\t라벨링 결과를 저장했습니다."
             self.window.set_needs_layout()
         self._annotation_changed = False
+
+        self._validate_anno()
+        self.update_scene_obj_info_table()
+
+    def _validate_anno(self):
+        # annotation validator
+        self._log.text = "\t라벨링 검증용 이미지를 생성 중입니다."
+        self.window.set_needs_layout()   
+        
+        render = rendering.OffscreenRenderer(width=self.W, height=self.H)
+        # black background color
+        render.scene.set_background([0, 0, 0, 1])
+        render.scene.set_lighting(render.scene.LightingProfile.SOFT_SHADOWS, [0,0,0])
+
+        # set camera intrinsic
+        intrinsic = np.array(self.cam_K).reshape((3, 3))
+        extrinsic = np.eye(4)
+        render.setup_camera(intrinsic, extrinsic, self.W, self.H)
+        # set camera pose
+        center = [0, 0, 1]  # look_at target
+        eye = [0, 0, 0]  # camera position
+        up = [0, -1, 0]  # camera orientation
+        render.scene.camera.look_at(center, eye, up)
+
+        objects = self._annotation_scene.get_objects()
+        # generate object material
+        obj_mtl = o3d.visualization.rendering.MaterialRecord()
+        obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
+        obj_mtl.shader = "defaultUnlit"
+        obj_mtl.point_size = 10.0
+        for obj in objects:
+            obj = copy.deepcopy(obj)
+            render.scene.add_geometry(obj.obj_name, obj.obj_geometry, obj_mtl,                              
+                                  add_downsampled_copy_for_fast_rendering=True)
+        depth_rendered = render.render_to_depth_image(z_in_view_space=True)
+        depth_rendered = np.array(depth_rendered, dtype=np.float32)
+        depth_rendered[np.isposinf(depth_rendered)] = 0
+        depth_rendered *= 1000 # convert meter to mm
+        render.scene.clear_geometry()
+
+        # rendering object masks #
+        obj_masks = {}
+        for source_obj in objects:
+            # add geometry and set color (target object as white / others as black)
+            for target_obj in objects:
+                target_obj = copy.deepcopy(target_obj)
+                color = [1,0,0] if source_obj.obj_name == target_obj.obj_name else [0,0,0]
+                target_obj.obj_geometry.paint_uniform_color(color)
+                render.scene.add_geometry("mask_{}_to_{}".format(
+                                                source_obj.obj_name, target_obj.obj_name), 
+                                        target_obj.obj_geometry, obj_mtl,                              
+                                        add_downsampled_copy_for_fast_rendering=True)
+            # render mask as RGB
+            mask_obj = render.render_to_image()
+            # mask_obj = cv2.cvtColor(np.array(mask_obj), cv2.COLOR_RGBA2BGRA)
+            mask_obj = np.array(mask_obj)
+
+            # save in dictionary
+            obj_masks[source_obj.obj_name] = mask_obj.copy()
+            # clear geometry
+            render.scene.clear_geometry()
+
+
+        depth_captured = cv2.imread(self.depth_path, -1)
+        depth_captured = np.float32(depth_captured) / self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"]
+        valid_depth_mask = np.array(depth_captured > 200, dtype=bool)
+
+        rgb_vis = cv2.imread(self.rgb_path)
+        diff_vis = np.zeros_like(rgb_vis)
+        ########################################
+        # calculate depth difference with mask #
+        # depth_diff = depth_cap - depth_ren   #
+        ########################################
+        texts = []
+        bboxes = []
+        is_oks = []
+        self.H, self.W, _ = diff_vis.shape
+        ratio = 640 / self.W
+        self.depth_diff_means = {}
+        for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
+            cnd_r = obj_mask[:, :, 0] != 0
+            cnd_g = obj_mask[:, :, 1] == 0
+            cnd_b = obj_mask[:, :, 2] == 0
+            cnd_obj = np.bitwise_and(np.bitwise_and(cnd_r, cnd_g), cnd_b)
+
+            cnd_bg = np.zeros((self.H+2, self.W+2), dtype=np.uint8)
+            newVal, loDiff, upDiff = 1, 1, 0
+            cv2.floodFill(cnd_obj.copy().astype(np.uint8), cnd_bg, 
+                                    (0,0), newVal, loDiff, upDiff)
+
+            cnd_bg = cnd_bg[1:self.H+1, 1:self.W+1].astype(bool)
+            cnd_obj = 1 - cnd_bg.copy() 
+            valid_mask = cnd_obj.astype(bool)
+            valid_mask = valid_mask * copy.deepcopy(valid_depth_mask)
+            # get only object depth of captured depth
+            depth_captured_obj = depth_captured.copy()
+            depth_captured_obj[cnd_bg] = 0
+
+            # get only object depth of rendered depth
+            depth_rendered_obj = depth_rendered.copy()
+            depth_rendered_obj[cnd_bg] = 0
+
+            depth_diff = (depth_captured_obj - depth_rendered_obj) 
+
+            delta_1 = 3
+            delta_2 = 15
+            below_delta_1 = valid_mask * (depth_diff < delta_1)
+            below_delta_2 = valid_mask * (depth_diff < delta_2) * (depth_diff > delta_1)
+            above_delta = valid_mask * (depth_diff > delta_2)
+            below_delta_1_vis = (255 * below_delta_1).astype(np.uint8)
+            below_delta_2_vis = (255 * below_delta_2).astype(np.uint8)
+            above_delta_vis = (255 * above_delta).astype(np.uint8)
+
+            depth_diff = depth_diff[valid_mask]
+            depth_diff_mean = depth_diff.mean()
+            depth_abs_diff = np.abs(depth_diff)
+            depth_abs_diff_mean = depth_abs_diff.mean() 
+            depth_diff_vis = np.dstack(
+                [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
+            try:
+                diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
+            except:
+                self._on_error("{}의 마스크를 생성하는데 실패했습니다.".format(source_obj.obj_name))
+                continue
+            texts.append("{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2])))
+            ys, xs = valid_mask.nonzero()
+            bb_min = [int(ratio*xs.min()), int(ratio*ys.min())]
+            bb_max = [int(ratio*xs.max()), int(ratio*ys.max())]
+            bboxes.append([bb_min[0], bb_min[1], bb_max[0] - bb_min[0], bb_max[1] - bb_min[1]])
+            self.depth_diff_means[obj_name] = abs(depth_diff_mean)
+            is_oks.append(abs(depth_diff_mean) < self.ok_delta)
+        
+        diff_vis = cv2.resize(diff_vis.copy(), (640, int(self.H*ratio)))
+        for text, bbox, is_ok in zip(texts, bboxes, is_oks):
+            color = (0,255,0) if is_ok else (0,0,255)
+            cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), color, 1)
+            cv2.putText(diff_vis, text, (bbox[0], bbox[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        diff_vis = o3d.geometry.Image(cv2.cvtColor(diff_vis, cv2.COLOR_BGR2RGB))
+        self._diff_proxy.set_widget(gui.ImageWidget(diff_vis))
+        self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
+        self.window.set_needs_layout()   
 
     def _on_error(self, err_msg):
         dlg = gui.Dialog("Error")
@@ -1181,6 +1339,7 @@ class AppWindow:
         meshes = [i.obj_name for i in meshes]
         self._meshes_used.set_items(meshes)
         self._meshes_used.selected_index = len(meshes) - 1
+        self._annotation_changed = True
 
     def _remove_mesh(self):
         if self._annotation_scene is None: # shsh
@@ -1201,6 +1360,7 @@ class AppWindow:
         self._meshes_used.set_items(meshes)
         if self.settings.show_mesh_names:
             self._update_and_show_mesh_name()
+        self._annotation_changed = True
 
     def _make_point_cloud(self, rgb_img, depth_img, cam_K):
         # convert images to open3d types
@@ -1219,12 +1379,11 @@ class AppWindow:
     def scene_load(self, scenes_path, scene_num, image_num):
 
         self._annotation_changed = False
-
         self._scene.scene.clear_geometry()
         geometry = None
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'new_scene_camera.json') # !TODO: change to scene_camera.json
+        camera_params_path = os.path.join(scene_path, 'scene_camera.json') # !TODO: change to scene_camera.json
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
@@ -1242,9 +1401,9 @@ class AppWindow:
         rgb_img = cv2.imread(self.rgb_path)
         depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img) / depth_scale / 1000
-        H, W, _ = rgb_img.shape
-        ratio = 640 / W
-        _rgb_img = cv2.resize(rgb_img.copy(), (640, int(H*ratio)))
+        self.H, self.W, _ = rgb_img.shape
+        ratio = 640 / self.W
+        _rgb_img = cv2.resize(rgb_img.copy(), (640, int(self.H*ratio)))
         _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
         self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
 
@@ -1311,21 +1470,26 @@ class AppWindow:
                     self._meshes_used.set_items(active_meshes)
         self._update_scene_numbers()
 
+        # if np.abs(self.image_num_lists[self.current_image_idx]) % 4 in [1, 2]: # realsense
+        #     self.ok_delta = 30
+        # else:
+        #     self.ok_delta = 15
+        # print("[Info] OK delta: ", self.ok_delta, self.image_num_lists[self.current_image_idx] )
+
+        self._validate_anno()
+
         # load scene_obj_info.json
         scene_obj_info_path = os.path.join(scene_path, 'scene_obj_info.json')
         with open(scene_obj_info_path, 'r') as f:
             self.scene_obj_info = json.load(f)
         # initialize the table data
-        self.scene_obj_info_table_data = [["물체 번호", "필요 개수", "현재 개수", "에러 값", "수정 필요"]]
-        for obj_info in self.scene_obj_info:
-            obj_id = int(obj_info["obj_id"])
-            num_inst = int(obj_info["num_inst"])
-            self.scene_obj_info_table_data.append([f'obj_{obj_id:06}', 0, num_inst, "라벨링 필요", 0])
+     
         self.update_scene_obj_info_table()
 
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
-        self.source_id_edit.set_value(image_num)
+        # self.source_id_edit.set_value(image_num)
+
 
     def update_obj_list(self):
         model_names = self.load_model_names()
