@@ -99,8 +99,10 @@ class HandModel:
         self.rot_param.requires_grad = True
         self.trans_param = torch.zeros(1, 3)+1e-9
         self.trans_param.requires_grad = True
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=1e-3)
-
+        self.optimize_param = [self.rot_param, self.trans_param, self.pose_param]
+        self.learning_rate = 1e-3
+        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        
         self.update_mano()
         
         self.root_delta = self.joints.cpu().detach()[0, 0]
@@ -113,7 +115,7 @@ class HandModel:
     def reset_pose(self):
         self.pose_param = torch.zeros(1, 45)
         self.pose_param.requires_grad = True
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=1e-3)
+        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
         self.update_mano()
     
     def reset_root_rot(self):
@@ -121,7 +123,7 @@ class HandModel:
         self.rot_param.requires_grad = True
         if self.optimize_state == 'root':
             self.rot_param.requires_grad = False
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=1e-3)
+        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
         self.update_mano()
         
     def reset_root_trans(self):
@@ -129,7 +131,7 @@ class HandModel:
         self.trans_param.requires_grad = True
         if self.optimize_state == 'root':
             self.trans_param.requires_grad = False
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=1e-3)
+        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
         self.update_mano()
     
     def reset_target(self):
@@ -170,6 +172,12 @@ class HandModel:
         else:
             target_idx = self._IDX_OF_HANDS[self.optimize_state]
         return torch.norm(self.targets[:, target_idx]-self.joints[:, target_idx])
+    
+    def set_learning_rate(self, lr):
+        self.learning_rate = lr
+        for g in self.optimizer.param_groups:
+            g['lr'] = lr
+
         
     def get_root_position(self):
         return self.trans_param.cpu().detach()[0, :] + self.root_delta
@@ -762,7 +770,7 @@ class AppWindow:
             self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
             self._log.text = "\t 올바른 파일 경로를 선택하세요."
     
-    # scene edit
+    # scene edit 편의 기능
     def _init_sceneedit_layout(self):
         em = self.window.theme.font_size
         
@@ -807,6 +815,14 @@ class AppWindow:
         self._responsiveness.set_on_value_changed(self._on_responsiveness)
         grid.add_child(gui.Label("민감도"))
         grid.add_child(self._responsiveness)
+        
+        self._optimize_rate = gui.Slider(gui.Slider.INT)
+        self._optimize_rate.set_limits(1, 20) # 1-> 1e-3
+        self._optimize_rate.double_value = 1
+        self._optimize_rate.set_on_value_changed(self._on_optimize_rate)
+        grid.add_child(gui.Label("최적화 속도"))
+        grid.add_child(self._optimize_rate)
+        
         
         sceneedit_layout.add_child(grid)
         
@@ -903,6 +919,12 @@ class AppWindow:
         self.dist = 0.0004 * responsiveness
         self.deg = 0.2 * responsiveness
         self._responsiveness.double_value = responsiveness
+    def _on_optimize_rate(self, optimize_rate):
+        if self._active_hand is None: # shsh
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_optimize_rate)")
+            return
+        self._active_hand.set_learning_rate(optimize_rate*1e-3)
+        self._optimize_rate.double_value = optimize_rate
     
     # labeling stage edit
     def _init_stageedit_layout(self):
@@ -1238,6 +1260,13 @@ class AppWindow:
                 self._active_hand.optimize_to_target()
                 self._update_activate_hand()
             
+        # reset hand pose
+        elif event.key == gui.KeyName.R:
+            self._active_hand.reset_pose()
+            self._update_activate_hand()
+            self._update_target_hand()
+        
+        
         # reset guide pose
         elif event.key == gui.KeyName.HOME:
             self._active_hand.reset_target()

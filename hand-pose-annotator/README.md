@@ -41,5 +41,40 @@ $ pip install --upgrade cx_Freeze
 $ python setup.py build
 ```
 
+## Keyboard Action
+```
+# Convert Labeling Hand
+TAB: convert hand
+
+# Labeling stage change
+1: Change Labeling Stage to "Root Translation and Rotation"
+2: Change Labeling Stage to "Hand Tip Translation"
+3: Change Labeling Stage to "Hand Detail Translation"
+
+
+# Translation(If Shift pressed -> Rotation)
+Q: +Z
+W: +Y
+E: -Z
+A: -X
+S: -Y
+D: +X
+
+# Reset
+R: Reset hand model pose
+HOME: Reset Target(Guide) Pose to Current Hand model Pose
+
+# Control Joint Change (Labeling Stage 2 and 3)
+Z: 엄지
+X: 검지
+C: 중지
+V: 약지
+B: 소지
+# for stage 3 
+U - I - O - P (root to tip)
+
+```
+
+
 
 
