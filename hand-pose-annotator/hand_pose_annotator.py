@@ -81,6 +81,15 @@ class HandModel:
         'whole'  : list(range(21))
     }
 
+    # index of finger name
+    _FINGER_NAME = [
+        "엄지",
+        "검지",
+        "중지",
+        "약지",
+        "소지"
+    ]
+
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
@@ -178,6 +187,29 @@ class HandModel:
         for g in self.optimizer.param_groups:
             g['lr'] = lr
 
+    def get_control_joint_name(self):
+        name = ""
+        if self.side == 'right':
+            name += "오른손 "
+        else:
+            name += "왼손 "
+        
+        if self.optimize_state=='root':
+            name += "손목"
+        elif self.optimize_state=='tips':
+            name += "손끝"
+        elif self.optimize_state=='thumb':
+            name += "엄지"
+        elif self.optimize_state=='fore':
+            name += "검지"
+        elif self.optimize_state=='middle':
+            name += "중지"
+        elif self.optimize_state=='ring':
+            name += "약지"
+        elif self.optimize_state=='little':
+            name += "소지"
+        
+        return name
         
     def get_root_position(self):
         return self.trans_param.cpu().detach()[0, :] + self.root_delta
@@ -522,6 +554,7 @@ class Settings:
         self.show_axes = False
         self.show_coord_frame = False
         self.show_hand = True
+        self.transparency = 0.5
 
         # ----- Material Settings -----
         self.apply_material = True  # clear to False after processing
@@ -598,6 +631,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
         self._log.text = "\t 처음 시점으로 이동합니다."
+        self.window.set_needs_layout()
         self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
         center = np.array([0, 0, 0])
         eye = center + np.array([0, 0, -0.5])
@@ -674,6 +708,8 @@ class AppWindow:
         self._active_hand = None
         self.upscale_responsiveness = False
         self._left_shift_modifier = False
+        self.annotation_scene = None
+        self._last_change = time.time()
         self.coord_labels = []
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
@@ -700,7 +736,7 @@ class AppWindow:
         self._log_panel = gui.VGrid(1, em)
         self._log = gui.Label("\t 라벨링 대상 파일을 선택하세요. ")
         self._log_panel.add_child(self._log)
-
+        
         
         # 3D Annotation tool options
         w.add_child(self._scene)
@@ -713,6 +749,7 @@ class AppWindow:
         # ---- annotation tool settings ----
         self._initialize_background()
         self._on_scene_point_size(5) # set default size to 1
+        self._on_scene_transparency(0)
         self._on_hand_point_size(5) # set default size to 5
         self._on_hand_line_size(2) # set default size to 2
         self._on_responsiveness(5) # set default responsiveness to 5
@@ -720,8 +757,10 @@ class AppWindow:
         self._scene.set_on_mouse(self._on_mouse)
         self._scene.set_on_key(self._on_key)
         
-        self.window.set_on_tick_event(self._init_view_control)
-        
+        self.window.set_on_tick_event(self._on_tick)
+        self._log.text = "\t라벨링 대상 파일을 선택하세요."
+        self.window.set_needs_layout()
+
         
     #region Layout and Callback
    
@@ -789,6 +828,7 @@ class AppWindow:
         self._show_hands = gui.Checkbox("손 라벨 보기")
         self._show_hands.set_on_checked(self._on_show_hand)
         sceneedit_layout.add_child(self._show_hands)
+        self._show_hands.checked = True
 
         
         grid = gui.VGrid(2, 0.25 * em)
@@ -797,6 +837,12 @@ class AppWindow:
         self._scene_point_size.set_on_value_changed(self._on_scene_point_size)
         grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._scene_point_size)
+        
+        self._scene_transparency = gui.Slider(gui.Slider.DOUBLE)
+        self._scene_transparency.set_limits(0, 1)
+        self._scene_transparency.set_on_value_changed(self._on_scene_transparency)
+        grid.add_child(gui.Label("포인트 투명도"))
+        grid.add_child(self._scene_transparency)
         
         self._hand_point_size = gui.Slider(gui.Slider.INT)
         self._hand_point_size.set_limits(1, 20)
@@ -833,8 +879,8 @@ class AppWindow:
     def _on_show_hand(self, show):
         if self._active_hand is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_show_hand)")
+            self._show_hands.checked = not show
             return
-        
         self.settings.show_hand = show
         self._update_activate_hand()
     def _on_show_coord_frame(self, show):
@@ -876,12 +922,30 @@ class AppWindow:
                                         self.settings.coord_material,
                                         add_downsampled_copy_for_fast_rendering=True) 
     def _on_scene_point_size(self, size):
+        self._log.text = "\t 포인트 사이즈 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
         mat = self.settings.scene_material
         mat.point_size = int(size)
         if self._check_geometry(self._scene_name):
             self._set_geometry_material(self._scene_name, mat)
         self._scene_point_size.double_value = size
+        
+    def _on_scene_transparency(self, transparency):
+        self._log.text = "\t 투명도 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
+        self.settings.transparency = transparency
+        if self.annotation_scene is None:
+            return
+        mat = self.settings.scene_material
+        mat.base_color = [1.0, 1.0, 1.0, 1.0]
+        self._set_geometry_material(self._scene_name, mat)
+        self._scene_transparency.double_value = transparency
     def _on_hand_point_size(self, size):
+        self._log.text = "\t 손 관절 사이즈 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
         mat = self.settings.hand_joint_material
         mat.point_size = int(size)
         if self._check_geometry(self._right_hand_joint_name):
@@ -890,7 +954,9 @@ class AppWindow:
             self._set_geometry_material(self._left_hand_joint_name, mat)
         self._hand_point_size.double_value = size
     def _on_hand_line_size(self, size):
-        # mesh
+        self._log.text = "\t 손 연결선 두께 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
         mat = self.settings.hand_mesh_material
         mat.line_width = int(size)
         if self._check_geometry(self._right_hand_mesh_name):
@@ -916,6 +982,10 @@ class AppWindow:
 
         self._hand_line_size.double_value = size
     def _on_responsiveness(self, responsiveness):
+        self._log.text = "\t 라벨링 민감도 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
+        
         self.dist = 0.0004 * responsiveness
         self.deg = 0.2 * responsiveness
         self._responsiveness.double_value = responsiveness
@@ -923,6 +993,9 @@ class AppWindow:
         if self._active_hand is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_optimize_rate)")
             return
+        self._log.text = "\t 자동 정렬 민감도 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
         self._active_hand.set_learning_rate(optimize_rate*1e-3)
         self._optimize_rate.double_value = optimize_rate
     
@@ -1153,8 +1226,10 @@ class AppWindow:
             self._toggle_hand_visible()
 
         return gui.Widget.EventCallbackResult.IGNORED
-
     def move(self, x, y, z, rx, ry, rz):
+        self._log.text = "{} 라벨링 중입니다.".format(self._active_hand.get_control_joint_name())
+        self.window.set_needs_layout()
+        self._last_change = time.time()
         if x != 0 or y != 0 or z != 0:
             current_xyz = self._active_hand.get_control_joint()
             # convert x, y, z cam to world
@@ -1171,13 +1246,10 @@ class AppWindow:
         
         self._update_activate_hand()
         self._update_target_hand()
-        
-    
     def _move_control_joint(self, xyz):
         self._active_hand.move_control_joint(xyz)
         self._update_activate_hand()
         self._update_target_hand()
-        
     def _update_target_hand(self):
         target_geo = self._active_hand.get_target_geometry()
         self._add_geometry(self._target_joint_name, 
@@ -1222,11 +1294,10 @@ class AppWindow:
             self._remove_geometry(mesh_name)
             self._remove_geometry(joint_name)
             self._remove_geometry(link_name)
-            
-            
     def _toggle_hand_visible(self):
-        pass
-        
+        show = self._show_hands.checked
+        self._show_hands.checked = not show
+        self._on_show_hand(not show)
     def _on_key(self, event):
         if self._labeling_stage == LabelingStage.LOADING:
             return gui.Widget.EventCallbackResult.IGNORED
@@ -1257,6 +1328,8 @@ class AppWindow:
             if self._active_hand is None:
                 pass
             if not self._labeling_stage == LabelingStage.ROOT:
+                self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
+                self.window.set_needs_layout()
                 self._active_hand.optimize_to_target()
                 self._update_activate_hand()
             
@@ -1265,7 +1338,6 @@ class AppWindow:
             self._active_hand.reset_pose()
             self._update_activate_hand()
             self._update_target_hand()
-        
         
         # reset guide pose
         elif event.key == gui.KeyName.HOME:
@@ -1285,8 +1357,6 @@ class AppWindow:
             self._convert_stage(LabelingStage.HAND_DETAIL)
         elif event.key == gui.KeyName.FOUR:
             self._convert_stage(LabelingStage.HAND_WHOLE)
-        
-
 
         # change control joint
         if self._labeling_stage==LabelingStage.HAND_TIP:
@@ -1328,7 +1398,6 @@ class AppWindow:
         
         # Translation
         if not self._left_shift_modifier:
-            self._log.text = "\t손목 위치를 조정 중 입니다."
             if event.key == gui.KeyName.D:
                 self.move( self.dist, 0, 0, 0, 0, 0)
             elif event.key == gui.KeyName.A:
@@ -1344,7 +1413,6 @@ class AppWindow:
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
             if self._labeling_stage==LabelingStage.ROOT:
-                self._log.text = "\t손목 자세를 조정 중 입니다."
                 if event.key == gui.KeyName.E:
                     self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
                 elif event.key == gui.KeyName.Q:
@@ -1359,7 +1427,12 @@ class AppWindow:
                     self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.IGNORED
-
+    def _on_tick(self):
+        if self._active_hand is None:
+            if (time.time()-self._last_change) > 1:
+                self._log.text = "\t라벨링 대상 파일을 선택하세요."
+                self.window.set_needs_layout()
+        self._init_view_control()
         
 def main():
     gui.Application.instance.initialize()
