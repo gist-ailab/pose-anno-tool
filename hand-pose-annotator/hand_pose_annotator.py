@@ -1101,8 +1101,10 @@ class AppWindow:
         hands = self._frame.hands
         if self._is_right_hand > 0:
             active_side = 'right'
+            self._current_stage_str.text = "현재 대상: 오른손"
         else:
             active_side = 'left'
+            self._current_stage_str.text = "현재 대상: 왼손"
         self._hands = hands
         self._active_hand = hands[active_side]
         for side, hand in hands.items():
@@ -1227,7 +1229,7 @@ class AppWindow:
 
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
-        self._log.text = "{} 라벨링 중입니다.".format(self._active_hand.get_control_joint_name())
+        self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
         if x != 0 or y != 0 or z != 0:
@@ -1330,6 +1332,7 @@ class AppWindow:
             if not self._labeling_stage == LabelingStage.ROOT:
                 self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
                 self.window.set_needs_layout()
+                self._last_change = time.time()
                 self._active_hand.optimize_to_target()
                 self._update_activate_hand()
             
@@ -1428,9 +1431,12 @@ class AppWindow:
 
         return gui.Widget.EventCallbackResult.IGNORED
     def _on_tick(self):
-        if self._active_hand is None:
-            if (time.time()-self._last_change) > 1:
+        if (time.time()-self._last_change) > 1:
+            if self._active_hand is None:
                 self._log.text = "\t라벨링 대상 파일을 선택하세요."
+                self.window.set_needs_layout()
+            else:
+                self._log.text = "{} 라벨링 중입니다.".format(self._active_hand.get_control_joint_name())
                 self.window.set_needs_layout()
         self._init_view_control()
         
