@@ -24,7 +24,9 @@ import yaml
 from utils.file_utils import *
 
 
-MANO_PATH = os.path.join(str(Path(__file__).parent), 'models/mano')
+# MANO_PATH = os.path.join(str(Path(__file__).parent), 'models/mano')
+# absolute path
+MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models/mano')
 
 class LabelingStage:
     LOADING = "준비중"
