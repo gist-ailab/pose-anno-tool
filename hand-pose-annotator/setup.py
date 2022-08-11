@@ -10,8 +10,8 @@ includefiles_list.append(scipy_path)
 
 # Dependencies are automatically detected, but it might need fine tuning.
 # "packages": ["os"] is used as example only
-build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "random", "tkinter", "ctypes"], 
-                     "packages": ["os", "numpy", "numpy.core._methods", "random", "tkinter", "ctypes"], 
+build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "random", "tkinter", "ctypes","torch"], 
+                     "packages": ["os", "numpy", "numpy.core._methods", "random", "tkinter", "ctypes","torch"], 
                      "include_files": [r'C:\\Users\\user\\Anaconda3\\Library\\plugins\\platforms'],
                      "excludes": []}
 
