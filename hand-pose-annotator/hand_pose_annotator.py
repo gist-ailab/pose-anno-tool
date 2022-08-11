@@ -23,8 +23,10 @@ import yaml
 
 from utils.file_utils import *
 
+spl = "\\" if sys.platform.startswith("win") else "/"
 
-MANO_PATH = os.path.join(str(Path(__file__).parent), 'models/mano')
+MANO_PATH = os.path.join(str(Path(__file__).parent), 'models', 'mano')
+MANO_PATH = "C:\\Users\\user\\Desktop\\6d-pose-anno-tool\\hand-pose-annotator\\models\\mano"
 
 class LabelingStage:
     LOADING = "준비중"
@@ -383,13 +385,13 @@ class DexYCBDataset:
         
     
     def get_extrinsic(self, extrinsic_id, camera_id):
-        extr_file = os.path.join(self._calib_dir, 'extrinsics_{}/extrinsics.yml'.format(extrinsic_id))
+        extr_file = os.path.join(self._calib_dir, 'extrinsics_{}{}extrinsics.yml'.format(extrinsic_id, spl))
         with open(extr_file, 'r') as f:
             extr = yaml.load(f, Loader=yaml.FullLoader)
         return extr['extrinsics'][camera_id]
 
     def get_mano_calib(self, mano_id):
-        mano_file = os.path.join(self._calib_dir, 'mano_{}/mano.yml'.format(mano_id))
+        mano_file = os.path.join(self._calib_dir, 'mano_{}{}mano.yml'.format(mano_id, spl))
         with open(mano_file, 'r') as f:
             mano_calib = yaml.load(f, Loader=yaml.FullLoader)
         return mano_calib['betas']
@@ -1363,7 +1365,7 @@ class AppWindow:
         
 def main():
     gui.Application.instance.initialize()
-    hangeul = os.path.join(str(Path(__file__).parent.absolute()), "lib/NanumGothic.ttf")
+    hangeul = os.path.join(str(Path(__file__).parent.absolute()), "lib{}NanumGothic.ttf".format(spl))
     font = gui.FontDescription(hangeul)
     font.add_typeface_for_language(hangeul, "ko")
     gui.Application.instance.set_font(gui.Application.DEFAULT_FONT_ID, font)
