@@ -43,9 +43,9 @@ $ python setup.py build
 TAB: convert hand
 
 # Labeling stage change
-1: Change Labeling Stage to "Root Translation and Rotation"
-2: Change Labeling Stage to "Hand Tip Translation"
-3: Change Labeling Stage to "Hand Detail Translation"
+F1: Change Labeling Stage to "Root Translation and Rotation"
+F2: Change Labeling Stage to "Hand Tip Translation"
+F3: Change Labeling Stage to "Hand Detail Translation"
 
 
 # Translation(If Shift pressed -> Rotation)
@@ -61,13 +61,14 @@ R: Reset hand model pose
 HOME: Reset Target(Guide) Pose to Current Hand model Pose
 
 # Control Joint Change (Labeling Stage 2 and 3)
-Z: 엄지
-X: 검지
-C: 중지
-V: 약지
-B: 소지
+1: 엄지
+2: 검지
+3: 중지
+4: 약지
+5: 소지
 # for stage 3 
-U - I - O - P (root to tip)
+Page Up
+Page Down
 
 ```
 
