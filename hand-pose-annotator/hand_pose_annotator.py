@@ -7,7 +7,7 @@ import os
 from re import M
 import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.absolute()))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import open3d as o3d
 import open3d.visualization.gui as gui
@@ -24,8 +24,8 @@ import yaml
 import time
 import json
 
-MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models/mano')
-
+MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
+hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
 class LabelingStage:
     LOADING = "준비중"
@@ -446,13 +446,13 @@ class DexYCBDataset:
         print("Total\nSubject: {}\nScene: {}\nFrame: {}".format(total_sub, total_scene, total_frame)) 
         
     def get_extrinsic(self, extrinsic_id, camera_id):
-        extr_file = os.path.join(self._calib_dir, 'extrinsics_{}{}extrinsics.yml'.format(extrinsic_id, spl))
+        extr_file = os.path.join(self._calib_dir, "extrinsics_{}".format(extrinsic_id), "extrinsics.yml")
         with open(extr_file, 'r') as f:
             extr = yaml.load(f, Loader=yaml.FullLoader)
         return extr['extrinsics'][camera_id]
 
     def get_mano_calib(self, mano_id):
-        mano_file = os.path.join(self._calib_dir, 'mano_{}{}mano.yml'.format(mano_id, spl))
+        mano_file = os.path.join(self._calib_dir, "mano_{}".format(mano_id), "mano.yml")
         with open(mano_file, 'r') as f:
             mano_calib = yaml.load(f, Loader=yaml.FullLoader)
         return mano_calib['betas']
@@ -1699,7 +1699,7 @@ class AppWindow:
 
 def main():
     gui.Application.instance.initialize()
-    hangeul = os.path.join(str(Path(__file__).parent.absolute()), "lib{}NanumGothic.ttf".format(spl))
+    
     font = gui.FontDescription(hangeul)
     font.add_typeface_for_language(hangeul, "ko")
     gui.Application.instance.set_font(gui.Application.DEFAULT_FONT_ID, font)
