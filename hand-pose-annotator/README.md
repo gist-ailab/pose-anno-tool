@@ -4,15 +4,11 @@
 
 
 # TODO:
-- [X] Move Each Hand by ALT + Click
-- [X] Move Each Hand by Keyboard
-- [X] Optimze Hand Pose by End-Tips
-- [X] Optimze Hand Pose by Detail fingers
-
 - [ ] Edit log
 - [ ] CTRL+Z -> control joint back
-
-
+- [ ] hand folding 
+- [ ] Labeled Object Mesh Model
+- [ ] Image View with Current Label
 
 ## Install and Run
 
