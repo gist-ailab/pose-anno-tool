@@ -4,6 +4,7 @@
 # FLW, TU Dortmund, Germany
 
 import os
+from re import M
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.absolute()))
@@ -20,20 +21,17 @@ import numpy as np
 
 from os.path import basename 
 import yaml
+import time
+import json
 
-from utils.file_utils import *
-
-
-# MANO_PATH = os.path.join(str(Path(__file__).parent), 'models/mano')
-# absolute path
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models/mano')
+
 
 class LabelingStage:
     LOADING = "준비중"
-    ROOT = "1. 손 이동 및 회전"
-    HAND_TIP =    "2. 손가락 끝 위치 조정(ZXCVB)"
-    HAND_DETAIL = "3. 손가락 세부 위치 조정(ZXCV)"
-    HAND_WHOLE = "4. 손 전체 최적화"
+    ROOT = "F1. 손 이동 및 회전"
+    HAND_TIP =    "F2. 손가락 끝 위치 조정"
+    HAND_DETAIL = "F3. 손가락 세부 위치 조정"
 
 class DexYCB:
     """Dex-YCB"""
@@ -95,12 +93,15 @@ class HandModel:
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=False)
+                            use_pca=False, flat_hand_mean=True)
+        
+        if shape_param is None:
+            shape_param = torch.zeros(10)
         self.reset(shape_param)
     
     def reset(self, shape_param=None):
         if shape_param is None:
-            self.shape_param = torch.zeros(1, 10)
+            pass
         else:
             self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
 
@@ -122,6 +123,7 @@ class HandModel:
         self.optimize_state = 'none'
         self.active_joints = None
         self.contorl_joint = None
+        self.control_idx = -1
     
     def reset_pose(self):
         self.pose_param = torch.zeros(1, 45)
@@ -246,8 +248,10 @@ class HandModel:
     
     def set_control_joint(self, idx):
         assert len(self.active_joints) > 0, "set_control_joint error"
+        idx = np.clip(idx, 0, len(self.active_joints)-1) 
+        self.control_idx = idx
         self.contorl_joint = self.active_joints[idx]
-    
+        
     def get_geometry(self):
         return {
             "mesh": self._get_mesh(),
@@ -328,6 +332,41 @@ class HandModel:
         
         return lineset
 
+    def get_state(self):
+        return {
+            'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
+            'pose_param': np.array(self.pose_param.cpu().detach()[0, :]),
+            'rot_param': np.array(self.rot_param.cpu().detach()[0, :]),
+            'trans_param': np.array(self.trans_param.cpu().detach()[0, :]),
+            'root_delta': np.array(self.root_delta),
+            
+            'joints': np.array(self.joints.cpu().detach()[0, :]),
+            'verts': np.array(self.verts.cpu().detach()[0, :]),
+            'faces': np.array(self.faces.cpu().detach()[0, :])
+        }
+    def set_state(self, state):
+        self.shape_param = torch.Tensor(state['shape_param'])
+        self.pose_param = torch.Tensor(state['pose_param'])
+        self.pose_param.requires_grad = True
+        self.rot_param = torch.Tensor(state['rot_param'])
+        self.rot_param.requires_grad = True
+        self.trans_param = torch.Tensor(state['trans_param'])
+        self.trans_param.requires_grad = True
+        self.root_delta = torch.Tensor(state['root_delta'])
+        
+        self.optimize_param = [self.rot_param, self.trans_param, self.pose_param]
+        self.set_learning_rate(1e-3)
+        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+
+        self.update_mano()
+        self.reset_target()
+        
+        self.optimize_state = 'none'
+        self.active_joints = None
+        self.contorl_joint = None
+        self.control_idx = -1
+
+
 
 class SceneObject:
     pass
@@ -371,37 +410,27 @@ class DexYCBDataset:
         self._w = 640
 
         self._subjects = DexYCB._SUBJECTS
-        self._serials = DexYCB._SERIALS
-        
-        self._intrinsics = {}
-        for s in self._serials:
-            intr_file = os.path.join(self._calib_dir, "intrinsics",
-                               "{}_{}x{}.yml".format(s, self._w, self._h))
-            with open(intr_file, 'r') as f:
-                intr = yaml.load(f, Loader=yaml.FullLoader)
-            intr = intr['color']
-            self._intrinsics[s] = intr
-            
+        self._total_scene = []
         self._scene_meta = {}
         for sub in self._subjects:
             # for each subject 100 sequence for dex-ycb
             seq = sorted(os.listdir(os.path.join(self._data_dir, sub)))
             self._scene_meta[sub] = {s: {} for s in seq}
-            
             # for each seq
             for s in seq:
                 meta_file = os.path.join(self._data_dir, sub, s, "meta.yml")
                 with open(meta_file, 'r') as f:
                     meta = yaml.load(f, Loader=yaml.FullLoader)
                 self._scene_meta[sub][s] = meta
+                self._total_scene.append((sub, s))
         
         self.print_dataset_info()
         self.hand_models = {
             "right": HandModel(side='right'),
             "left": HandModel(side='left')
         }
+        self.current_scene_idx = -1
         
-
     def print_dataset_info(self):
         total_sub = 0
         total_scene = 0
@@ -413,9 +442,9 @@ class DexYCBDataset:
                 frame_num = meta['num_frames']
                 total_frame += frame_num
                 print("Subject: {}| Scene: {}| Frame: {}".format(sub, scene, frame_num))
+        
         print("Total\nSubject: {}\nScene: {}\nFrame: {}".format(total_sub, total_scene, total_frame)) 
         
-    
     def get_extrinsic(self, extrinsic_id, camera_id):
         extr_file = os.path.join(self._calib_dir, 'extrinsics_{}/extrinsics.yml'.format(extrinsic_id))
         with open(extr_file, 'r') as f:
@@ -431,11 +460,14 @@ class DexYCBDataset:
     def get_scene_from_file(self, file_path):
         subject_id, scene_id, camera_id, frame_id = self.path_to_info(file_path)
         scene_meta = self._scene_meta[subject_id][scene_id]
-
+        self.current_scene_idx = self._total_scene.index((subject_id, scene_id))
+        self.current_scene_file = scene_id
+        self.current_frame_file = frame_id
         scene_dir = os.path.join(self._data_dir, subject_id, scene_id, camera_id)
         if camera_id=="merge":
             camera = None
         else:
+            assert False, "error on get_scene_from_file"
             camera = Camera(camera_id, self._intrinsics[camera_id],self.get_extrinsic(scene_meta['extrinsics'], camera_id))
         
         calib = scene_meta['mano_calib'][0]
@@ -447,7 +479,41 @@ class DexYCBDataset:
                      hands=self.hand_models, 
                      total_frame=scene_meta['num_frames'], 
                      current_frame=frame_id)
-                
+    
+    def get_current_file(self):
+        return "작업 폴더: {}\n현재 파일: {:06}".format(self.current_scene_file, self.current_frame_file)
+        
+    def get_progress(self):
+        return "작업 폴더: [{}/{}]".format(self.current_scene_idx, len(self._total_scene))
+    
+    def get_next_scene(self):
+        scene_idx = self.current_scene_idx + 1
+        if scene_idx > len(self._total_scene) -1:
+            return None
+        else:
+            self.current_scene_idx = scene_idx    
+            file_path = self.get_scene_first_file()
+            return self.get_scene_from_file(file_path)
+    
+    def get_previous_scene(self):
+        scene_idx = self.current_scene_idx - 1
+        if scene_idx < 0:
+            return None
+        else:
+            self.current_scene_idx = scene_idx    
+            file_path = self.get_scene_first_file()
+            return self.get_scene_from_file(file_path)
+    
+    def get_scene_first_file(self):
+        sub_id, scene_id = self._total_scene[self.current_scene_idx]
+        scene_dir = os.path.join(self._data_dir, sub_id, scene_id, 'merge')
+        assert len(scene_dir) > 0
+        scene_files = os.listdir(scene_dir)
+        scene_files.sort()
+        frame_file = scene_files[0]
+        
+        return os.path.join(scene_dir, frame_file)
+        
     
     @staticmethod
     def load_dataset_from_file(file_path):
@@ -490,11 +556,17 @@ class Scene:
         self.frame_id = current_frame
         
         self._data_format = "points_{:06d}.pcd"
-        self._label_format = "labels_{:06d}.npy"
+        self._label_format = "labels_{:06d}.npz"
+        
         
     def get_current_frame(self):
         try:
             pcd = self._load_point_cloud(self._frame_path)
+            for h in self._hands.values():
+                h.reset()
+            # self.init_label()
+            # if self._is_label:
+            #     self.load_label()
         except:
             print("Fail to load point cloud")
             return None
@@ -509,6 +581,9 @@ class Scene:
             return False
         else:
             self.frame_id = frame_id
+            if not os.path.isfile(self._frame_path):
+                self.frame_id = frame_id - 1
+                return False
             return True
     
     def moveto_previous_frame(self):
@@ -517,7 +592,13 @@ class Scene:
             return False
         else:
             self.frame_id = frame_id
+            if not os.path.isfile(self._frame_path):
+                self.frame_id = frame_id + 1
+                return False
             return True
+
+    def get_progress(self):
+        return "현재 파일: [{}/{}]".format(self.frame_id, self.total_frame)
 
     @staticmethod
     def _load_point_cloud(pc_file) -> o3d.geometry.PointCloud:
@@ -532,11 +613,33 @@ class Scene:
         
         return pcd
 
-    def _load_label(file_path):
-        return np.load(file_path)
-
+    def get_hand_state(self):
+        state = {}
+        for side, hand_model in self._hands.items():
+            state[side] = hand_model.get_state()
+        return state
+    def set_hand_state(self, state):
+        for side, hand_model in self._hands:
+            hand_model.set_state(state[side])
+        return state
+    def init_label(self):
+        self._is_label = False
+        if os.path.isfile(self._label_path):
+            try:
+                self._label = np.load(self._label_path)
+                self._hand_label = self._label['hand']
+                self._obj_label = self._label['object']
+            except:
+                self._is_label = True
+        else:
+            self._is_label = False
+            self._hand_label = self._label['hand']
+    
+    def load_label(self):
+        self.set_hand_state(self._label['hand'])
+        
     def save_label(self):
-        np.save(self._label, self._label_path)
+        np.savez(self._label_path, **self._label)
 
     @property
     def _frame_path(self):
@@ -545,7 +648,6 @@ class Scene:
     @property
     def _label_path(self):
         return os.path.join(self._scene_dir, self._label_format.format(self.frame_id))
-
 
 class Settings:
     SHADER_POINT = "defaultUnlit"
@@ -621,68 +723,7 @@ class Settings:
         
 class AppWindow:
     
-    def _initialize_background(self):
-        bg_color = [
-            self.settings.bg_color.red, self.settings.bg_color.green,
-            self.settings.bg_color.blue, self.settings.bg_color.alpha
-        ]
-        self._set_background_color(bg_color)
-
-    def _on_initial_viewpoint(self):
-        if self.bounds is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
-            return
-        self._log.text = "\t 처음 시점으로 이동합니다."
-        self.window.set_needs_layout()
-        self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
-        center = np.array([0, 0, 0])
-        eye = center + np.array([0, 0, -0.5])
-        up = np.array([0, -1, 0])
-        self._scene.look_at(center, eye, up)
-        self._init_view_control()
-        
-    def _init_view_control(self):
-        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
-        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
     
-    
-    def _on_layout(self, layout_context):
-        r = self.window.content_rect
-        self._scene.frame = r
-        width_set = 17 * layout_context.theme.font_size
-        height_set = min(
-            r.height,
-            self._settings_panel.calc_preferred_size(
-                layout_context, gui.Widget.Constraints()).height)
-        self._settings_panel.frame = gui.Rect(r.get_right() - width_set, r.y, width_set,
-                                              height_set)
-
-        width_obj = 1.5 * width_set
-        height_obj = 1.5 * layout_context.theme.font_size
-        self._log_panel.frame = gui.Rect(r.get_right() - width_set - width_obj, r.y, width_obj, height_obj) 
-    
-    def _on_error(self, err_msg):
-        dlg = gui.Dialog("Error")
-
-        em = self.window.theme.font_size
-        dlg_layout = gui.Vert(em, gui.Margins(em, em, em, em))
-        dlg_layout.add_child(gui.Label(err_msg))
-
-        ok = gui.Button("OK")
-        ok.set_on_clicked(self._on_about_ok)
-
-        h = gui.Horiz()
-        h.add_stretch()
-        h.add_child(ok)
-        h.add_stretch()
-        dlg_layout.add_child(h)
-
-        dlg.add_child(dlg_layout)
-        self.window.show_dialog(dlg)
-    
-    def _on_about_ok(self):
-        self.window.close_dialog()
-
     def __init__(self, width, height):
         #---- geometry name
         self._window_name = "3D Hand Pose Annotator by GIST AILAB"
@@ -710,6 +751,7 @@ class AppWindow:
         self._active_hand = None
         self.upscale_responsiveness = False
         self._left_shift_modifier = False
+        self._annotation_changed = False
         self.annotation_scene = None
         self._last_change = time.time()
         self.coord_labels = []
@@ -729,9 +771,10 @@ class AppWindow:
             0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
         
         self._init_fileeidt_layout()
-        self._init_sceneedit_layout()
+        self._init_viewctrl_layout()
         self._init_handedit_layout()
         self._init_stageedit_layout()
+        self._init_scene_control_layout()
         
         
         # ---- log panel
@@ -763,9 +806,72 @@ class AppWindow:
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
 
-        
+    #region Debug
+    def _on_error(self, err_msg):
+        dlg = gui.Dialog("Error")
+
+        em = self.window.theme.font_size
+        dlg_layout = gui.Vert(em, gui.Margins(em, em, em, em))
+        dlg_layout.add_child(gui.Label(err_msg))
+
+        ok = gui.Button("OK")
+        ok.set_on_clicked(self._on_about_ok)
+
+        h = gui.Horiz()
+        h.add_stretch()
+        h.add_child(ok)
+        h.add_stretch()
+        dlg_layout.add_child(h)
+
+        dlg.add_child(dlg_layout)
+        self.window.show_dialog(dlg)
+    
+    def _on_about_ok(self):
+        self.window.close_dialog()
+    #endregion
+    
     #region Layout and Callback
-   
+    def _on_layout(self, layout_context):
+        r = self.window.content_rect
+        self._scene.frame = r
+        width_set = 17 * layout_context.theme.font_size
+        height_set = min(
+            r.height,
+            self._settings_panel.calc_preferred_size(
+                layout_context, gui.Widget.Constraints()).height)
+        self._settings_panel.frame = gui.Rect(r.get_right() - width_set, r.y, width_set,
+                                              height_set)
+
+        width_obj = 1.5 * width_set
+        height_obj = 1.5 * layout_context.theme.font_size
+        self._log_panel.frame = gui.Rect(r.get_right() - width_set - width_obj, r.y, width_obj, height_obj) 
+    
+    def _initialize_background(self):
+        bg_color = [
+            self.settings.bg_color.red, self.settings.bg_color.green,
+            self.settings.bg_color.blue, self.settings.bg_color.alpha
+        ]
+        self._set_background_color(bg_color)
+
+    def _on_initial_viewpoint(self):
+        if self.bounds is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
+            return
+        self._log.text = "\t 처음 시점으로 이동합니다."
+        self.window.set_needs_layout()
+        self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
+        center = np.array([0, 0, 0])
+        eye = center + np.array([0, 0, -0.5])
+        up = np.array([0, -1, 0])
+        self._scene.look_at(center, eye, up)
+        self._init_view_control()
+        
+    def _init_view_control(self):
+        self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
+        self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
+    
+    
+    
     # file edit        
     def _init_fileeidt_layout(self):
         em = self.window.theme.font_size
@@ -787,7 +893,7 @@ class AppWindow:
     def _on_filedlg_button(self):
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
                                 self.window.theme)
-        filedlg.add_filter("", "모든 파일")
+        filedlg.add_filter(".pcd", "포인트 클라우드")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         self.window.show_dialog(filedlg)
@@ -812,24 +918,24 @@ class AppWindow:
             self._log.text = "\t 올바른 파일 경로를 선택하세요."
     
     # scene edit 편의 기능
-    def _init_sceneedit_layout(self):
+    def _init_viewctrl_layout(self):
         em = self.window.theme.font_size
         
-        sceneedit_layout = gui.CollapsableVert("편의 기능", 0.33*em,
+        viewctrl_layout = gui.CollapsableVert("편의 기능", 0.33*em,
                                           gui.Margins(em, 0, 0, 0))
-        sceneedit_layout.set_is_open(True)
+        viewctrl_layout.set_is_open(True)
         
         self._show_axes = gui.Checkbox("카메라 좌표계 보기")
         self._show_axes.set_on_checked(self._on_show_axes)
-        sceneedit_layout.add_child(self._show_axes)
+        viewctrl_layout.add_child(self._show_axes)
 
         self._show_coord_frame = gui.Checkbox("조작 중인 조인트 좌표계 보기")
         self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
-        sceneedit_layout.add_child(self._show_coord_frame)
+        viewctrl_layout.add_child(self._show_coord_frame)
 
         self._show_hands = gui.Checkbox("손 라벨 보기")
         self._show_hands.set_on_checked(self._on_show_hand)
-        sceneedit_layout.add_child(self._show_hands)
+        viewctrl_layout.add_child(self._show_hands)
         self._show_hands.checked = True
 
         
@@ -872,14 +978,14 @@ class AppWindow:
         grid.add_child(self._optimize_rate)
         
         
-        sceneedit_layout.add_child(grid)
+        viewctrl_layout.add_child(grid)
         
-        self._settings_panel.add_child(sceneedit_layout)
+        self._settings_panel.add_child(viewctrl_layout)
     def _on_show_axes(self, show):
         self.settings.show_axes = show
         self._scene.scene.show_axes(self.settings.show_axes)
     def _on_show_hand(self, show):
-        if self._active_hand is None: # shsh
+        if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_show_hand)")
             self._show_hands.checked = not show
             return
@@ -932,7 +1038,6 @@ class AppWindow:
         if self._check_geometry(self._scene_name):
             self._set_geometry_material(self._scene_name, mat)
         self._scene_point_size.double_value = size
-        
     def _on_scene_transparency(self, transparency):
         self._log.text = "\t 투명도 값을 변경합니다."
         self.window.set_needs_layout()
@@ -1004,7 +1109,7 @@ class AppWindow:
     # labeling stage edit
     def _init_stageedit_layout(self):
         em = self.window.theme.font_size
-        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택(숫자 1,2,3)", 0.33*em,
+        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택 (F1, F2, F3)", 0.33*em,
                                                   gui.Margins(0.25*em, 0, 0, 0))
         stageedit_layout.set_is_open(True)
         self._current_stage_str = gui.Label("현재 상태: 준비중")
@@ -1090,15 +1195,73 @@ class AppWindow:
         self._convert_stage(self._labeling_stage)
         
         self._update_target_hand()
-    
-    #endregion
+
+    def _init_scene_control_layout(self):
+        em = self.window.theme.font_size
+        scene_control_layout = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
+                                                   gui.Margins(0.25 * em, 0, 0, 0))
+        scene_control_layout.set_is_open(True)
+        
+        self._current_progress_str = gui.Label("작업 폴더: 준비중 | 현재 파일: 준비중")
+        scene_control_layout.add_child(self._current_progress_str)
+        
+        h = gui.Horiz(0.4 * em)
+        self._current_scene_pg = gui.Label("작업 폴더: [00/00]")
+        h.add_child(self._current_scene_pg)
+        button = gui.Button("이전")
+        button.horizontal_padding_em = 0.8
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._on_previous_scene)
+        h.add_child(button)
+        button = gui.Button("다음")
+        button.horizontal_padding_em = 0.8
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._on_next_scene)
+        h.add_child(button)
+        h.add_stretch()
+        scene_control_layout.add_child(h)
+        
+        h = gui.Horiz(0.4 * em)
+        self._current_file_pg = gui.Label("현재 파일: [00/00]")
+        h.add_child(self._current_file_pg)
+        button = gui.Button("이전")
+        button.horizontal_padding_em = 0.8
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._on_previous_frame)
+        h.add_child(button)
+        button = gui.Button("다음")
+        button.horizontal_padding_em = 0.8
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._on_next_frame)
+        h.add_child(button)
+        h.add_stretch()
+        scene_control_layout.add_child(h)
+        
+        button = gui.Button("라벨링 결과 저장하기 (F)")
+        button.set_on_clicked(self._on_save_label)
+        scene_control_layout.add_child(button)
+        button = gui.Button("라벨링 결과 불러오기")
+        button.set_on_clicked(self._on_load_label)
+        scene_control_layout.add_child(button)
+        
+        
+        self._settings_panel.add_child(scene_control_layout)
+    def _check_changes(self):
+        if self._annotation_changed:
+            self._on_error("라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
+            self._annotation_changed = False
+            return True
+        else:
+            return False
     def _load_scene(self):
         self._frame = self.annotation_scene.get_current_frame()
+        self._update_progress_str()
         # visualize scene pcd
         pcd = self._frame.scene_pcd
         self.bounds = pcd.get_axis_aligned_bounding_box()
         self._on_initial_viewpoint()
         self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
+        
         # visualize hand
         hands = self._frame.hands
         if self._is_right_hand > 0:
@@ -1143,11 +1306,92 @@ class AppWindow:
         self._add_geometry(self._control_joint_name, 
                            active_geo['control'], self.settings.control_target_joint_material)
         self.control_joint_geo = active_geo['control']
-    def _next_scene(self):
-        pcd = self.annotation_scene.get_next_frame()
+    def _update_progress_str(self):
+        self._current_progress_str.text = self.dataset.get_current_file()
+        self._current_file_pg.text = self.annotation_scene.get_progress()
+        self._current_scene_pg.text = self.dataset.get_progress()
     
-    def _update_scene(self):
-        pass
+    def _on_previous_frame(self):
+        if self._check_changes():
+            return
+        if self.annotation_scene is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_frame)")
+            return
+        if not self.annotation_scene.moveto_previous_frame():
+            self._on_error("이전 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 이전 포인트 클라우드로 이동했습니다."
+        self._load_scene()
+    def _on_next_frame(self):
+        if self._check_changes():
+            return
+        if self.annotation_scene is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_frame)")
+            return
+        if not self.annotation_scene.moveto_next_frame():
+            self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
+        self._load_scene()
+    def _on_previous_scene(self):
+        if self._check_changes():
+            return
+        if self.dataset is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_scene)")
+            return
+        scene = self.dataset.get_previous_scene()
+        if scene is None:
+            self._on_error("이전 작업 폴더가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 이전 작업 폴더로 이동했습니다."
+        self.annotation_scene = scene
+        self._load_scene()
+    def _on_next_scene(self):
+        if self._check_changes():
+            return
+        if self.annotation_scene is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_scene)")
+            return
+        scene = self.dataset.get_next_scene()
+        if scene is None:
+            self._on_error("다음 작업 폴더가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 다음 작업 폴더로 이동했습니다."
+        self.annotation_scene = scene
+        self._load_scene()
+    def _on_save_label(self):
+        return
+        self._log.text = "\t라벨링 결과를 저장 중입니다."
+        self.window.set_needs_layout()
+        
+        if self.annotation_scene is None: # shsh
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_label)")
+            return
+        
+        self.annotation_scene.save_label()
+        self._log.text = "\t라벨링 결과를 저장했습니다."
+        self._annotation_changed = False
+    def _on_load_label(self):
+        return
+        if self._annotation_changed:
+            self._on_error("현재 라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
+            self._annotation_changed = False
+        
+        self._log.text = "\t라벨링 결과를 불러오는 중입니다."
+        self.window.set_needs_layout()
+        
+        if self.annotation_scene is None: # shsh
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_label)")
+            return
+        if self.annotation_scene._is_label:
+            self.annotation_scene.load_label()
+        else:
+            self._on_error("저장된 라벨이 없습니다. (error at _on_load_label)")
+            return
+        self._log.text = "\t라벨링 결과를 불러왔습니다."
+        self._annotation_changed = False
+    
+    #endregion
     
     #region ----- Open3DScene 
     #----- geometry
@@ -1200,8 +1444,10 @@ class AppWindow:
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
-                gui.KeyModifier.ALT):
-            
+                gui.KeyModifier.ALT) and event.is_button_down(gui.MouseButton.LEFT):
+            if self._active_hand is None:
+                self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_mouse)")
+                return gui.Widget.EventCallbackResult.IGNORED
             def depth_callback(depth_image):
                 # Coordinates are expressed in absolute coordinates of the
                 # window, but to dereference the image correctly we need them
@@ -1224,13 +1470,14 @@ class AppWindow:
                     self._move_control_joint(world_xyz)
                     
             self._scene.scene.scene.render_to_depth_image(depth_callback)
-            
+
             
         elif event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_button_down(gui.MouseButton.RIGHT):
             self._toggle_hand_visible()
 
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
+        self._annotation_changed = True
         self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
@@ -1251,6 +1498,7 @@ class AppWindow:
         self._update_activate_hand()
         self._update_target_hand()
     def _move_control_joint(self, xyz):
+        self._annotation_changed = True
         self._active_hand.move_control_joint(xyz)
         self._update_activate_hand()
         self._update_target_hand()
@@ -1302,9 +1550,20 @@ class AppWindow:
         show = self._show_hands.checked
         self._show_hands.checked = not show
         self._on_show_hand(not show)
+    def _on_optimize(self):
+        self._annotation_changed = True
+        self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
+        self.window.set_needs_layout()
+        self._last_change = time.time()
+        self._active_hand.optimize_to_target()
+        self._update_activate_hand()
     def _on_key(self, event):
         if self._labeling_stage == LabelingStage.LOADING:
             return gui.Widget.EventCallbackResult.IGNORED
+        
+        if event.key==gui.KeyName.F and event.type==gui.KeyEvent.DOWN:
+            self._on_save_label()
+            return gui.Widget.EventCallbackResult.HANDLED
         
         if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
             if event.type == gui.KeyEvent.DOWN:
@@ -1332,11 +1591,7 @@ class AppWindow:
             if self._active_hand is None:
                 pass
             if not self._labeling_stage == LabelingStage.ROOT:
-                self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
-                self.window.set_needs_layout()
-                self._last_change = time.time()
-                self._active_hand.optimize_to_target()
-                self._update_activate_hand()
+                self._on_optimize()
             
         # reset hand pose
         elif event.key == gui.KeyName.R:
@@ -1354,51 +1609,48 @@ class AppWindow:
             self._convert_hand()
         
         # stage change
-        elif event.key == gui.KeyName.ONE:
+        elif event.key == gui.KeyName.F1:
             self._convert_stage(LabelingStage.ROOT)
-        elif event.key == gui.KeyName.TWO:
+        elif event.key == gui.KeyName.F2:
             self._convert_stage(LabelingStage.HAND_TIP)
-        elif event.key == gui.KeyName.THREE:
+        elif event.key == gui.KeyName.F3:
             self._convert_stage(LabelingStage.HAND_DETAIL)
-        elif event.key == gui.KeyName.FOUR:
-            self._convert_stage(LabelingStage.HAND_WHOLE)
+        # elif event.key == gui.KeyName.FOUR:
+        #     self._convert_stage(LabelingStage.HAND_WHOLE)
 
         # change control joint
         if self._labeling_stage==LabelingStage.HAND_TIP:
-            if event.key == gui.KeyName.Z:
+            if event.key == gui.KeyName.ONE:
                 self._active_hand.set_control_joint(0)
-            elif event.key == gui.KeyName.X:
+            elif event.key == gui.KeyName.TWO:
                 self._active_hand.set_control_joint(1)
-            elif event.key == gui.KeyName.C:
+            elif event.key == gui.KeyName.THREE:
                 self._active_hand.set_control_joint(2)
-            elif event.key == gui.KeyName.V:
+            elif event.key == gui.KeyName.FOUR:
                 self._active_hand.set_control_joint(3)
-            elif event.key == gui.KeyName.B:
+            elif event.key == gui.KeyName.FIVE:
                 self._active_hand.set_control_joint(4)
             self._update_target_hand()
         elif self._labeling_stage==LabelingStage.HAND_DETAIL:
             # convert finger
-            if event.key == gui.KeyName.Z:
+            if event.key == gui.KeyName.ONE:
                 self._active_hand.set_optimize_state('thumb')
-            elif event.key == gui.KeyName.X:
+            elif event.key == gui.KeyName.TWO:
                 self._active_hand.set_optimize_state('fore')
-            elif event.key == gui.KeyName.C:
+            elif event.key == gui.KeyName.THREE:
                 self._active_hand.set_optimize_state('middle')
-            elif event.key == gui.KeyName.V:
+            elif event.key == gui.KeyName.FOUR:
                 self._active_hand.set_optimize_state('ring')
-            elif event.key == gui.KeyName.B:
+            elif event.key == gui.KeyName.FIVE:
                 self._active_hand.set_optimize_state('little')
             
             # convert joint
-            if event.key == gui.KeyName.U:
-                self._active_hand.set_control_joint(0)
-            elif event.key == gui.KeyName.I:
-                self._active_hand.set_control_joint(1)
-            elif event.key == gui.KeyName.O:
-                self._active_hand.set_control_joint(2)
-            elif event.key == gui.KeyName.P:
-                self._active_hand.set_control_joint(3)
-            
+            if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
+                ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
+                ctrl_idx = self._active_hand.control_idx - 1
+                self._active_hand.set_control_joint(ctrl_idx)
             self._update_target_hand()
         
         # Translation
@@ -1441,7 +1693,10 @@ class AppWindow:
                 self._log.text = "{} 라벨링 중입니다.".format(self._active_hand.get_control_joint_name())
                 self.window.set_needs_layout()
         self._init_view_control()
-        
+
+
+
+
 def main():
     gui.Application.instance.initialize()
     hangeul = os.path.join(str(Path(__file__).parent.absolute()), "lib/NanumGothic.ttf")
@@ -1451,6 +1706,9 @@ def main():
 
     w = AppWindow(1920, 1080)
     gui.Application.instance.run()
+
+
+
 
 if __name__ == "__main__":
     # o3d.visualization.webrtc_server.enable_webrtc()
