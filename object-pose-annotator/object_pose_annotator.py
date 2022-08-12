@@ -78,7 +78,10 @@ class Settings:
         self.annotation_active_obj_material = rendering.MaterialRecord()
         self.annotation_active_obj_material.base_color = [0.3, 0.9, 0.3, 1 - self.transparency]
         self.annotation_active_obj_material.shader = Settings.UNLIT
-
+        
+        self.coord_material = rendering.MaterialRecord()
+        self.coord_material.base_color = [1.0, 1.0, 1.0, 1.0]
+        self.coord_material.shader = Settings.UNLIT
 
 
 class AppWindow:
@@ -102,8 +105,9 @@ class AppWindow:
         self._scene.scene.show_axes(self.settings.show_axes)
 
         if self.settings.apply_material:
-            self._scene.scene.modify_geometry_material("annotation_scene", self.settings.scene_material)
-            self.settings.apply_material = False
+            if self._scene.scene.has_geometry("annotation_scene"):
+                self._scene.scene.modify_geometry_material("annotation_scene", self.settings.scene_material)
+                self.settings.apply_material = False
         self._show_axes.checked = self.settings.show_axes
         self._highlight_obj.checked = self.settings.highlight_obj
         self._show_coord_frame.checked = self.settings.show_coord_frame
@@ -167,7 +171,7 @@ class AppWindow:
         else:
             coord_frame.transform(active_obj.transform)
         self._scene.scene.add_geometry(name, coord_frame, 
-                                        self.settings.annotation_obj_material,
+                                        self.settings.coord_material,
                                         add_downsampled_copy_for_fast_rendering=True) 
 
     def _on_layout(self, layout_context):
@@ -490,7 +494,7 @@ class AppWindow:
         generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(refine_position)
         self._scene_control.add_child(generate_save_annotation)
-
+        
         # ---- Menu ----
         if gui.Application.instance.menubar is None:
             file_menu = gui.Menu()
@@ -548,7 +552,7 @@ class AppWindow:
         self._log.text = "\t이미지 " + source_image_num + "의 라벨링 결과를 " + target_image_num + "로 복사합니다."
         self.window.set_needs_layout()
 
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt.json")
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if not os.path.exists(json_6d_path):
             self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
@@ -860,15 +864,13 @@ class AppWindow:
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
-                gui.KeyModifier.ALT):
-
+                gui.KeyModifier.CTRL):
             try:
                 objects = self._annotation_scene.get_objects()
                 active_obj = objects[self._meshes_used.selected_index]
             except IndexError:
                 self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_mouse)")
                 return gui.Widget.EventCallbackResult.HANDLED
-
             def depth_callback(depth_image):
                 # Coordinates are expressed in absolute coordinates of the
                 # window, but to dereference the image correctly we need them
@@ -893,7 +895,6 @@ class AppWindow:
                     h_transform = np.eye(4)
                     h_transform[:3, 3] = target_xyz - active_obj.obj_geometry.get_center()
                     active_obj.obj_geometry.transform(h_transform)
-                    center = active_obj.obj_geometry.get_center()
                     self._scene.scene.remove_geometry(active_obj.obj_name)
                     self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                                 self.settings.annotation_active_obj_material,
@@ -909,7 +910,7 @@ class AppWindow:
             self._log.text = "\t물체 위치를 조정 중 입니다."
             self.window.set_needs_layout()
             return gui.Widget.EventCallbackResult.HANDLED
-        return gui.Widget.EventCallbackResult.IGNORED
+        return gui.Widget.EventCallbackResult.HANDLED
 
     def _on_selection_changed(self, a, b):
         self._log.text = "\t라벨링 대상 물체를 변경합니다."
@@ -977,7 +978,7 @@ class AppWindow:
 
         image_num = self._annotation_scene.image_num
         # model_names = self.load_model_names()
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt.json")
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
@@ -992,7 +993,7 @@ class AppWindow:
         else:
             gt_6d_pose_data = {}
 
-        # wrtie/update "scene_gt.json"
+        # write/update "scene_gt.json"
         try:
             with open(json_6d_path, 'w+') as gt_scene:
                 view_angle_data = list()
@@ -1009,6 +1010,9 @@ class AppWindow:
                         "inst_id": inst_id
                     }
                     view_angle_data.append(obj_data)
+                print("image_num:", str(image_num))
+                if str(image_num) in gt_6d_pose_data.keys():
+                    del gt_6d_pose_data[str(image_num)]
                 gt_6d_pose_data[str(image_num)] = view_angle_data
                 json.dump(gt_6d_pose_data, gt_scene)
             self._log.text = "\t라벨링 결과를 저장했습니다."
@@ -1426,7 +1430,7 @@ class AppWindow:
 
         # load values if an annotation already exists
         scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}",
-                                        'scene_gt.json')
+                                        'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if os.path.exists(scene_gt_path):
             with open(scene_gt_path) as scene_gt_file:
                 try:
@@ -1460,12 +1464,12 @@ class AppWindow:
                         obj_geometry.translate(transform_cam_to_obj[0:3, 3])
                         center = obj_geometry.get_center()
                         obj_geometry.rotate(transform_cam_to_obj[0:3, 0:3], center=center)
-                        if i == 0:
-                            self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_active_obj_material,
-                                                            add_downsampled_copy_for_fast_rendering=True)
-                        else:
-                            self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_obj_material,
-                                                            add_downsampled_copy_for_fast_rendering=True)
+                        # if i == 0:
+                        #     self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_active_obj_material,
+                        #                                     add_downsampled_copy_for_fast_rendering=True)
+                        # else:
+                        self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_obj_material,
+                                                        add_downsampled_copy_for_fast_rendering=True)
                         active_meshes.append(obj_name)
                     self._meshes_used.set_items(active_meshes)
         self._update_scene_numbers()
@@ -1534,7 +1538,7 @@ class AppWindow:
         self._log.text = "\t 다음 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
         self.current_scene_idx += 1
-        self.scene_load(self.scenes.scenes_path, self.current_scene_idx, 0)  # open next scene on the first image
+        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
 
     def _on_previous_scene(self):
         if self._check_changes():
@@ -1542,13 +1546,13 @@ class AppWindow:
         if self.current_scene_idx is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_scene)")
             return
-        if self.current_scene_idx <= 3:
+        if self.current_scene_idx <= 0:
             self._on_error("이전 라벨링 폴더가 존재하지 않습니다.")
             return
         self.current_scene_idx -= 1
         self._log.text = "\t 이전 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
-        self.scene_load(self.scenes.scenes_path, self.current_scene_idx, 0)  # open next scene on the first image
+        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
 
     def _on_next_image(self):
         if self._check_changes():
