@@ -4,9 +4,7 @@
 
 
 # TODO:
-- [ ] Edit log
-- [ ] CTRL+Z -> control joint back
-- [ ] hand folding 
+- [ ] Save Debug log
 - [ ] Labeled Object Mesh Model
 - [ ] Image View with Current Label
 
