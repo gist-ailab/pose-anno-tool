@@ -1016,7 +1016,7 @@ class AppWindow:
                 view_angle_data = list()
                 for obj in self._annotation_scene.get_objects():
                     transform_cam_to_object = obj.transform
-                    translation = list(transform_cam_to_object[0:3, 3] * 1000)  # convert meter to mm
+                    translation = np.array(transform_cam_to_object[0:3, 3] * 1000, dtype=np.float32).tolist()  # convert meter to mm
                     model_names = self.load_model_names()
                     obj_id = int(obj.obj_name.split("_")[1])  # assuming object name is formatted as obj_000001
                     inst_id = int(obj.obj_name.split("_")[2])
@@ -1428,7 +1428,6 @@ class AppWindow:
         _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
         self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
 
-        # geometry = self._make_point_cloud(rgb_img, depth_img, self.cam_K)
         geometry = o3d.io.read_point_cloud(self.pcd_path)
         if geometry is not None:
             print("[Info] Successfully read scene ", scene_num)
@@ -1477,14 +1476,7 @@ class AppWindow:
                             (transform, np.array([0, 0, 0, 1]).reshape(1, 4)))  # homogeneous transform
 
                         self._annotation_scene.add_obj(obj_geometry, obj_name, obj_instance, transform_cam_to_obj)
-                        # adding object to the scene
-                        obj_geometry.translate(transform_cam_to_obj[0:3, 3])
-                        center = obj_geometry.get_center()
-                        obj_geometry.rotate(transform_cam_to_obj[0:3, 0:3], center=center)
-                        # if i == 0:
-                        #     self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_active_obj_material,
-                        #                                     add_downsampled_copy_for_fast_rendering=True)
-                        # else:
+                        obj_geometry.transform(transform_cam_to_obj)
                         self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_obj_material,
                                                         add_downsampled_copy_for_fast_rendering=True)
                         active_meshes.append(obj_name)
