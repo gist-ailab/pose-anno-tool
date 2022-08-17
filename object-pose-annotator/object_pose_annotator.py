@@ -243,12 +243,31 @@ class AppWindow:
         self._validation_panel.add_child(self.scene_obj_info_panel)
 
         note_title = gui.Label("라벨링 검토 의견")
-        self.note_edit = gui.TextEdit()
-        self.note_edit.placeholder_text = "검토 의견을 입력하세요."
-        self.note_edit.set_on_value_changed(self._on_note_edit)
         self._validation_panel.add_child(note_title)
-        self._validation_panel.add_child(self.note_edit)
+        self.note_edit_1 = gui.TextEdit()
+        self.note_edit_1.placeholder_text = "검토 의견 1."
+        self.note_edit_1.set_on_value_changed(self._on_note_edit_1)
+        self._validation_panel.add_child(self.note_edit_1)
 
+        self.note_edit_2 = gui.TextEdit()
+        self.note_edit_2.placeholder_text = "검토 의견 2."
+        self.note_edit_2.set_on_value_changed(self._on_note_edit_2)
+        self._validation_panel.add_child(self.note_edit_2)
+
+        self.note_edit_3 = gui.TextEdit()
+        self.note_edit_3.placeholder_text = "검토 의견 3."
+        self.note_edit_3.set_on_value_changed(self._on_note_edit_3)
+        self._validation_panel.add_child(self.note_edit_3)
+
+        self.note_edit_4 = gui.TextEdit()
+        self.note_edit_4.placeholder_text = "검토 의견 4."
+        self.note_edit_4.set_on_value_changed(self._on_note_edit_4)
+        self._validation_panel.add_child(self.note_edit_4)
+
+        self.note_edit_5 = gui.TextEdit()
+        self.note_edit_5.placeholder_text = "검토 의견 5."
+        self.note_edit_5.set_on_value_changed(self._on_note_edit_5)
+        self._validation_panel.add_child(self.note_edit_5)
 
         self.anno_copy_panel = gui.Vert(
             em, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
@@ -276,18 +295,6 @@ class AppWindow:
         self.anno_copy_panel.add_child(target_grid)
         self.anno_copy_panel.add_child(self._copy_button)
         self._validation_panel.add_child(self.anno_copy_panel)
-
-        inst_grid = gui.VGrid(3, 0.25 * em)
-        self.inst_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
-        self.inst_id_edit.int_value = 0
-        self.inst_id_edit.set_limits(0, 30)
-        self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
-
-        inst_grid.add_child(gui.Label("인스턴스 아이디", ))
-        inst_grid.add_child(self.inst_id_edit)
-
-
-
 
         # ---- Settings panel ----
         self._settings_panel = gui.Vert(
@@ -381,7 +388,7 @@ class AppWindow:
                                                  gui.Margins(0.25*em, 0, 0, 0))
         annotation_objects.set_is_open(True)
         object_select_layout = gui.VGrid(2)
-        object_select_layout.add_child(gui.Label("obj_"))
+        object_select_layout.add_child(gui.Label("물체 아이디: obj_"))
         self._meshes_available = gui.NumberEdit(gui.NumberEdit.INT)
         self._meshes_available.int_value = 1
         self._meshes_available.set_limits(1, 83)
@@ -389,19 +396,30 @@ class AppWindow:
         object_select_layout.add_child(self._meshes_available)
         annotation_objects.add_child(object_select_layout)
 
-
+        inst_grid = gui.VGrid(3)
+        self.inst_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
+        self.inst_id_edit.int_value = 1
+        self.inst_id_edit.set_limits(1, 30)
+        self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
         self._meshes_used = gui.ListView()
         self._meshes_used.set_on_selection_changed(self._on_selection_changed)
         add_mesh_button = gui.Button("물체 추가하기")
+        add_mesh_button.horizontal_padding_em = 0.8
+        add_mesh_button.vertical_padding_em = 0.2
         remove_mesh_button = gui.Button("물체 삭제하기")
+        remove_mesh_button.horizontal_padding_em = 0.8
+        remove_mesh_button.vertical_padding_em = 0.2
         add_mesh_button.set_on_clicked(self._add_mesh)
         remove_mesh_button.set_on_clicked(self._remove_mesh)
 
-
+        inst_grid.add_child(gui.Label("인스턴스 아이디: ", ))
+        inst_grid.add_child(self.inst_id_edit)
+        annotation_objects.add_child(inst_grid)
         hz = gui.Horiz(spacing=5)
         hz.add_child(add_mesh_button)
         hz.add_child(remove_mesh_button)
         annotation_objects.add_child(hz)
+
         annotation_objects.add_child(self._meshes_used)
 
         # x, y, z axis
@@ -428,18 +446,9 @@ class AppWindow:
         z_grid.add_child(gui.Label("z축",))
         z_grid.add_child(self._z_rot)
         annotation_objects.add_child(z_grid)
-
-        inst_grid = gui.VGrid(3, 0.25 * em)
-        self.inst_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
-        self.inst_id_edit.int_value = 0
-        self.inst_id_edit.set_limits(0, 30)
-        self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
-
-        inst_grid.add_child(gui.Label("인스턴스 아이디", ))
-        inst_grid.add_child(self.inst_id_edit)
-        annotation_objects.add_child(inst_grid)
-
         self._settings_panel.add_child(annotation_objects)
+
+
 
         self._scene_control = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
                                                   gui.Margins(0.25 * em, 0, 0, 0))
@@ -492,6 +501,15 @@ class AppWindow:
         h.add_stretch()
         self._scene_control.add_child(h)
 
+        self._view_numbers = gui.Horiz(0.4 * em)
+        self._image_number = gui.Label("이미지: " + f'{0:06}')
+        self._scene_number = gui.Label("작업폴더: " + f'{0:06}')
+
+        self._view_numbers.add_child(self._image_number)
+        self._view_numbers.add_child(self._scene_number)
+        self._scene_control.add_child(self._view_numbers)
+
+
         progress_ctrls = gui.Vert(em)
         self._progress = gui.ProgressBar()
         self._progress.value = 0.0  # 25% complete
@@ -503,28 +521,21 @@ class AppWindow:
         progress_ctrls.add_child(self._progress)
         self._scene_control.add_child(progress_ctrls)
 
-        self._view_numbers = gui.Horiz(0.4 * em)
-        self._image_number = gui.Label("이미지: " + f'{0:06}')
-        self._scene_number = gui.Label("작업폴더: " + f'{0:06}')
-
-        self._view_numbers.add_child(self._image_number)
-        self._view_numbers.add_child(self._scene_number)
-        self._scene_control.add_child(self._view_numbers)
 
         self._settings_panel.add_child(self._scene_control)
         initial_viewpoint = gui.Button("처음 시점으로 이동하기 (T)")
         initial_viewpoint.horizontal_padding_em = 0.8
-        initial_viewpoint.vertical_padding_em = 0
+        initial_viewpoint.vertical_padding_em = 0.2
         initial_viewpoint.set_on_clicked(self._on_initial_viewpoint)
         self._scene_control.add_child(initial_viewpoint)
         refine_position = gui.Button("자동 정렬하기 (R)")
         refine_position.horizontal_padding_em = 0.8
-        refine_position.vertical_padding_em = 0
+        refine_position.vertical_padding_em = 0.2
         refine_position.set_on_clicked(self._on_refine)
         self._scene_control.add_child(refine_position)
         generate_save_annotation = gui.Button("라벨링 결과 저장하기 (F)")
         generate_save_annotation.horizontal_padding_em = 0.8
-        generate_save_annotation.vertical_padding_em = 0
+        generate_save_annotation.vertical_padding_em = 0.2
         generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(generate_save_annotation)
         
@@ -557,18 +568,95 @@ class AppWindow:
         self.window.set_needs_layout()
         
 
-    def _on_note_edit(self, new_text):
+    def _on_note_edit_1(self, new_text):
         
-        note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
         if os.path.exists(note_json_path):
             with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
-            note_json = {}
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
         with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
-            note_json[str(self.image_num_lists[self.current_image_idx])] = new_text
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['1'] = new_text
             json.dump(note_json, f)
 
+    def _on_note_edit_2(self, new_text):
+        
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['2'] = new_text
+            json.dump(note_json, f)
+
+    def _on_note_edit_3(self, new_text):
+        
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['3'] = new_text
+            json.dump(note_json, f)
+
+    def _on_note_edit_4(self, new_text):
+        
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['4'] = new_text
+            json.dump(note_json, f)
+
+    def _on_note_edit_5(self, new_text):
+        
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['5'] = new_text
+            json.dump(note_json, f)
 
     def _on_source_id_edit(self, new_val):
         self.source_image_num = int(new_val)
@@ -648,53 +736,55 @@ class AppWindow:
     def update_scene_obj_info_table(self):
 
         self.scene_obj_info_table_data = []
+        target_obj_names = []
+        target_obj_inst_names = []
         for obj_info in self.scene_obj_info:
             obj_id = int(obj_info["obj_id"])
             num_inst = int(obj_info["num_inst"])
-            err = -1
-            obj_inst_names = []
-            for obj_inst_name in self.depth_diff_means.keys():
-                if f'obj_{obj_id:06}' in obj_inst_name:
-                    obj_inst_names.append(obj_inst_name)
-            if len(obj_inst_names) != 0:
-                err = max([self.depth_diff_means[obj_inst_name] for obj_inst_name in obj_inst_names])
-            if np.abs(err) < self.ok_delta:
-                text = "완료"
-            else:
-                text = "검수 필요"
-            self.scene_obj_info_table_data.append([f'obj_{obj_id:06}', 0, num_inst, text, err])
+            for inst_id in range(1, num_inst + 1):
+                err = -1
+                obj_name = f'obj_{obj_id:06}'
+                obj_inst_name = f'obj_{obj_id:06}_{inst_id}'
+                target_obj_names.append(obj_name)
+                target_obj_inst_names.append(obj_inst_name)
+                if obj_inst_name in self.depth_diff_means.keys():
+                    err = self.depth_diff_means[obj_inst_name] 
+                
+                if err == -1:
+                    text = "라벨링 필요"
+                elif err < self.ok_delta :
+                    text = "완료"
+                else:
+                    text = "검수 필요"
+                self.scene_obj_info_table_data.append([f'obj_{obj_id:06}_{inst_id}', text, err])
 
         scene_obj_info_table = []
 
         # update table data from annotation_scene
-        cur_obj_names = []
-        cur_inst_counts = []
-        for scene_obj in self._annotation_scene.get_objects():
-            obj_name = '_'.join(scene_obj.obj_name.split('_')[:-1])
-            if scene_obj.obj_name not in cur_obj_names:
-                cur_obj_names.append(obj_name)
-                cur_inst_counts.append(1)
-            else:
-                idx = cur_obj_names.index(obj_name)
-                cur_inst_counts[idx] += 1
 
-        target_obj_names = []
-        for table_data in self.scene_obj_info_table_data:
-            target_obj_name = table_data[0]
-            target_obj_names.append(target_obj_name)
-            if target_obj_name in cur_obj_names:
-                table_data[1] = cur_inst_counts[cur_obj_names.index(target_obj_name)]
-            if table_data[1] != table_data[2]:
-                table_data[3] = "라벨링 필요"
+        # target_obj_names = []
+        # for table_data in self.scene_obj_info_table_data:
+        #     target_obj_name = table_data[0]
+        #     target_obj_names.append(target_obj_name)
+        #     if target_obj_name in cur_obj_names:
+        #         table_data[1] = cur_inst_counts[cur_obj_names.index(target_obj_name)]
+        #     if table_data[1] != table_data[2]:
+        #         table_data[3] = "라벨링 필요"
 
         for i, table_data in enumerate(self.scene_obj_info_table_data):
-            row = "{}: [{:02d}/{:02d}] {} ({:.1f})".format(table_data[0], table_data[1], table_data[2], table_data[3], table_data[4])
+            row = "{}: {} ({:.1f})".format(table_data[0], table_data[1], table_data[2])
             scene_obj_info_table.append(row)
         
         # check whether there is invalid objects
-        for cur_obj_name in cur_obj_names:
-            if cur_obj_name not in target_obj_names:
-                scene_obj_info_table.append('{}: 삭제 필요'.format(cur_obj_name))
+        scene_obj_info_table.append('----------------------------------')
+        for scene_obj in self._annotation_scene.get_objects():
+            if scene_obj.obj_name not in target_obj_inst_names:
+                obj_name = '_'.join(scene_obj.obj_name.split('_')[:-1])
+                if obj_name not in target_obj_names:
+                    scene_obj_info_table.append('{}: 물체 아이디 오류'.format(scene_obj.obj_name))
+                else:
+                    scene_obj_info_table.append('{}: 인스턴스 아이디 오류'.format(scene_obj.obj_name))
+
         self.scene_obj_info_table.set_items(scene_obj_info_table)
 
     def _on_x_rot(self, new_val):
@@ -719,8 +809,15 @@ class AppWindow:
         self._z_rot.int_value = 0     
 
     def _on_inst_value_changed(self, new_val):
+        if int(new_val) < 1:
+            self._on_error("1보다 큰 값을 입력하세요  (error at _on_inst_value_changed).")
+            return
         idx = self._meshes_used.selected_index
-        obj_name = self._annotation_scene.get_objects()[idx].obj_name
+        try:
+            obj_name = self._annotation_scene.get_objects()[idx].obj_name
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요 (error at _on_inst_value_changed).")
+            return
         self._annotation_scene.get_objects()[idx].obj_instance = int(new_val)
         self._annotation_scene.get_objects()[idx].obj_name = "obj_" + obj_name.split("_")[1] + "_" + str(int(new_val))
         meshes = self._annotation_scene.get_objects()  # update list after adding current object
@@ -1181,7 +1278,7 @@ class AppWindow:
             depth_rendered_obj = depth_rendered.copy()
             depth_rendered_obj[cnd_bg] = 0
 
-            depth_diff = (depth_captured_obj - depth_rendered_obj) 
+            depth_diff = np.abs(depth_captured_obj - depth_rendered_obj) 
 
             delta_1 = 3
             delta_2 = 15
@@ -1340,14 +1437,14 @@ class AppWindow:
     def _obj_instance_count(self, mesh_to_add, meshes):
         types = [i[:-2] for i in meshes]  # remove last 3 character as they present instance number (OBJ_INSTANCE)
         equal_values = [i for i in range(len(types)) if types[i] == mesh_to_add]
-        count = 0
+        count = 1
         if len(equal_values):
             indices = np.array(meshes)
             indices = indices[equal_values]
             indices = [int(x[-1]) for x in indices]
             count = max(indices) + 1
             # TODO change to fill the numbers missing in sequence
-        return count
+        return count 
 
     def _add_mesh(self):
         if self._annotation_scene is None: # shsh
@@ -1527,13 +1624,36 @@ class AppWindow:
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
         note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
-        if os.path.exists(note_json_path):
+        if os.path.exists(note_json_path): # !TODO: This is too ugly ..
             with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
             if str(self.image_num_lists[self.current_image_idx]) in note_json.keys():
-                self.note_edit.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]
+                if '1' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+                    self.note_edit_1.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['1']
+                else:
+                    self.note_edit_1.text_value = ''
+                if '2' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+                    self.note_edit_2.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['2']
+                else:
+                    self.note_edit_2.text_value = ''
+                if '3' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+                    self.note_edit_3.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['3']
+                else:
+                    self.note_edit_3.text_value = ''
+                if '4' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+                    self.note_edit_4.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['4']
+                else:
+                    self.note_edit_4.text_value = ''
+                if '5' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+                    self.note_edit_5.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['5']
+                else:
+                    self.note_edit_5.text_value = ''
             else:
-                self.note_edit.text_value = ""
+                self.note_edit_1.text_value = ""
+                self.note_edit_2.text_value = ""
+                self.note_edit_3.text_value = ""
+                self.note_edit_4.text_value = ""
+                self.note_edit_5.text_value = ""
         # self.source_id_edit.set_value(image_num)
 
 
@@ -1598,23 +1718,23 @@ class AppWindow:
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
 
     def _on_change_image(self):
-        pass
-        # if self._check_changes():
-        #     return
-        # if self.current_image_idx is None:
-        #     self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_image)")
-        #     return
-        # if self.current_image_idx  >= len(self.image_num_lists) - 1:
-        #     self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
-        #     return
-        # self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
-        # self.window.set_needs_layout()
-        # self.current_image_idx += 1
-        # self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
-        # self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        # self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
-        #     100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
-        #     self.current_image_idx + 1, len(self.image_num_lists))
+        if self._check_changes():
+            return
+        try:
+            if self.image_number_edit.int_value not in self.image_num_lists:
+                self._on_error("해당 이미지가 존재하지 않습니다. (error at _on_change_image)")
+                return
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_change_image)")
+            return
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
+        self.window.set_needs_layout()
+        self.current_image_idx = self.image_num_lists.index(self.image_number_edit.int_value)
+        self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+            100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+            self.current_image_idx + 1, len(self.image_num_lists))
 
     def _on_next_image(self):
         if self._check_changes():
