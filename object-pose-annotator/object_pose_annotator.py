@@ -242,11 +242,16 @@ class AppWindow:
         self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
         self._validation_panel.add_child(self.scene_obj_info_panel)
 
+        note_title = gui.Label("라벨링 검토 의견")
+        self.note_edit = gui.TextEdit()
+        self.note_edit.placeholder_text = "검토 의견을 입력하세요."
+        self.note_edit.set_on_value_changed(self._on_note_edit)
+        self._validation_panel.add_child(note_title)
+        self._validation_panel.add_child(self.note_edit)
+
+
         self.anno_copy_panel = gui.Vert(
             em, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
-        # self.anno_copy_panel.add_stretch()
-        # self.anno_copy_panel.add_child(self._images_buttons_label)
-        # self.anno_copy_panel.add_child(self._pre_image_button)
         source_grid = gui.VGrid(3, 0.25 * em)
         self.source_id_edit = gui.NumberEdit(gui.NumberEdit.INT)
         self.source_id_edit.int_value = 0
@@ -523,6 +528,18 @@ class AppWindow:
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
 
+    def _on_note_edit(self, new_text):
+        
+        note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            note_json[str(self.image_num_lists[self.current_image_idx])] = new_text
+            json.dump(note_json, f)
+
 
     def _on_source_id_edit(self, new_val):
         self.source_image_num = int(new_val)
@@ -689,7 +706,7 @@ class AppWindow:
     def _on_filedlg_button(self):
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
                                  self.window.theme)
-        filedlg.add_filter(".ply", "포인트 클라우드 (.ply)")
+        filedlg.add_filter(".pcd", "포인트 클라우드 (.pcd)")
         filedlg.add_filter("", "모든 파일")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
@@ -1010,7 +1027,6 @@ class AppWindow:
                         "inst_id": inst_id
                     }
                     view_angle_data.append(obj_data)
-                print("image_num:", str(image_num))
                 if str(image_num) in gt_6d_pose_data.keys():
                     del gt_6d_pose_data[str(image_num)]
                 gt_6d_pose_data[str(image_num)] = view_angle_data
@@ -1063,13 +1079,14 @@ class AppWindow:
         eye = [0, 0, 0]  # camera position
         up = [0, -1, 0]  # camera orientation
         render.scene.camera.look_at(center, eye, up)
+        render.scene.camera.set_projection(intrinsic, 0.01, 3.0, self.W, self.H)
 
         objects = self._annotation_scene.get_objects()
         # generate object material
         obj_mtl = o3d.visualization.rendering.MaterialRecord()
         obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         obj_mtl.shader = "defaultUnlit"
-        obj_mtl.point_size = 10.0
+        obj_mtl.point_size = 30.0
         for obj in objects:
             obj = copy.deepcopy(obj)
             render.scene.add_geometry(obj.obj_name, obj.obj_geometry, obj_mtl,                              
@@ -1155,14 +1172,14 @@ class AppWindow:
 
             depth_diff = depth_diff[valid_mask]
             depth_diff_mean = depth_diff.mean()
-            depth_abs_diff = np.abs(depth_diff)
-            depth_abs_diff_mean = depth_abs_diff.mean() 
+            # depth_abs_diff = np.abs(depth_diff)
+            # depth_abs_diff_mean = depth_abs_diff.mean() 
             depth_diff_vis = np.dstack(
                 [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
             try:
                 diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
             except:
-                self._on_error("{}의 마스크를 생성하는데 실패했습니다.".format(source_obj.obj_name))
+                self._on_error("{}의 마스크를 생성하는데 실패했습니다.".format(obj_name))
                 continue
             texts.append("{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2])))
             ys, xs = valid_mask.nonzero()
@@ -1387,18 +1404,18 @@ class AppWindow:
         geometry = None
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'scene_camera.json') # !TODO: change to scene_camera.json
+        camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) # !TODO: change to scene_camera.json
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
             self.cam_K = np.array(cam_K).reshape((3, 3))
             depth_scale = self.scene_camera_info[str(image_num)]['depth_scale']
         if image_num < 0:
-            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:07}.ply')
+            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:07}.pcd')
             self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:07}.png')
             self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:07}.png')
         else:
-            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:06}.ply')
+            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:06}.pcd')
             self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.png')
             self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}.png')
 
@@ -1492,6 +1509,15 @@ class AppWindow:
 
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
+
+        note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+            if str(self.image_num_lists[self.current_image_idx]) in note_json.keys():
+                self.note_edit.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]
+            else:
+                self.note_edit.text_value = ""
         # self.source_id_edit.set_value(image_num)
 
 
