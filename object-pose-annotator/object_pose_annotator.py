@@ -380,14 +380,24 @@ class AppWindow:
         annotation_objects = gui.CollapsableVert("라벨링 대상 물체", 0.25 * em,
                                                  gui.Margins(0.25*em, 0, 0, 0))
         annotation_objects.set_is_open(True)
-        self._meshes_available = gui.ListView()
+        object_select_layout = gui.VGrid(2)
+        object_select_layout.add_child(gui.Label("obj_"))
+        self._meshes_available = gui.NumberEdit(gui.NumberEdit.INT)
+        self._meshes_available.int_value = 1
+        self._meshes_available.set_limits(1, 83)
+        # self._meshes_available.set_on_value_changed(self._on_source_id_edit)
+        object_select_layout.add_child(self._meshes_available)
+        annotation_objects.add_child(object_select_layout)
+
+
         self._meshes_used = gui.ListView()
         self._meshes_used.set_on_selection_changed(self._on_selection_changed)
         add_mesh_button = gui.Button("물체 추가하기")
         remove_mesh_button = gui.Button("물체 삭제하기")
         add_mesh_button.set_on_clicked(self._add_mesh)
         remove_mesh_button.set_on_clicked(self._remove_mesh)
-        annotation_objects.add_child(self._meshes_available)
+
+
         hz = gui.Horiz(spacing=5)
         hz.add_child(add_mesh_button)
         hz.add_child(remove_mesh_button)
@@ -435,6 +445,20 @@ class AppWindow:
                                                   gui.Margins(0.25 * em, 0, 0, 0))
         self._scene_control.set_is_open(True)
 
+        h = gui.Horiz(0.4 * em)  
+        self.image_number_edit = gui.NumberEdit(gui.NumberEdit.INT)
+        self.image_number_edit.int_value = 1
+        self.image_number_edit.set_limits(-4, 53) #! todo update this automatically
+        h.add_child(gui.Label("이미지:"))
+        h.add_child(self.image_number_edit)
+        change_image_button = gui.Button("이동")
+        change_image_button.set_on_clicked(self._on_change_image)
+        change_image_button.horizontal_padding_em = 0.8
+        change_image_button.vertical_padding_em = 0
+        h.add_child(change_image_button)
+        h.add_stretch()
+        self._scene_control.add_child(h)
+
         self._images_buttons_label = gui.Label("이미지:")
         self._samples_buttons_label = gui.Label("작업 폴더: ")
 
@@ -456,14 +480,12 @@ class AppWindow:
         self._next_sample_button.set_on_clicked(self._on_next_scene)
         # 2 rows for sample and scene control
         h = gui.Horiz(0.4 * em)  # row 1
-        h.add_stretch()
         h.add_child(self._images_buttons_label)
         h.add_child(self._pre_image_button)
         h.add_child(self._next_image_button)
         h.add_stretch()
         self._scene_control.add_child(h)
         h = gui.Horiz(0.4 * em)  # row 2
-        h.add_stretch()
         h.add_child(self._samples_buttons_label)
         h.add_child(self._pre_sample_button)
         h.add_child(self._next_sample_button)
@@ -491,13 +513,19 @@ class AppWindow:
 
         self._settings_panel.add_child(self._scene_control)
         initial_viewpoint = gui.Button("처음 시점으로 이동하기 (T)")
+        initial_viewpoint.horizontal_padding_em = 0.8
+        initial_viewpoint.vertical_padding_em = 0
         initial_viewpoint.set_on_clicked(self._on_initial_viewpoint)
         self._scene_control.add_child(initial_viewpoint)
         refine_position = gui.Button("자동 정렬하기 (R)")
+        refine_position.horizontal_padding_em = 0.8
+        refine_position.vertical_padding_em = 0
         refine_position.set_on_clicked(self._on_refine)
-        generate_save_annotation = gui.Button("라벨링 결과 저장하기 (F)")
-        generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(refine_position)
+        generate_save_annotation = gui.Button("라벨링 결과 저장하기 (F)")
+        generate_save_annotation.horizontal_padding_em = 0.8
+        generate_save_annotation.vertical_padding_em = 0
+        generate_save_annotation.set_on_clicked(self._on_generate)
         self._scene_control.add_child(generate_save_annotation)
         
         # ---- Menu ----
@@ -527,6 +555,7 @@ class AppWindow:
         self._scene.set_on_mouse(self._on_mouse)
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
+        
 
     def _on_note_edit(self, new_text):
         
@@ -721,30 +750,27 @@ class AppWindow:
         split_and_type = basename(str(Path(ply_path).parent.parent.parent))
         rgb_path = ply_path.replace('/pcd/', '/rgb/')
         self.scenes = Dataset(dataset_path, split_and_type)
-        # try:
-        start_scene_num = int(basename(str(Path(ply_path).parent.parent)))
-        start_image_num = int(basename(ply_path)[:-4])
-        self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
-        self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
-        self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
-        self.current_image_idx = self.image_num_lists.index(start_image_num)
-        if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
-            self.update_obj_list()
-            self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
-            self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
-            self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
-                100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
-                self.current_image_idx + 1, len(self.image_num_lists))
-        self.window.close_dialog()
-        self._log.text = "\t라벨링 대상 파일을 불러왔습니다."
-        self.window.set_needs_layout()
-        # except Exception as e:
-        #     print(e)
-        #     self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
-        #     self._log.text = "\t올바른 파일 경로를 선택하세요."
-        # self.window.set_needs_layout()
-
-
+        try:
+            start_scene_num = int(basename(str(Path(ply_path).parent.parent)))
+            start_image_num = int(basename(ply_path)[:-4])
+            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
+            self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
+            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
+            self.current_image_idx = self.image_num_lists.index(start_image_num)
+            if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
+                self.update_obj_list()
+                self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
+                self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
+                self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+                    100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+                    self.current_image_idx + 1, len(self.image_num_lists))
+            self.window.close_dialog()
+            self._log.text = "\t라벨링 대상 파일을 불러왔습니다."
+            self.window.set_needs_layout()
+        except Exception as e:
+            print(e)
+            self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
+            self._log.text = "\t올바른 파일 경로를 선택하세요."
 
     def _update_scene_numbers(self):
         self._scene_number.text = "작업 폴더: " + f'{self._annotation_scene.scene_num:06}'
@@ -881,19 +907,15 @@ class AppWindow:
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
-                gui.KeyModifier.CTRL):
+                gui.KeyModifier.ALT):
             try:
                 objects = self._annotation_scene.get_objects()
                 active_obj = objects[self._meshes_used.selected_index]
             except IndexError:
                 self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_mouse)")
                 return gui.Widget.EventCallbackResult.HANDLED
+
             def depth_callback(depth_image):
-                # Coordinates are expressed in absolute coordinates of the
-                # window, but to dereference the image correctly we need them
-                # relative to the origin of the widget. Note that even if the
-                # scene widget is the only thing in the window, if a menubar
-                # exists it also takes up space in the window (except on macOS).
                 x = event.x - self._scene.frame.x
                 y = event.y - self._scene.frame.y
                 # Note that np.asarray() reverses the axes.
@@ -1331,16 +1353,18 @@ class AppWindow:
         if self._annotation_scene is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_mesh)")
             return
-        if len(self._meshes_available.selected_value) == 0:
-            self._on_error("라벨링 물체를 선택하세요. (error at _add_mesh)")
-            return   
+
+        mesh_name_to_add = f'obj_{self._meshes_available.int_value:06}'
+        if not os.path.exists(os.path.join(self.scenes.objects_path, mesh_name_to_add + '.ply')):
+            self._on_error("존재하지 않는 물체를 선택했습니다. (error at _add_mesh)")
+            return
 
         self._log.text = "\t 라벨링 물체를 추가합니다."
         self.window.set_needs_layout()
         meshes = self._annotation_scene.get_objects()
         meshes = [i.obj_name for i in meshes]
         object_geometry = o3d.io.read_point_cloud(
-            os.path.join(self.scenes.objects_path,  self._meshes_available.selected_value + '.ply'))
+            os.path.join(self.scenes.objects_path, mesh_name_to_add + '.ply'))
         object_geometry.points = o3d.utility.Vector3dVector(
             np.array(object_geometry.points) / 1000)  # convert mm to meter
         init_trans = np.identity(4)
@@ -1348,8 +1372,8 @@ class AppWindow:
         center[2] -= 0.2
         init_trans[0:3, 3] = center
         object_geometry.transform(init_trans)
-        new_mesh_instance = self._obj_instance_count(self._meshes_available.selected_value, meshes)
-        new_mesh_name = str(self._meshes_available.selected_value) + '_' + str(new_mesh_instance)
+        new_mesh_instance = self._obj_instance_count(mesh_name_to_add, meshes)
+        new_mesh_name = mesh_name_to_add + '_' + str(new_mesh_instance)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
         self._annotation_scene.add_obj(object_geometry, new_mesh_name, new_mesh_instance, transform=init_trans)
@@ -1515,7 +1539,8 @@ class AppWindow:
 
     def update_obj_list(self):
         model_names = self.load_model_names()
-        self._meshes_available.set_items(model_names)
+        max_obj_id = max([int(x.split('_')[-1]) for x in model_names])
+        self._meshes_available.set_limits(1, max_obj_id)
 
     def load_model_names(self):
         self.obj_ids = sorted([int(os.path.basename(x)[5:-4]) for x in glob.glob(self.scenes.objects_path + self.spl + '*.ply')])
@@ -1571,6 +1596,25 @@ class AppWindow:
         self._log.text = "\t 이전 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
+
+    def _on_change_image(self):
+        pass
+        # if self._check_changes():
+        #     return
+        # if self.current_image_idx is None:
+        #     self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_image)")
+        #     return
+        # if self.current_image_idx  >= len(self.image_num_lists) - 1:
+        #     self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
+        #     return
+        # self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
+        # self.window.set_needs_layout()
+        # self.current_image_idx += 1
+        # self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        # self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        # self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+        #     100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+        #     self.current_image_idx + 1, len(self.image_num_lists))
 
     def _on_next_image(self):
         if self._check_changes():
