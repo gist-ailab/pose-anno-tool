@@ -21,7 +21,42 @@ import copy
 from pathlib import Path
 from os.path import basename, dirname
 
+obj_id_to_thresh_factor = {
+    # reflective objects
+    15: 1.5, # tuna can
+    48: 1.5, # fork
+    49: 1.5, # knife
+    50: 1.5, # spoon
+    53: 1.5, # scissors
+    58: 1.5, # wrench
+    75: 3.0, # pot
+    81: 1.5, # hammer
+    83: 1.5, # lock
+    # slighly reflective objects
+    64: 1.5, # post-it note
+    66: 1.5, # index cards
+    68: 1.5, # oreo cookie
+    # thin 
+    51: 1.5, # spatula
+    59: 1.5, # driver 1
+    60: 1.5, # driver 2 
+    # transparents
+    73: 1.5, # black bin
+    # real vs model diffrent
+    14: 1.5, # tomato soup can
+    18: 1.5, # spam
+    10: 1.5, # coffee can
+    69: 1.5, # take & toss
+    72: 1.5, # can
+    82: 3.0, # drill
+}
 
+camera_idx_to_thresh_factor = {
+    0: 1.0, # zivid
+    1: 1.2, # realsense d415
+    2: 1.5, # realsense d435
+    3: 1.5, # azure kinect
+}
 
 class Dataset:
     def __init__(self, dataset_path, dataset_split):
@@ -220,7 +255,7 @@ class AppWindow:
         self.coord_labels = []
         self.mesh_names = []
         self.settings = Settings()
-        self.ok_delta = 15
+        self.ok_delta = 4
         self.window = gui.Application.instance.create_window(
             "6D Object Pose Annotator by GIST AILAB", width, height)
         w = self.window  
@@ -748,28 +783,21 @@ class AppWindow:
                 target_obj_names.append(obj_name)
                 target_obj_inst_names.append(obj_inst_name)
                 if obj_inst_name in self.depth_diff_means.keys():
-                    err = self.depth_diff_means[obj_inst_name] 
+                    err = abs(self.depth_diff_means[obj_inst_name]) 
                 
+                ok_delta = self.ok_delta 
+                ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
+                if obj_id in obj_id_to_thresh_factor.keys():
+                    ok_delta *= obj_id_to_thresh_factor[obj_id]
                 if err == -1:
                     text = "라벨링 필요"
-                elif err < self.ok_delta :
+                elif err < ok_delta :
                     text = "완료"
                 else:
                     text = "검수 필요"
                 self.scene_obj_info_table_data.append([f'obj_{obj_id:06}_{inst_id}', text, err])
 
         scene_obj_info_table = []
-
-        # update table data from annotation_scene
-
-        # target_obj_names = []
-        # for table_data in self.scene_obj_info_table_data:
-        #     target_obj_name = table_data[0]
-        #     target_obj_names.append(target_obj_name)
-        #     if target_obj_name in cur_obj_names:
-        #         table_data[1] = cur_inst_counts[cur_obj_names.index(target_obj_name)]
-        #     if table_data[1] != table_data[2]:
-        #         table_data[3] = "라벨링 필요"
 
         for i, table_data in enumerate(self.scene_obj_info_table_data):
             row = "{}: {} ({:.1f})".format(table_data[0], table_data[1], table_data[2])
@@ -1205,7 +1233,7 @@ class AppWindow:
         obj_mtl = o3d.visualization.rendering.MaterialRecord()
         obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         obj_mtl.shader = "defaultUnlit"
-        obj_mtl.point_size = 30.0
+        obj_mtl.point_size = 10.0
         for obj in objects:
             obj = copy.deepcopy(obj)
             render.scene.add_geometry(obj.obj_name, obj.obj_geometry, obj_mtl,                              
@@ -1278,21 +1306,21 @@ class AppWindow:
             depth_rendered_obj = depth_rendered.copy()
             depth_rendered_obj[cnd_bg] = 0
 
-            depth_diff = np.abs(depth_captured_obj - depth_rendered_obj) 
+            depth_diff = depth_captured_obj - depth_rendered_obj
+            inlier_mask = np.abs(np.copy(depth_diff)) < 50
+            valid_mask = valid_mask * inlier_mask
+            depth_diff = depth_diff * valid_mask
+            depth_diff_abs = np.abs(np.copy(depth_diff))
 
             delta_1 = 3
             delta_2 = 15
-            below_delta_1 = valid_mask * (depth_diff < delta_1)
-            below_delta_2 = valid_mask * (depth_diff < delta_2) * (depth_diff > delta_1)
-            above_delta = valid_mask * (depth_diff > delta_2)
+            below_delta_1 = valid_mask * (depth_diff_abs < delta_1)
+            below_delta_2 = valid_mask * (depth_diff_abs < delta_2) * (depth_diff_abs > delta_1)
+            above_delta = valid_mask * (depth_diff_abs > delta_2)
             below_delta_1_vis = (255 * below_delta_1).astype(np.uint8)
             below_delta_2_vis = (255 * below_delta_2).astype(np.uint8)
             above_delta_vis = (255 * above_delta).astype(np.uint8)
-
-            depth_diff = depth_diff[valid_mask]
-            depth_diff_mean = depth_diff.mean()
-            # depth_abs_diff = np.abs(depth_diff)
-            # depth_abs_diff_mean = depth_abs_diff.mean() 
+            depth_diff_mean = np.sum(depth_diff[valid_mask]) / np.sum(valid_mask)
             depth_diff_vis = np.dstack(
                 [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
             try:
@@ -1306,14 +1334,20 @@ class AppWindow:
             bb_max = [int(ratio*xs.max()), int(ratio*ys.max())]
             bboxes.append([bb_min[0], bb_min[1], bb_max[0] - bb_min[0], bb_max[1] - bb_min[1]])
             self.depth_diff_means[obj_name] = abs(depth_diff_mean)
-            is_oks.append(abs(depth_diff_mean) < self.ok_delta)
+            ok_delta = self.ok_delta
+            ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
+            obj_id = int(obj_name.split("_")[0])
+            if obj_id in obj_id_to_thresh_factor.keys():
+                ok_delta *= obj_id_to_thresh_factor[obj_id]
+            is_oks.append(abs(depth_diff_mean) < ok_delta)
         
         diff_vis = cv2.resize(diff_vis.copy(), (640, int(self.H*ratio)))
         for text, bbox, is_ok in zip(texts, bboxes, is_oks):
             color = (0,255,0) if is_ok else (0,0,255)
             cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), color, 1)
             cv2.putText(diff_vis, text, (bbox[0], bbox[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
+        rgb_vis = cv2.resize(rgb_vis.copy(), (640, int(self.H*ratio)))
+        diff_vis = cv2.addWeighted(rgb_vis, 0.8, diff_vis, 1.0, 0)
         diff_vis = o3d.geometry.Image(cv2.cvtColor(diff_vis, cv2.COLOR_BGR2RGB))
         self._diff_proxy.set_widget(gui.ImageWidget(diff_vis))
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
@@ -1604,12 +1638,7 @@ class AppWindow:
                     self._meshes_used.set_items(active_meshes)
         self._update_scene_numbers()
 
-        # if np.abs(self.image_num_lists[self.current_image_idx]) % 4 in [1, 2]: # realsense
-        #     self.ok_delta = 30
-        # else:
-        #     self.ok_delta = 15
-        # print("[Info] OK delta: ", self.ok_delta, self.image_num_lists[self.current_image_idx] )
-
+    
         self._validate_anno()
 
         # load scene_obj_info.json
