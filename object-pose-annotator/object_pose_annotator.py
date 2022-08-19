@@ -53,9 +53,9 @@ obj_id_to_thresh_factor = {
 
 camera_idx_to_thresh_factor = {
     0: 1.0, # zivid
-    1: 1.2, # realsense d415
-    2: 1.5, # realsense d435
-    3: 1.5, # azure kinect
+    1: 1.0, # realsense d415
+    2: 1.0, # realsense d435
+    3: 1.0, # azure kinect
 }
 
 class Dataset:
@@ -255,7 +255,7 @@ class AppWindow:
         self.coord_labels = []
         self.mesh_names = []
         self.settings = Settings()
-        self.ok_delta = 4
+        self.ok_delta = 5
         self.window = gui.Application.instance.create_window(
             "6D Object Pose Annotator by GIST AILAB", width, height)
         w = self.window  
@@ -791,7 +791,7 @@ class AppWindow:
                     ok_delta *= obj_id_to_thresh_factor[obj_id]
                 if err == -1:
                     text = "라벨링 필요"
-                elif err < ok_delta :
+                elif err <= ok_delta :
                     text = "완료"
                 else:
                     text = "검수 필요"
@@ -1203,12 +1203,11 @@ class AppWindow:
             self._log.text = "\t라벨링 결과를 저장했습니다."
             self.window.set_needs_layout()
         self._annotation_changed = False
-
         self._validate_anno()
         self.update_scene_obj_info_table()
 
     def _validate_anno(self):
-        # annotation validator
+         # annotation validator
         self._log.text = "\t라벨링 검증용 이미지를 생성 중입니다."
         self.window.set_needs_layout()   
         
@@ -1336,10 +1335,10 @@ class AppWindow:
             self.depth_diff_means[obj_name] = abs(depth_diff_mean)
             ok_delta = self.ok_delta
             ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
-            obj_id = int(obj_name.split("_")[0])
+            obj_id = int(obj_name.split("_")[1])
             if obj_id in obj_id_to_thresh_factor.keys():
                 ok_delta *= obj_id_to_thresh_factor[obj_id]
-            is_oks.append(abs(depth_diff_mean) < ok_delta)
+            is_oks.append(abs(depth_diff_mean) <= ok_delta)
         
         diff_vis = cv2.resize(diff_vis.copy(), (640, int(self.H*ratio)))
         for text, bbox, is_ok in zip(texts, bboxes, is_oks):
@@ -1574,12 +1573,12 @@ class AppWindow:
             self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.png')
             self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}.png')
 
-        rgb_img = cv2.imread(self.rgb_path)
+        self.rgb_img = cv2.imread(self.rgb_path)
         depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img) / depth_scale / 1000
-        self.H, self.W, _ = rgb_img.shape
+        self.H, self.W, _ = self.rgb_img.shape
         ratio = 640 / self.W
-        _rgb_img = cv2.resize(rgb_img.copy(), (640, int(self.H*ratio)))
+        _rgb_img = cv2.resize(self.rgb_img.copy(), (640, int(self.H*ratio)))
         _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
         self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
 
@@ -1612,7 +1611,8 @@ class AppWindow:
                 if str(image_num) in data.keys():
                     scene_data = data[str(image_num)]
                     active_meshes = list()
-                    for i, obj in enumerate(scene_data):
+                    sorted_scene_data = sorted(scene_data, key=lambda d: int(d['obj_id']))
+                    for i, obj in enumerate(sorted_scene_data):
                         # add object to annotation_scene object
                         obj_geometry = o3d.io.read_point_cloud(
                             os.path.join(self.scenes.objects_path, 'obj_' + f"{int(obj['obj_id']):06}" + '.ply'))
