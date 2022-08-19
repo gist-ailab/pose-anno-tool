@@ -605,8 +605,9 @@ class AppWindow:
 
     def _on_note_edit_1(self, new_text):
         
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
         try:
-            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         except AttributeError:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
@@ -623,8 +624,9 @@ class AppWindow:
 
     def _on_note_edit_2(self, new_text):
         
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
         try:
-            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         except AttributeError:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
@@ -641,8 +643,9 @@ class AppWindow:
 
     def _on_note_edit_3(self, new_text):
         
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
         try:
-            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         except AttributeError:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
@@ -659,8 +662,9 @@ class AppWindow:
 
     def _on_note_edit_4(self, new_text):
         
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
         try:
-            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         except AttributeError:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
@@ -677,8 +681,10 @@ class AppWindow:
 
     def _on_note_edit_5(self, new_text):
         
+
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
         try:
-            note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         except AttributeError:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
@@ -1310,6 +1316,10 @@ class AppWindow:
             valid_mask = valid_mask * inlier_mask
             depth_diff = depth_diff * valid_mask
             depth_diff_abs = np.abs(np.copy(depth_diff))
+            
+            if np.sum(inlier_mask) == 0:
+                depth_diff = np.ones_like(depth_diff) * 1000
+                depth_diff_abs = np.ones_like(depth_diff_abs) * 1000
 
             delta_1 = 3
             delta_2 = 15
@@ -1325,7 +1335,7 @@ class AppWindow:
             try:
                 diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
             except:
-                self._on_error("{}의 마스크를 생성하는데 실패했습니다.".format(obj_name))
+                self._on_error("물체 {}가 카메라 밖에 있거나 포인트 클라우드와 너무 멀리 떨어져 있습니다.".format(obj_name))
                 continue
             texts.append("{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2])))
             ys, xs = valid_mask.nonzero()
@@ -1556,6 +1566,11 @@ class AppWindow:
         self._annotation_changed = False
         self._scene.scene.clear_geometry()
         geometry = None
+        self.note_edit_1.text_value = ""
+        self.note_edit_2.text_value = ""
+        self.note_edit_3.text_value = ""
+        self.note_edit_4.text_value = ""
+        self.note_edit_5.text_value = ""
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
         camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) # !TODO: change to scene_camera.json
@@ -1652,7 +1667,8 @@ class AppWindow:
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
-        note_json_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'note_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
         if os.path.exists(note_json_path): # !TODO: This is too ugly ..
             with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
