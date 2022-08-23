@@ -22,7 +22,9 @@ import numpy as np
 from os.path import basename 
 import yaml
 import time
-import logging
+import json
+import datetime
+import shutil
 
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
@@ -31,10 +33,9 @@ hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "Nanum
 
 class LabelingStage:
     LOADING = "준비중"
-    ROOT = "F1. 손 이동 및 회전"
-    HAND_TIP =    "F2. 손가락 끝 위치 조정"
-    HAND_DETAIL = "F3. 손가락 세부 위치 조정"
-    HAND_WHOLE = "F4. 손 전체 위치 조정"
+    ROOT        = "F1. 손 이동 및 회전"
+    HAND_DETAIL = "F2. 손가락 세부 위치 조정"
+    HAND_WHOLE  = "F3. 손 전체 위치 조정"
 
 class DexYCB:
     """Dex-YCB"""
@@ -75,7 +76,7 @@ class HandModel:
     _IDX_OF_HANDS = {
         'none'   : [],
         'root'   : [0],
-        'tips'   : [4,8,12,16,20, 0],
+        'tips'   : [4,8,12,16,20],
         'thumb'  : [1,2,3,4],
         'fore'   : [5,6,7,8],
         'middle' : [9,10,11,12],
@@ -83,7 +84,6 @@ class HandModel:
         'little' : [17,18,19,20],
         'whole'  : list(range(21))
     }
-
     # index of finger name
     _FINGER_NAME = [
         "엄지",
@@ -92,11 +92,20 @@ class HandModel:
         "약지",
         "소지"
     ]
+    # ORDER of param
+    _ORDER_OF_PARAM = {
+        'thumb'  : 4,
+        'fore'   : 0,
+        'middle' : 1,
+        'ring'   : 3,
+        'little' : 2
+    }
 
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
                             use_pca=False, flat_hand_mean=True)
+        self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if shape_param is None:
             shape_param = torch.zeros(10)
@@ -108,15 +117,15 @@ class HandModel:
         else:
             self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
 
-        self.pose_param = torch.zeros(1, 45)
-        self.pose_param.requires_grad = True
+        self.pose_param = [torch.zeros(1, 9) for _ in range(5)]
+        for param in self.pose_param:
+            param.requires_grad = False
         self.rot_param = torch.zeros(1, 3)+1e-9
-        self.rot_param.requires_grad = True
+        self.rot_param.requires_grad = False
         self.trans_param = torch.zeros(1, 3)+1e-9
-        self.trans_param.requires_grad = True
-        self.optimize_param = [self.rot_param, self.trans_param, self.pose_param]
-        self.learning_rate = 1e-3
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        self.trans_param.requires_grad = False
+        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
+        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
         
         self.update_mano()
         
@@ -129,9 +138,26 @@ class HandModel:
         self.control_idx = -1
     
     def reset_pose(self):
-        self.pose_param = torch.zeros(1, 45)
-        self.pose_param.requires_grad = True
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        if self.optimize_state=='whole':
+            self.pose_param = [torch.zeros(1, 9) for _ in range(5)]
+            for param in self.pose_param:
+                param.requires_grad = True
+        else:
+            if self.optimize_state=='thumb' or (self.optimize_state=='tips' and self.control_idx==0):
+                target_idx = self._ORDER_OF_PARAM['thumb']
+            elif self.optimize_state=='fore' or (self.optimize_state=='tips' and self.control_idx==1):
+                target_idx = self._ORDER_OF_PARAM['fore']
+            elif self.optimize_state=='middle' or (self.optimize_state=='tips' and self.control_idx==2):
+                target_idx = self._ORDER_OF_PARAM['middle']
+            elif self.optimize_state=='ring' or (self.optimize_state=='tips' and self.control_idx==3):
+                target_idx = self._ORDER_OF_PARAM['ring']
+            elif self.optimize_state=='little' or (self.optimize_state=='tips' and self.control_idx==4):
+                target_idx = self._ORDER_OF_PARAM['little']
+            self.pose_param[target_idx] = torch.zeros(1, 9)
+            self.pose_param[target_idx].requires_grad = True
+        
+        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
+        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
         self.update_mano()
     
     def reset_root_rot(self):
@@ -139,15 +165,17 @@ class HandModel:
         self.rot_param.requires_grad = True
         if self.optimize_state == 'root':
             self.rot_param.requires_grad = False
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
+        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
         self.update_mano()
         
     def reset_root_trans(self):
         self.trans_param = torch.zeros(1, 3)+1e-9
-        self.trans_param.requires_grad = True
+        # self.trans_param.requires_grad = True
         if self.optimize_state == 'root':
             self.trans_param.requires_grad = False
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
+        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
         self.update_mano()
     
     def reset_target(self):
@@ -165,10 +193,10 @@ class HandModel:
             self.optimizer.step()
     
     def update_mano(self):
-        pose_param = torch.concat((self.rot_param, self.pose_param), dim=1)
+        pose_param = torch.concat((self.rot_param,*self.pose_param), dim=1)
         verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
-                                                  th_betas=self.shape_param,
-                                                  th_trans=self.trans_param)
+                                        th_betas=self.shape_param,
+                                        th_trans=self.trans_param)
         self.verts = verts / 1000
         self.joints = joints / 1000
         self.faces = self.mano_layer.th_faces
@@ -183,8 +211,8 @@ class HandModel:
 
     def _mse_loss(self):
         target_idx = self._IDX_OF_HANDS[self.optimize_state]
-        if not 0 in target_idx:
-            target_idx.append(0)
+        # if not 0 in target_idx:
+        #     target_idx.append(0)
         # return torch.norm(self.targets[:, target_idx]-)
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
     
@@ -237,14 +265,19 @@ class HandModel:
         return self.optimize_state
     
     def set_optimize_state(self, state):
-        if state == 'root':
-            self.trans_param.requires_grad = False
-            self.rot_param.requires_grad = False
-        else:
-            self.trans_param.requires_grad = True
-            self.rot_param.requires_grad = True
-        self.optimize_state = state
+        self.trans_param.requires_grad = False
+        self.rot_param.requires_grad = False
+        for param in self.pose_param:
+            param.requires_grad = False
         
+        if state=='root':
+            pass
+        elif state=='whole':
+            for param in self.pose_param:
+                param.requires_grad = True
+        else:
+            self.pose_param[self._ORDER_OF_PARAM[state]].requires_grad = True
+        self.optimize_state = state
         self.active_joints = self._IDX_OF_HANDS[self.optimize_state]
         self.control_idx = 0
         self.contorl_joint = self.active_joints[0]
@@ -336,9 +369,10 @@ class HandModel:
         return lineset
 
     def get_state(self):
+        pose_param = torch.concat(self.pose_param, dim=1)
         return {
             'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
-            'pose_param': np.array(self.pose_param.cpu().detach()[0, :]),
+            'pose_param': np.array(pose_param.cpu().detach()[0, :]),
             'rot_param': np.array(self.rot_param.cpu().detach()[0, :]),
             'trans_param': np.array(self.trans_param.cpu().detach()[0, :]),
             'root_delta': np.array(self.root_delta),
@@ -350,17 +384,20 @@ class HandModel:
 
     def set_state(self, state):
         self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
-        self.pose_param = torch.Tensor(state['pose_param']).unsqueeze(0)
-        self.pose_param.requires_grad = True
+        self.pose_param = []
+        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0)
+        for i in range(5):
+            param = pose_param[:, i*9:(i+1)*9]
+            param.requires_grad = False
+            self.pose_param.append(param)
         self.rot_param = torch.Tensor(state['rot_param']).unsqueeze(0)
-        self.rot_param.requires_grad = True
+        self.rot_param.requires_grad = False
         self.trans_param = torch.Tensor(state['trans_param']).unsqueeze(0)
-        self.trans_param.requires_grad = True
+        self.trans_param.requires_grad = False
         self.root_delta = torch.Tensor(state['root_delta'])
         
-        self.optimize_param = [self.rot_param, self.trans_param, self.pose_param]
-        self.set_learning_rate(1e-3)
-        self.optimizer = optim.Adam([self.rot_param, self.trans_param, self.pose_param], lr=self.learning_rate)
+        self.optimize_param = [self.rot_param, self.trans_param]+self.pose_param
+        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
 
         self.update_mano()
         self.reset_target()
@@ -370,9 +407,16 @@ class HandModel:
         self.contorl_joint = None
         self.control_idx = -1
 
-class SceneObject:
-    pass
-
+    def get_hand_pose(self):
+        pose = torch.concat((self.rot_param, *self.pose_param, self.trans_param), dim=1)
+        # pose = np.array(pose.cpu().detach()[0, :])
+        pose = np.array(self.targets.cpu().detach()[0, :])
+        return pose.tolist()
+    
+    def get_hand_shape(self):
+        shape = np.array(self.shape_param.cpu().detach()[0, :])
+        return shape.tolist()
+    
 class Camera:
     # DexYCB Toolkit
     # Copyright (C) 2021 NVIDIA Corporation
@@ -566,7 +610,7 @@ class Scene:
         self._data_format = "points_{:06d}.pcd"
         self._label_format = "hand_labels_{:06d}.npz"
         
-        self._load_frame()
+        self._json_format = "labels_{:06d}.json"
     
     def _load_frame(self):
         try:
@@ -632,6 +676,7 @@ class Scene:
             for k, v in h_state.items():
                 label['{}_{}'.format(side, k)] = v
         np.savez(self._label_path, **label)
+        self.save_json()
         self._label = label
 
     def load_label(self):
@@ -651,6 +696,29 @@ class Scene:
         for side, state in hand_states.items():
             self._hands[side].set_state(state)
         return True
+
+    def save_json(self):
+        json_path = os.path.join(self._scene_dir, self._json_format.format(self.frame_id))
+        if os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                try:
+                    json_label = json.load(f)
+                except:
+                    date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = json_path.replace(".json", "_backup_{}.json".format(date_time))
+                    shutil.copy(json_path, backup_path)
+                    json_label = {}
+        else:
+            json_label = {}
+        json_label.setdefault('hand_mask_info', {})
+        for side, hand_model in self._hands.items():
+            json_label['hand_mask_info'][side] ={
+                "hand_type": str(side),
+                "hand_position": hand_model.get_hand_pose(),
+                "hand_shape": hand_model.get_hand_shape()
+            }
+        with open(json_path, 'w') as f:
+            json.dump(json_label, f, sort_keys=True, indent=4)
 
     @property
     def _frame_path(self):
@@ -1151,10 +1219,6 @@ class AppWindow:
         button.set_on_clicked(self._on_translation_stage)
         stageedit_layout.add_child(button)
         
-        button = gui.Button(LabelingStage.HAND_TIP)
-        button.set_on_clicked(self._on_hand_tip_stage)
-        stageedit_layout.add_child(button)
-        
         button = gui.Button(LabelingStage.HAND_DETAIL)
         button.set_on_clicked(self._on_hand_detail_stage)
         stageedit_layout.add_child(button)
@@ -1167,8 +1231,6 @@ class AppWindow:
 
     def _on_translation_stage(self):
         self._convert_stage(LabelingStage.ROOT)
-    def _on_hand_tip_stage(self):
-        self._convert_stage(LabelingStage.HAND_TIP)
     def _on_hand_detail_stage(self):
         self._convert_stage(LabelingStage.HAND_DETAIL)
     def _on_hand_whole_stage(self):
@@ -1181,8 +1243,6 @@ class AppWindow:
         self._current_stage_str.text = "현재 상태: {}".format(self._labeling_stage)
         if labeling_stage==LabelingStage.ROOT:
             self._active_hand.set_optimize_state('root')
-        elif labeling_stage==LabelingStage.HAND_TIP:
-            self._active_hand.set_optimize_state('tips')
         elif labeling_stage==LabelingStage.HAND_DETAIL:
             self._active_hand.set_optimize_state('thumb')
         elif labeling_stage==LabelingStage.HAND_WHOLE:
@@ -1656,28 +1716,26 @@ class AppWindow:
         elif event.key == gui.KeyName.F1:
             self._convert_stage(LabelingStage.ROOT)
         elif event.key == gui.KeyName.F2:
-            self._convert_stage(LabelingStage.HAND_TIP)
-        elif event.key == gui.KeyName.F3:
             self._convert_stage(LabelingStage.HAND_DETAIL)
-        elif event.key == gui.KeyName.F4:
+        elif event.key == gui.KeyName.F3:
             self._convert_stage(LabelingStage.HAND_WHOLE)
 
         # change control joint
-        if self._labeling_stage==LabelingStage.HAND_TIP:
-            if event.key == gui.KeyName.ONE:
-                self._active_hand.set_control_joint(0)
-            elif event.key == gui.KeyName.TWO:
-                self._active_hand.set_control_joint(1)
-            elif event.key == gui.KeyName.THREE:
-                self._active_hand.set_control_joint(2)
-            elif event.key == gui.KeyName.FOUR:
-                self._active_hand.set_control_joint(3)
-            elif event.key == gui.KeyName.FIVE:
-                self._active_hand.set_control_joint(4)
-            elif event.key == gui.KeyName.BACKTICK:
-                self._active_hand.set_control_joint(5)
-            self._update_target_hand()
-        elif self._labeling_stage==LabelingStage.HAND_DETAIL:
+        # if self._labeling_stage==LabelingStage.HAND_TIP:
+        #     if event.key == gui.KeyName.ONE:
+        #         self._active_hand.set_control_joint(0)
+        #     elif event.key == gui.KeyName.TWO:
+        #         self._active_hand.set_control_joint(1)
+        #     elif event.key == gui.KeyName.THREE:
+        #         self._active_hand.set_control_joint(2)
+        #     elif event.key == gui.KeyName.FOUR:
+        #         self._active_hand.set_control_joint(3)
+        #     elif event.key == gui.KeyName.FIVE:
+        #         self._active_hand.set_control_joint(4)
+        #     elif event.key == gui.KeyName.BACKTICK:
+        #         self._active_hand.set_control_joint(5)
+        #     self._update_target_hand()
+        if self._labeling_stage==LabelingStage.HAND_DETAIL:
             # convert finger
             if event.key == gui.KeyName.ONE:
                 self._active_hand.set_optimize_state('thumb')
@@ -1767,15 +1825,5 @@ def main():
     gui.Application.instance.run()
 
 
-
-
 if __name__ == "__main__":
-    # o3d.visualization.webrtc_server.enable_webrtc()
     main()
-    # file_path = '/data/datasets/hope/dex-ycb-sample/20200709-subject-01/20200709_141754/merge/points_000000.pcd'
-    # dataset = DexYCBDataset.load_dataset_from_file(file_path)
-    # scene = dataset.get_scene_from_file(file_path)
-    
-    
-    # DexYCBDataset('/data/datasets/hope/dex-ycb')
-    
