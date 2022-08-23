@@ -277,30 +277,32 @@ class AppWindow:
         self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
         self._validation_panel.add_child(self.scene_obj_info_panel)
 
-        note_title = gui.Label("라벨링 검토 의견")
-        self._validation_panel.add_child(note_title)
+        self._validation_panel.add_child(gui.Label("작업자 정보"))
         self.note_edit_1 = gui.TextEdit()
-        self.note_edit_1.placeholder_text = "검토 의견 1."
+        self.note_edit_1.placeholder_text = "작업자"
         self.note_edit_1.set_on_value_changed(self._on_note_edit_1)
         self._validation_panel.add_child(self.note_edit_1)
 
+        self._validation_panel.add_child(gui.Label("검수자 정보"))
         self.note_edit_2 = gui.TextEdit()
-        self.note_edit_2.placeholder_text = "검토 의견 2."
+        self.note_edit_2.placeholder_text = "검수자"
         self.note_edit_2.set_on_value_changed(self._on_note_edit_2)
         self._validation_panel.add_child(self.note_edit_2)
 
+        note_title = gui.Label("라벨링 검토 의견")
+        self._validation_panel.add_child(note_title)
         self.note_edit_3 = gui.TextEdit()
-        self.note_edit_3.placeholder_text = "검토 의견 3."
+        self.note_edit_3.placeholder_text = "검토 의견 1."
         self.note_edit_3.set_on_value_changed(self._on_note_edit_3)
         self._validation_panel.add_child(self.note_edit_3)
 
         self.note_edit_4 = gui.TextEdit()
-        self.note_edit_4.placeholder_text = "검토 의견 4."
+        self.note_edit_4.placeholder_text = "검토 의견 2."
         self.note_edit_4.set_on_value_changed(self._on_note_edit_4)
         self._validation_panel.add_child(self.note_edit_4)
 
         self.note_edit_5 = gui.TextEdit()
-        self.note_edit_5.placeholder_text = "검토 의견 5."
+        self.note_edit_5.placeholder_text = "검토 의견 3."
         self.note_edit_5.set_on_value_changed(self._on_note_edit_5)
         self._validation_panel.add_child(self.note_edit_5)
 
@@ -1307,7 +1309,7 @@ class AppWindow:
             depth_captured_obj = depth_captured.copy()
             depth_captured_obj[cnd_bg] = 0
 
-            # get only object depth of rendered depth
+            # get only object depthcd  of rendered depth
             depth_rendered_obj = depth_rendered.copy()
             depth_rendered_obj[cnd_bg] = 0
 
