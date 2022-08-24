@@ -614,7 +614,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
         if os.path.exists(note_json_path):
-            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+            with open(note_json_path, 'r' , encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
             note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
@@ -622,7 +622,7 @@ class AppWindow:
             if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
                 note_json[str(self.image_num_lists[self.current_image_idx])] = {}
             note_json[str(self.image_num_lists[self.current_image_idx])]['1'] = new_text
-            json.dump(note_json, f)
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_note_edit_2(self, new_text):
         
@@ -633,7 +633,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
         if os.path.exists(note_json_path):
-            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
             note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
@@ -641,7 +641,7 @@ class AppWindow:
             if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
                 note_json[str(self.image_num_lists[self.current_image_idx])] = {}
             note_json[str(self.image_num_lists[self.current_image_idx])]['2'] = new_text
-            json.dump(note_json, f)
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_note_edit_3(self, new_text):
         
@@ -652,7 +652,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
         if os.path.exists(note_json_path):
-            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
             note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
@@ -660,7 +660,7 @@ class AppWindow:
             if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
                 note_json[str(self.image_num_lists[self.current_image_idx])] = {}
             note_json[str(self.image_num_lists[self.current_image_idx])]['3'] = new_text
-            json.dump(note_json, f)
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_note_edit_4(self, new_text):
         
@@ -671,7 +671,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
         if os.path.exists(note_json_path):
-            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
             note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
@@ -679,7 +679,7 @@ class AppWindow:
             if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
                 note_json[str(self.image_num_lists[self.current_image_idx])] = {}
             note_json[str(self.image_num_lists[self.current_image_idx])]['4'] = new_text
-            json.dump(note_json, f)
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_note_edit_5(self, new_text):
         
@@ -691,7 +691,7 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
             return
         if os.path.exists(note_json_path):
-            with open(note_json_path, 'r',  encoding='UTF-8-sig') as f:
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
         else:
             note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
@@ -699,7 +699,7 @@ class AppWindow:
             if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
                 note_json[str(self.image_num_lists[self.current_image_idx])] = {}
             note_json[str(self.image_num_lists[self.current_image_idx])]['5'] = new_text
-            json.dump(note_json, f)
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_source_id_edit(self, new_val):
         self.source_image_num = int(new_val)
