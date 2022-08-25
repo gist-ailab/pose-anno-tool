@@ -4,7 +4,6 @@
 # FLW, TU Dortmund, Germany
 
 import os
-from re import M
 import sys
 from pathlib import Path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +24,7 @@ import time
 import json
 import datetime
 import shutil
+from scipy.spatial.transform import Rotation
 
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
@@ -120,7 +120,7 @@ class HandModel:
         self.pose_param = [torch.zeros(1, 9) for _ in range(5)]
         for param in self.pose_param:
             param.requires_grad = False
-        self.rot_param = torch.zeros(1, 3)+1e-9
+        self.rot_param = torch.tensor([[0, 0, 0]], dtype=torch.float32)
         self.rot_param.requires_grad = False
         self.trans_param = torch.zeros(1, 3)+1e-9
         self.trans_param.requires_grad = False
@@ -161,7 +161,7 @@ class HandModel:
         self.update_mano()
     
     def reset_root_rot(self):
-        self.rot_param = torch.zeros(1, 3)+1e-9
+        self.rot_param = torch.tensor([[0, 0, 0]], dtype=torch.float32)
         self.rot_param.requires_grad = True
         if self.optimize_state == 'root':
             self.rot_param.requires_grad = False
@@ -1017,13 +1017,13 @@ class AppWindow:
                                           gui.Margins(em, 0, 0, 0))
         viewctrl_layout.set_is_open(True)
         
-        self._show_axes = gui.Checkbox("카메라 좌표계 보기")
-        self._show_axes.set_on_checked(self._on_show_axes)
-        viewctrl_layout.add_child(self._show_axes)
+        # self._show_axes = gui.Checkbox("카메라 좌표계 보기")
+        # self._show_axes.set_on_checked(self._on_show_axes)
+        # viewctrl_layout.add_child(self._show_axes)
 
-        self._show_coord_frame = gui.Checkbox("조작 중인 조인트 좌표계 보기")
-        self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
-        viewctrl_layout.add_child(self._show_coord_frame)
+        # self._show_coord_frame = gui.Checkbox("조작 중인 조인트 좌표계 보기")
+        # self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
+        # viewctrl_layout.add_child(self._show_coord_frame)
 
         self._show_hands = gui.Checkbox("손 라벨 보기")
         self._show_hands.set_on_checked(self._on_show_hand)
@@ -1105,7 +1105,7 @@ class AppWindow:
             for label in self.coord_labels:
                 self._scene.remove_3d_label(label)
             self.coord_labels = []
-    def _add_coord_frame(self, name="coord_frame", size=0.02, origin=[0, 0, 0]):
+    def _add_coord_frame(self, name="coord_frame", size=0.05, origin=[0, 0, 0]):
         if self._active_hand is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_coord_frame)")
             return
@@ -1569,15 +1569,19 @@ class AppWindow:
                     world_xyz = self._scene.scene.camera.unproject(
                         event.x, event.y, depth, self._scene.frame.width,
                         self._scene.frame.height)
-                    self._move_control_joint(world_xyz)
-                    
+                    def move_joint():
+                        self._move_control_joint(world_xyz)
+                
+                    gui.Application.instance.post_to_main_thread(
+                        self.window, move_joint)
+                
             self._scene.scene.scene.render_to_depth_image(depth_callback)
-            return gui.Widget.EventCallbackResult.HANDLED
+            return gui.Widget.EventCallbackResult.CONSUMED
 
             
         elif event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_button_down(gui.MouseButton.RIGHT):
             self._toggle_hand_visible()
-            return gui.Widget.EventCallbackResult.HANDLED
+            return gui.Widget.EventCallbackResult.CONSUMED
 
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
@@ -1591,12 +1595,15 @@ class AppWindow:
             R = self._scene.scene.camera.get_view_matrix()[:3,:3]
             R_inv = np.linalg.inv(R)
             xyz = np.dot(R_inv, np.array([x, y, z]))
-            # xyz[1] *= -1#TODO: ... why -y
             xyz = current_xyz + xyz
             self._active_hand.move_control_joint(xyz)
         else:
             current_xyz = self._active_hand.get_root_rotation()
-            xyz = current_xyz + np.array([rx, ry, rz], dtype=np.float32)
+            r = Rotation.from_rotvec(current_xyz)
+            current_rot_mat = r.as_matrix()
+            rot_mat = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
+            r = Rotation.from_matrix(np.matmul(rot_mat, current_rot_mat))
+            xyz = r.as_rotvec()
             self._active_hand.set_root_rotation(xyz)
         
         self._update_activate_hand()
@@ -1672,8 +1679,10 @@ class AppWindow:
         if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
+                self._add_coord_frame("rotation_frame")
             elif event.type == gui.KeyEvent.UP:
                 self._left_shift_modifier = False
+                self._remove_geometry("rotation_frame")
             return gui.Widget.EventCallbackResult.HANDLED
         
         # if ctrl is pressed then increase translation
@@ -1699,7 +1708,10 @@ class AppWindow:
             
         # reset hand pose
         elif event.key == gui.KeyName.R:
-            self._active_hand.reset_pose()
+            if self._labeling_stage==LabelingStage.ROOT:
+                self._active_hand.reset_root_rot()
+            else:
+                self._active_hand.reset_pose()
             self._update_activate_hand()
             self._update_target_hand()
         
@@ -1758,34 +1770,36 @@ class AppWindow:
             self._update_target_hand()
         
         # Translation
-        if not self._left_shift_modifier:
-            if event.key == gui.KeyName.D:
-                self.move( self.dist, 0, 0, 0, 0, 0)
-            elif event.key == gui.KeyName.A:
-                self.move( -self.dist, 0, 0, 0, 0, 0)
-            elif event.key == gui.KeyName.S:
-                self.move( 0, -self.dist, 0, 0, 0, 0)
-            elif event.key == gui.KeyName.W:
-                self.move( 0, self.dist, 0, 0, 0, 0)
-            elif event.key == gui.KeyName.Q:
-                self.move( 0, 0, self.dist, 0, 0, 0)
-            elif event.key == gui.KeyName.E:
-                self.move( 0, 0, -self.dist, 0, 0, 0)
-        # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
-        else:
-            if self._labeling_stage==LabelingStage.ROOT:
-                if event.key == gui.KeyName.E:
-                    self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
-                elif event.key == gui.KeyName.Q:
-                    self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
+        if event.type!=gui.KeyEvent.UP:
+            if not self._left_shift_modifier:
+                if event.key == gui.KeyName.D:
+                    self.move( self.dist, 0, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.A:
-                    self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
-                elif event.key == gui.KeyName.D:
-                    self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
+                    self.move( -self.dist, 0, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.S:
-                    self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
+                    self.move( 0, -self.dist, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.W:
-                    self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
+                    self.move( 0, self.dist, 0, 0, 0, 0)
+                elif event.key == gui.KeyName.Q:
+                    self.move( 0, 0, self.dist, 0, 0, 0)
+                elif event.key == gui.KeyName.E:
+                    self.move( 0, 0, -self.dist, 0, 0, 0)
+            # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
+            else:
+                if self._labeling_stage==LabelingStage.ROOT:
+                    
+                    if event.key == gui.KeyName.E:
+                        self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
+                    elif event.key == gui.KeyName.Q:
+                        self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
+                    elif event.key == gui.KeyName.A:
+                        self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
+                    elif event.key == gui.KeyName.D:
+                        self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
+                    elif event.key == gui.KeyName.S:
+                        self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
+                    elif event.key == gui.KeyName.W:
+                        self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.IGNORED
     def _on_tick(self):
