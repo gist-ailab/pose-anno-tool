@@ -1530,8 +1530,18 @@ class AppWindow:
         transform[:3, :3] = Rotation.from_rotvec(current_xyz).as_matrix()
         transform[:3, 3] = self._active_hand.get_control_joint().T
         coord_frame.transform(transform)
+        
+        self.coord_labels = []
+        size = size * 0.8
+        self.coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([size, 0, 0, 1]))[:3], "W, S"))
+        self.coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, size, 0, 1]))[:3], "A, D"))
+        self.coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
         self._add_geometry("hand_frame", coord_frame, self.settings.coord_material)
-    
+    def _remove_hand_frame(self):
+        self._remove_geometry("hand_frame")
+        for label in self.coord_labels:
+            self._scene.remove_3d_label(label)
+        self.coord_labels = []
     def _on_mouse(self, event):
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
@@ -1672,7 +1682,7 @@ class AppWindow:
                 self._add_hand_frame()
             elif event.type == gui.KeyEvent.UP:
                 self._left_shift_modifier = False
-                self._remove_geometry('hand_frame')
+                self._remove_hand_frame()
             return gui.Widget.EventCallbackResult.HANDLED
         
         # if ctrl is pressed then increase translation
@@ -1723,20 +1733,6 @@ class AppWindow:
             self._convert_stage(LabelingStage.HAND_WHOLE)
 
         # change control joint
-        # if self._labeling_stage==LabelingStage.HAND_TIP:
-        #     if event.key == gui.KeyName.ONE:
-        #         self._active_hand.set_control_joint(0)
-        #     elif event.key == gui.KeyName.TWO:
-        #         self._active_hand.set_control_joint(1)
-        #     elif event.key == gui.KeyName.THREE:
-        #         self._active_hand.set_control_joint(2)
-        #     elif event.key == gui.KeyName.FOUR:
-        #         self._active_hand.set_control_joint(3)
-        #     elif event.key == gui.KeyName.FIVE:
-        #         self._active_hand.set_control_joint(4)
-        #     elif event.key == gui.KeyName.BACKTICK:
-        #         self._active_hand.set_control_joint(5)
-        #     self._update_target_hand()
         if self._labeling_stage==LabelingStage.HAND_DETAIL:
             # convert finger
             if event.key == gui.KeyName.ONE:
@@ -1777,6 +1773,7 @@ class AppWindow:
             # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
             else:
                 if self._labeling_stage==LabelingStage.ROOT:
+                    self._remove_hand_frame()
                     self._add_hand_frame()
                     if event.key == gui.KeyName.E:
                         self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
