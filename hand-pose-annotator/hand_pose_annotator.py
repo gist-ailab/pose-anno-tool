@@ -1105,27 +1105,6 @@ class AppWindow:
             for label in self.coord_labels:
                 self._scene.remove_3d_label(label)
             self.coord_labels = []
-    def _add_coord_frame(self, name="coord_frame", size=0.05, origin=[0, 0, 0]):
-        if self._active_hand is None: # shsh
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_coord_frame)")
-            return
-        self._scene.scene.remove_geometry(name)
-        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
-        if "world" in name:
-            transform = np.eye(4)
-            transform[:3, 3] = self._active_hand.get_control_joint().T
-            coord_frame.transform(transform)
-            for label in self.coord_labels:
-                self._scene.remove_3d_label(label)
-            self.coord_labels = []
-        else:
-            transform = np.eye(4)
-            transform[:3, 3] = self._active_hand.get_control_joint().T
-            coord_frame.transform(transform)
-            
-        self._scene.scene.add_geometry(name, coord_frame, 
-                                        self.settings.coord_material,
-                                        add_downsampled_copy_for_fast_rendering=True) 
     def _on_scene_point_size(self, size):
         self._log.text = "\t 포인트 사이즈 값을 변경합니다."
         self.window.set_needs_layout()
@@ -1542,6 +1521,17 @@ class AppWindow:
         self._scene.scene.modify_geometry_material(name, mat)
     
     #endregion
+    def _add_hand_frame(self, size=0.05, origin=[0, 0, 0]):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
+        transform = np.eye(4)
+        current_xyz = self._active_hand.get_root_rotation()
+        transform[:3, :3] = Rotation.from_rotvec(current_xyz).as_matrix()
+        transform[:3, 3] = self._active_hand.get_control_joint().T
+        coord_frame.transform(transform)
+        self._add_geometry("hand_frame", coord_frame, self.settings.coord_material)
+    
     def _on_mouse(self, event):
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
@@ -1602,7 +1592,7 @@ class AppWindow:
             r = Rotation.from_rotvec(current_xyz)
             current_rot_mat = r.as_matrix()
             rot_mat = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
-            r = Rotation.from_matrix(np.matmul(rot_mat, current_rot_mat))
+            r = Rotation.from_matrix(np.matmul(current_rot_mat, rot_mat))
             xyz = r.as_rotvec()
             self._active_hand.set_root_rotation(xyz)
         
@@ -1679,10 +1669,10 @@ class AppWindow:
         if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
-                self._add_coord_frame("rotation_frame")
+                self._add_hand_frame()
             elif event.type == gui.KeyEvent.UP:
                 self._left_shift_modifier = False
-                self._remove_geometry("rotation_frame")
+                self._remove_geometry('hand_frame')
             return gui.Widget.EventCallbackResult.HANDLED
         
         # if ctrl is pressed then increase translation
@@ -1787,7 +1777,7 @@ class AppWindow:
             # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
             else:
                 if self._labeling_stage==LabelingStage.ROOT:
-                    
+                    self._add_hand_frame()
                     if event.key == gui.KeyName.E:
                         self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
                     elif event.key == gui.KeyName.Q:
@@ -1817,6 +1807,7 @@ class AppWindow:
         
         if self._auto_save.checked and self.annotation_scene is not None:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value:
+                self._annotation_changed = False
                 self.annotation_scene.save_label()
                 self._last_saved = time.time()
                 self._log.text = "라벨 결과 자동 저장중입니다."
