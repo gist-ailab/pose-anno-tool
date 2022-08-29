@@ -85,7 +85,7 @@ class HandModel:
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=True, joint_rot_mode='rotmat')
+                            use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if shape_param is None:
@@ -103,13 +103,9 @@ class HandModel:
         self.root_trans = torch.zeros(1, 3)
         
         #3. root, 15 joints
-        self.joint_rot = [torch.eye(3).view(1, 1, 3, 3)+1e-9 for _ in range(16)]
-        
-        self.optimize_param = [self.root_trans] + self.joint_rot
-        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
-        
+        self.joint_rot = [torch.zeros(1, 3) for _ in range(16)]
+        self.optimizer = None
         self.update_mano()
-        
         self.root_delta = self.joints.cpu().detach()[0, 0]
         self.reset_target()
         
@@ -175,32 +171,33 @@ class HandModel:
 
     def reset_pose(self):
         if self.optimize_state==LabelingMode.OPTIMIZE:
-            optimize_param = []
-            for target_idx in [self._ORDER_OF_PARAM['thumb']*3+i+1 for i in range(3)]:
-                self.joint_rot[target_idx] = torch.eye(3).view(1, 1, 3, 3) + 1e-9
-                self.joint_rot[target_idx].requires_grad = True
-                optimize_param.append(self.joint_rot[target_idx])
-            self.optimizer = optim.Adam(optimize_param, lr=self.learning_rate)
+            if self.optimize_target=='root':
+                self.joint_rot[0] = torch.zeros(1, 3)
+                self.joint_rot[0].requires_grad = True
+            else:
+                for target_idx in [self._ORDER_OF_PARAM[self.optimize_target]*3+i+1 for i in range(3)]:
+                    self.joint_rot[target_idx] = torch.zeros(1, 3)
+                    self.joint_rot[target_idx].requires_grad = True
+            self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
             self.update_mano()
         else:
             target_idx = self._get_control_joint_param_idx()
-            self.joint_rot[target_idx] = torch.eye(3).view(1, 1, 3, 3) + 1e-9
+            self.joint_rot[target_idx] = torch.zeros(1, 3)
             self.update_mano()    
     
     def get_control_rotation(self):
         target_idx = self._get_control_joint_param_idx()
-        return self.joint_rot[target_idx].detach()[0, 0, :]
+        return self.joint_rot[target_idx].detach()[0, :]
     def set_control_rotation(self, rot_mat):
         assert (self.optimize_state==LabelingMode.STATIC or self.optimize_target=='root'), "error on set_control_rotation"
         target_idx = self._get_control_joint_param_idx()
         if self.optimize_state==LabelingMode.OPTIMIZE and self.optimize_target=='root':
-            self.joint_rot[0].requires_grad = False
-            self.joint_rot[0][0, 0, :] = rot_mat
+            self.joint_rot[0] = torch.Tensor(rot_mat).unsqueeze(0)
             self.joint_rot[0].requires_grad = True
             self.update_mano()
             self.reset_target()
         else:    
-            self.joint_rot[target_idx][0, 0, :] = rot_mat
+            self.joint_rot[target_idx] = torch.Tensor(rot_mat).unsqueeze(0)
             self.update_mano()
     
     def get_control_position(self):
@@ -237,9 +234,6 @@ class HandModel:
         if self.optimize_state==LabelingMode.OPTIMIZE:
             self.optimize_idx = self._IDX_OF_GUIDE
             self.set_optimize_target('root')
-            for param in self.joint_rot:
-                param.requires_grad = True
-            self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
             self.update_mano()
         elif self.optimize_state==LabelingMode.STATIC:
             self.optimize_idx = self._IDX_OF_HANDS
@@ -256,8 +250,13 @@ class HandModel:
         self.optimize_target = target
         for param in self.joint_rot:
             param.requires_grad = False
+        if self.optimize_target=='root':
+            self.joint_rot[0].requires_grad = True
+        else:
+            for target_idx in [self._ORDER_OF_PARAM[self.optimize_target]*3+i+1 for i in range(3)]:
+                self.joint_rot[target_idx].requires_grad = True
+        self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
         self.active_joints = self.optimize_idx[self.optimize_target]
-        optimize_param = []
         self.control_idx = 0
         self.contorl_joint = self.active_joints[0]
     
@@ -269,7 +268,7 @@ class HandModel:
         
     #region save and load state
     def get_state(self):
-        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 16, 3, 3
+        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 51, 3
         return {
             'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
             'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 16, 3, 3
@@ -282,9 +281,8 @@ class HandModel:
         }
     def set_state(self, state):
         self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
-        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 16, 3, 3
-        assert pose_param.dim() == 4
-        self.joint_rot = [pose_param[:, i:i+1] for i in range(16)]
+        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
+        self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
         self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
         self.root_delta = torch.Tensor(state['root_delta'])
 
@@ -319,6 +317,9 @@ class HandModel:
             loss = self._mse_loss()
             loss.backward()
             self.optimizer.step()
+            return True
+        else:
+            return False
     
     def get_target(self):
         return self.targets.cpu().detach()[0, :]
@@ -1521,7 +1522,8 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
         transform = np.eye(4)
-        transform[:3, :3] = self._active_hand.get_control_rotation()
+        current_xyz = self._active_hand.get_control_rotation()
+        transform[:3, :3] = Rotation.from_rotvec(current_xyz).as_matrix()
         transform[:3, 3] = self._active_hand.get_control_position().T
         coord_frame.transform(transform)
         
@@ -1592,10 +1594,13 @@ class AppWindow:
             xyz = current_xyz + xyz
             self._move_control_joint(xyz)
         else:
-            current_rot = self._active_hand.get_control_rotation()
+            current_xyz = self._active_hand.get_control_rotation()
+            r = Rotation.from_rotvec(current_xyz)
+            current_rot_mat = r.as_matrix()
             rot_mat = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
-            target_rot = np.matmul(current_rot, rot_mat)
-            self._active_hand.set_control_rotation(target_rot)
+            r = Rotation.from_matrix(np.matmul(current_rot_mat, rot_mat))
+            xyz = r.as_rotvec()
+            self._active_hand.set_control_rotation(xyz)
         self._update_activate_hand()
         self._update_target_hand()
     def _move_control_joint(self, xyz):
@@ -1663,11 +1668,10 @@ class AppWindow:
         self._show_hands.checked = not show
         self._on_show_hand(not show)
     def _on_optimize(self):
-        self._annotation_changed = True
         self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
-        self._active_hand.optimize_to_target()
+        self._annotation_changed = self._active_hand.optimize_to_target()
         self._update_target_hand()
         self._update_activate_hand()
     def _on_key(self, event):
