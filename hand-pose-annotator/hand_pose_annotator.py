@@ -6,6 +6,8 @@
 import os
 import sys
 from pathlib import Path
+from tkinter import Label
+from xml.dom.expatbuilder import ParseEscape
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import open3d as o3d
@@ -30,37 +32,9 @@ MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
 
-
-class LabelingStage:
-    LOADING = "준비중"
-    ROOT        = "F1. 손 이동 및 회전"
-    HAND_DETAIL = "F2. 손가락 세부 위치 조정"
-    HAND_WHOLE  = "F3. 손 전체 위치 조정"
-
-class DexYCB:
-    """Dex-YCB"""
-    _SUBJECTS = [
-        '20200709-subject-01',
-        '20200813-subject-02',
-        '20200820-subject-03',
-        '20200903-subject-04',
-        '20200908-subject-05',
-        # '20200918-subject-06',
-        # '20200928-subject-07',
-        # '20201002-subject-08',
-        # '20201015-subject-09',
-        # '20201022-subject-10',
-    ]
-    _SERIALS = [
-        '836212060125',
-        '839512060362',
-        '840412060917',
-        '841412060263',
-        '932122060857',
-        '932122060861',
-        '932122061900',
-        '932122062010',
-    ]
+class LabelingMode:
+    STATIC      = "F1. 직접 움직여 라벨링"
+    OPTIMIZE    = "F2. 가이드 기반 라벨링"
 
 class HandModel:
     # link pair of hand
@@ -76,15 +50,22 @@ class HandModel:
     _IDX_OF_HANDS = {
         'none'   : [],
         'root'   : [0],
-        'tips'   : [4,8,12,16,20],
+        'thumb'  : [1,2,3],
+        'fore'   : [5,6,7],
+        'middle' : [9,10,11],
+        'ring'   : [13,14,15],
+        'little' : [17,18,19],
+    }
+    _IDX_OF_GUIDE = {
+        'none'   : [],
+        'root'   : [0],
         'thumb'  : [1,2,3,4],
         'fore'   : [5,6,7,8],
         'middle' : [9,10,11,12],
         'ring'   : [13,14,15,16],
         'little' : [17,18,19,20],
-        'whole'  : list(range(21))
     }
-    # index of finger name
+    # finger name
     _FINGER_NAME = [
         "엄지",
         "검지",
@@ -104,7 +85,7 @@ class HandModel:
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=True)
+                            use_pca=False, flat_hand_mean=True, joint_rot_mode='rotmat')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if shape_param is None:
@@ -112,19 +93,19 @@ class HandModel:
         self.reset(shape_param)
     
     def reset(self, shape_param=None):
+        #1. shape
         if shape_param is None:
             pass
         else:
             self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
 
-        self.pose_param = [torch.zeros(1, 9) for _ in range(5)]
-        for param in self.pose_param:
-            param.requires_grad = False
-        self.rot_param = torch.tensor([[0, 0, 0]], dtype=torch.float32)
-        self.rot_param.requires_grad = False
-        self.trans_param = torch.zeros(1, 3)+1e-9
-        self.trans_param.requires_grad = False
-        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
+        #2. root translation
+        self.root_trans = torch.zeros(1, 3)
+        
+        #3. root, 15 joints
+        self.joint_rot = [torch.eye(3).view(1, 1, 3, 3)+1e-9 for _ in range(16)]
+        
+        self.optimize_param = [self.root_trans] + self.joint_rot
         self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
         
         self.update_mano()
@@ -132,52 +113,199 @@ class HandModel:
         self.root_delta = self.joints.cpu().detach()[0, 0]
         self.reset_target()
         
-        self.optimize_state = 'none'
+        self.optimize_state = LabelingMode.STATIC
+        self.optimize_idx = self._IDX_OF_HANDS
+        self.optimize_target = 'none'
         self.active_joints = None
         self.contorl_joint = None
         self.control_idx = -1
     
-    def reset_pose(self):
-        if self.optimize_state=='whole':
-            self.pose_param = [torch.zeros(1, 9) for _ in range(5)]
-            for param in self.pose_param:
-                param.requires_grad = True
+    #region mano model
+    def update_mano(self):
+        pose_param = torch.concat(self.joint_rot, dim=1)
+        verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
+                                        th_betas=self.shape_param,
+                                        th_trans=self.root_trans)
+        self.verts = verts / 1000
+        self.joints = joints / 1000
+        self.faces = self.mano_layer.th_faces
+    
+    def _get_control_joint_param_idx(self):
+        if self.optimize_target=='root':
+            target_idx = 0
         else:
-            if self.optimize_state=='thumb' or (self.optimize_state=='tips' and self.control_idx==0):
-                target_idx = self._ORDER_OF_PARAM['thumb']
-            elif self.optimize_state=='fore' or (self.optimize_state=='tips' and self.control_idx==1):
-                target_idx = self._ORDER_OF_PARAM['fore']
-            elif self.optimize_state=='middle' or (self.optimize_state=='tips' and self.control_idx==2):
-                target_idx = self._ORDER_OF_PARAM['middle']
-            elif self.optimize_state=='ring' or (self.optimize_state=='tips' and self.control_idx==3):
-                target_idx = self._ORDER_OF_PARAM['ring']
-            elif self.optimize_state=='little' or (self.optimize_state=='tips' and self.control_idx==4):
-                target_idx = self._ORDER_OF_PARAM['little']
-            self.pose_param[target_idx] = torch.zeros(1, 9)
-            self.pose_param[target_idx].requires_grad = True
+            target_idx = 1
+            if self.optimize_target=='thumb':
+                target_idx += self._ORDER_OF_PARAM['thumb']*3+self.control_idx
+            elif self.optimize_target=='fore':
+                target_idx += self._ORDER_OF_PARAM['fore']*3+self.control_idx
+            elif self.optimize_target=='middle':
+                target_idx += self._ORDER_OF_PARAM['middle']*3+self.control_idx
+            elif self.optimize_target=='ring':
+                target_idx += self._ORDER_OF_PARAM['ring']*3+self.control_idx
+            elif self.optimize_target=='little':
+                target_idx += self._ORDER_OF_PARAM['little']*3+self.control_idx
+            else:
+                raise NotImplementedError
+        return target_idx
+    def _get_control_joint_idx(self):
+        return self.optimize_idx[self.optimize_target][self.control_idx]
+    def get_control_joint_name(self):
+        name = ""
+        if self.side == 'right':
+            name += "오른손 "
+        else:
+            name += "왼손 "
+        if self.optimize_target=='root':
+            name += "손목"
+        elif self.optimize_target=='tips':
+            name += "손끝"
+        elif self.optimize_target=='thumb':
+            name += "엄지"
+        elif self.optimize_target=='fore':
+            name += "검지"
+        elif self.optimize_target=='middle':
+            name += "중지"
+        elif self.optimize_target=='ring':
+            name += "약지"
+        elif self.optimize_target=='little':
+            name += "소지"
         
-        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
-        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
+        return name
+
+    def reset_pose(self):
+        if self.optimize_state==LabelingMode.OPTIMIZE:
+            optimize_param = []
+            for target_idx in [self._ORDER_OF_PARAM['thumb']*3+i+1 for i in range(3)]:
+                self.joint_rot[target_idx] = torch.eye(3).view(1, 1, 3, 3) + 1e-9
+                self.joint_rot[target_idx].requires_grad = True
+                optimize_param.append(self.joint_rot[target_idx])
+            self.optimizer = optim.Adam(optimize_param, lr=self.learning_rate)
+            self.update_mano()
+        else:
+            target_idx = self._get_control_joint_param_idx()
+            self.joint_rot[target_idx] = torch.eye(3).view(1, 1, 3, 3) + 1e-9
+            self.update_mano()    
+    
+    def get_control_rotation(self):
+        target_idx = self._get_control_joint_param_idx()
+        return self.joint_rot[target_idx].detach()[0, 0, :]
+    def set_control_rotation(self, rot_mat):
+        assert (self.optimize_state==LabelingMode.STATIC or self.optimize_target=='root'), "error on set_control_rotation"
+        target_idx = self._get_control_joint_param_idx()
+        if self.optimize_state==LabelingMode.OPTIMIZE and self.optimize_target=='root':
+            self.joint_rot[0].requires_grad = False
+            self.joint_rot[0][0, 0, :] = rot_mat
+            self.joint_rot[0].requires_grad = True
+            self.update_mano()
+            self.reset_target()
+        else:    
+            self.joint_rot[target_idx][0, 0, :] = rot_mat
+            self.update_mano()
+    
+    def get_control_position(self):
+        target_idx = self._get_control_joint_idx()
+        if self.optimize_state==LabelingMode.STATIC:
+            return self.joints.detach()[0, target_idx]
+        else:
+            return self.targets.detach()[0, target_idx]
+    def set_control_position(self, xyz):
+        assert (self.optimize_state==LabelingMode.OPTIMIZE or self.optimize_target=='root'), "error on set_control_position"
+        if self.contorl_joint is None:
+            return False
+        
+        if self.optimize_target == 'root':
+            self.set_root_position(xyz)
+            self.reset_target()
+        else:
+            joints = self.get_target()
+            joints[self.contorl_joint] = torch.Tensor(xyz)
+            self.set_target(joints)
+        return True
+
+    def get_root_position(self):
+        return self.root_trans[0, :] + self.root_delta
+    def set_root_position(self, xyz):
+        self.root_trans = torch.Tensor(xyz).unsqueeze(0) - self.root_delta
         self.update_mano()
     
-    def reset_root_rot(self):
-        self.rot_param = torch.tensor([[0, 0, 0]], dtype=torch.float32)
-        self.rot_param.requires_grad = True
-        if self.optimize_state == 'root':
-            self.rot_param.requires_grad = False
-        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
-        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
+    def get_optimize_state(self):
+        return self.optimize_state
+    def set_optimize_state(self, state):
+        self.optimize_state = state
+        self.reset_target()
+        if self.optimize_state==LabelingMode.OPTIMIZE:
+            self.optimize_idx = self._IDX_OF_GUIDE
+            self.set_optimize_target('root')
+            for param in self.joint_rot:
+                param.requires_grad = True
+            self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
+            self.update_mano()
+        elif self.optimize_state==LabelingMode.STATIC:
+            self.optimize_idx = self._IDX_OF_HANDS
+            self.set_optimize_target('root')
+            for param in self.joint_rot:
+                param.requires_grad = False
+            self.optimizer = None
+        else:
+            raise NotImplementedError
+
+    def get_optimize_target(self):
+        return self.optimize_target
+    def set_optimize_target(self, target):
+        self.optimize_target = target
+        for param in self.joint_rot:
+            param.requires_grad = False
+        self.active_joints = self.optimize_idx[self.optimize_target]
+        optimize_param = []
+        self.control_idx = 0
+        self.contorl_joint = self.active_joints[0]
+    
+    def set_control_joint(self, idx):
+        assert len(self.active_joints) > 0, "set_control_joint error"
+        idx = np.clip(idx, 0, len(self.active_joints)-1) 
+        self.control_idx = idx
+        self.contorl_joint = self.active_joints[idx]
+        
+    #region save and load state
+    def get_state(self):
+        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 16, 3, 3
+        return {
+            'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
+            'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 16, 3, 3
+            'root_trans': np.array(self.root_trans.cpu().detach()[0, :]),
+            'root_delta': np.array(self.root_delta),
+            
+            'joints': np.array(self.joints.cpu().detach()[0, :]),
+            'verts': np.array(self.verts.cpu().detach()[0, :]),
+            'faces': np.array(self.faces.cpu().detach()[0, :])
+        }
+    def set_state(self, state):
+        self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
+        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 16, 3, 3
+        assert pose_param.dim() == 4
+        self.joint_rot = [pose_param[:, i:i+1] for i in range(16)]
+        self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
+        self.root_delta = torch.Tensor(state['root_delta'])
+
         self.update_mano()
         
-    def reset_root_trans(self):
-        self.trans_param = torch.zeros(1, 3)+1e-9
-        # self.trans_param.requires_grad = True
-        if self.optimize_state == 'root':
-            self.trans_param.requires_grad = False
-        self.optimize_param = [self.rot_param, self.trans_param] + self.pose_param
-        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
-        self.update_mano()
+        self.optimize_state = LabelingMode.STATIC
+        self.optimize_idx = self._IDX_OF_HANDS
+        self.optimize_target = 'none'
+        self.active_joints = None
+        self.contorl_joint = None
+        self.control_idx = -1
+    def get_hand_pose(self):
+        pose = np.array(self.joints.cpu().detach()[0, :])
+        return pose.tolist()
+    def get_hand_shape(self):
+        shape = np.array(self.shape_param.cpu().detach()[0, :])
+        return shape.tolist()
+    #endregion
+
     
+    #region joint guide 
     def reset_target(self):
         self.targets = torch.empty_like(self.joints).copy_(self.joints)
         self._target_changed = False
@@ -192,15 +320,6 @@ class HandModel:
             loss.backward()
             self.optimizer.step()
     
-    def update_mano(self):
-        pose_param = torch.concat((self.rot_param,*self.pose_param), dim=1)
-        verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
-                                        th_betas=self.shape_param,
-                                        th_trans=self.trans_param)
-        self.verts = verts / 1000
-        self.joints = joints / 1000
-        self.faces = self.mano_layer.th_faces
-    
     def get_target(self):
         return self.targets.cpu().detach()[0, :]
     
@@ -210,123 +329,23 @@ class HandModel:
         self._target_changed = True
 
     def _mse_loss(self):
-        target_idx = self._IDX_OF_HANDS[self.optimize_state]
-        # if not 0 in target_idx:
-        #     target_idx.append(0)
-        # return torch.norm(self.targets[:, target_idx]-)
+        assert self.optimize_state==LabelingMode.OPTIMIZE
+        target_idx = self.optimize_idx[self.optimize_target]
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
     
     def set_learning_rate(self, lr):
         self.learning_rate = lr
         for g in self.optimizer.param_groups:
             g['lr'] = lr
+    #endregion
 
-    def get_control_joint_name(self):
-        name = ""
-        if self.side == 'right':
-            name += "오른손 "
-        else:
-            name += "왼손 "
-        
-        if self.optimize_state=='root':
-            name += "손목"
-        elif self.optimize_state=='tips':
-            name += "손끝"
-        elif self.optimize_state=='thumb':
-            name += "엄지"
-        elif self.optimize_state=='fore':
-            name += "검지"
-        elif self.optimize_state=='middle':
-            name += "중지"
-        elif self.optimize_state=='ring':
-            name += "약지"
-        elif self.optimize_state=='little':
-            name += "소지"
-        
-        return name
-        
-    def get_root_position(self):
-        return self.trans_param.cpu().detach()[0, :] + self.root_delta
-    def set_root_position(self, xyz):
-        self.trans_param = torch.Tensor(xyz).unsqueeze(0) - self.root_delta
-        self.trans_param.requires_grad = False
-        self.update_mano()
-        self.reset_target()
-    
-    def get_root_rotation(self):
-        return self.rot_param.cpu().detach()[0, :]
-    def set_root_rotation(self, xyz):
-        self.rot_param = torch.Tensor(xyz).unsqueeze(0)
-        self.rot_param.requires_grad = False
-        self.update_mano()
-        self.reset_target()
-
-    def get_optimize_state(self):
-        return self.optimize_state
-    
-    def set_optimize_state(self, state):
-        self.trans_param.requires_grad = False
-        self.rot_param.requires_grad = False
-        for param in self.pose_param:
-            param.requires_grad = False
-        
-        if state=='root':
-            pass
-        elif state=='whole':
-            for param in self.pose_param:
-                param.requires_grad = True
-        else:
-            self.pose_param[self._ORDER_OF_PARAM[state]].requires_grad = True
-        self.optimize_state = state
-        self.active_joints = self._IDX_OF_HANDS[self.optimize_state]
-        self.control_idx = 0
-        self.contorl_joint = self.active_joints[0]
-    
-    def set_control_joint(self, idx):
-        assert len(self.active_joints) > 0, "set_control_joint error"
-        idx = np.clip(idx, 0, len(self.active_joints)-1) 
-        self.control_idx = idx
-        self.contorl_joint = self.active_joints[idx]
-        
+    #region open3d geometry
     def get_geometry(self):
         return {
             "mesh": self._get_mesh(),
             "joint": self._get_joints(),
             "link": self._get_links()
         }
-
-    def move_control_joint(self, xyz):
-        if self.contorl_joint is None:
-            return False
-        
-        if self.optimize_state == 'root':
-            self.set_root_position(xyz)
-        else:
-            joints = self.get_target()
-            joints[self.contorl_joint] = torch.Tensor(xyz)
-            self.set_target(joints)
-
-        return True
-
-    def get_control_joint(self):
-        if self.optimize_state == 'root':
-            return self.get_root_position()
-        else:
-            joints = self.get_target()
-            return np.array(joints[self.contorl_joint])
-        
-    def get_target_geometry(self):
-        return {
-            "joint": self._get_target_joints(),
-            "link": self._get_target_links(),
-        }
-    def get_active_geometry(self):
-        return {
-            "joint": self._get_target_joints(self.active_joints),
-            "link": None,
-            "control": self._get_target_joints([self.contorl_joint])
-        }
-    
     def _get_mesh(self):
         verts = self.verts.cpu().detach()[0, :]
         faces = self.faces.cpu().detach()
@@ -336,13 +355,14 @@ class HandModel:
         lineset = o3d.geometry.LineSet.create_from_triangle_mesh(tri_mesh)
         
         return lineset
-    
-    def _get_joints(self):
-        joints = self.joints.cpu().detach()[0, :]
+    def _get_joints(self, idx=None):
+        if idx is None:
+            joints = self.joints.detach()[0, :]
+        else:
+            joints = self.joints.detach()[0, idx]
         joints = o3d.utility.Vector3dVector(joints)
         pcd = o3d.geometry.PointCloud(points=joints)
         return pcd
-    
     def _get_links(self):
         joints = self.joints.cpu().detach()[0, :]
         joints = o3d.utility.Vector3dVector(joints)
@@ -351,6 +371,11 @@ class HandModel:
         
         return lineset
 
+    def get_target_geometry(self):
+        return {
+            "joint": self._get_target_joints(),
+            "link": self._get_target_links(),
+        }
     def _get_target_joints(self, idx=None):
         if idx is None:
             joints = self.targets.cpu().detach()[0, :]
@@ -368,54 +393,21 @@ class HandModel:
         
         return lineset
 
-    def get_state(self):
-        pose_param = torch.concat(self.pose_param, dim=1)
-        return {
-            'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
-            'pose_param': np.array(pose_param.cpu().detach()[0, :]),
-            'rot_param': np.array(self.rot_param.cpu().detach()[0, :]),
-            'trans_param': np.array(self.trans_param.cpu().detach()[0, :]),
-            'root_delta': np.array(self.root_delta),
-            
-            'joints': np.array(self.joints.cpu().detach()[0, :]),
-            'verts': np.array(self.verts.cpu().detach()[0, :]),
-            'faces': np.array(self.faces.cpu().detach()[0, :])
+    def get_active_geometry(self):
+        if self.optimize_state==LabelingMode.OPTIMIZE:
+            return {
+            "joint": self._get_target_joints(self.active_joints),
+            "control": self._get_target_joints([self.contorl_joint])
         }
-
-    def set_state(self, state):
-        self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
-        self.pose_param = []
-        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0)
-        for i in range(5):
-            param = pose_param[:, i*9:(i+1)*9]
-            param.requires_grad = False
-            self.pose_param.append(param)
-        self.rot_param = torch.Tensor(state['rot_param']).unsqueeze(0)
-        self.rot_param.requires_grad = False
-        self.trans_param = torch.Tensor(state['trans_param']).unsqueeze(0)
-        self.trans_param.requires_grad = False
-        self.root_delta = torch.Tensor(state['root_delta'])
-        
-        self.optimize_param = [self.rot_param, self.trans_param]+self.pose_param
-        self.optimizer = optim.Adam(self.optimize_param, lr=self.learning_rate)
-
-        self.update_mano()
-        self.reset_target()
-        
-        self.optimize_state = 'none'
-        self.active_joints = None
-        self.contorl_joint = None
-        self.control_idx = -1
-
-    def get_hand_pose(self):
-        pose = torch.concat((self.rot_param, *self.pose_param, self.trans_param), dim=1)
-        # pose = np.array(pose.cpu().detach()[0, :])
-        pose = np.array(self.targets.cpu().detach()[0, :])
-        return pose.tolist()
+        elif self.optimize_state==LabelingMode.STATIC:
+            return {
+            "control": self._get_joints([self.contorl_joint])
+        }
+        else:
+            raise NotImplementedError
     
-    def get_hand_shape(self):
-        shape = np.array(self.shape_param.cpu().detach()[0, :])
-        return shape.tolist()
+    #endregion
+    
     
 class Camera:
     # DexYCB Toolkit
@@ -442,41 +434,7 @@ class Camera:
         self._R_inv = torch.inverse(self._R)
         self._t_inv = torch.mv(self._R_inv, self._t)
               
-class DexYCBDataset:
-    # DexYCB Toolkit
-    # Copyright (C) 2021 NVIDIA Corporation
-    # Licensed under the GNU General Public License v3.0 [see LICENSE for details]
-
-    def __init__(self, data_root):
-        # Total Data Statics
-        self._data_dir = data_root
-        self._calib_dir = os.path.join(self._data_dir, "calibration")
-    
-        self._h = 480
-        self._w = 640
-
-        self._subjects = DexYCB._SUBJECTS
-        self._total_scene = []
-        self._scene_meta = {}
-        for sub in self._subjects:
-            # for each subject 100 sequence for dex-ycb
-            seq = sorted(os.listdir(os.path.join(self._data_dir, sub)))
-            self._scene_meta[sub] = {s: {} for s in seq}
-            # for each seq
-            for s in seq:
-                meta_file = os.path.join(self._data_dir, sub, s, "meta.yml")
-                with open(meta_file, 'r') as f:
-                    meta = yaml.load(f, Loader=yaml.FullLoader)
-                self._scene_meta[sub][s] = meta
-                self._total_scene.append((sub, s))
-        
-        self.print_dataset_info()
-        self.hand_models = {
-            "right": HandModel(side='right'),
-            "left": HandModel(side='left')
-        }
-        self.current_scene_idx = -1
-        
+class Dataset:
     def print_dataset_info(self):
         total_sub = 0
         total_scene = 0
@@ -566,16 +524,6 @@ class DexYCBDataset:
         subject_dir = str(Path(scene_dir).parent)
         dataset_dir = str(Path(subject_dir).parent)
         return self._data_dir == dataset_dir
-    
-    @staticmethod
-    def load_dataset_from_file(file_path):
-        # initialize dataset directory # same as dex-ycb
-        camera_dir = str(Path(file_path).parent)
-        scene_dir = str(Path(camera_dir).parent)
-        subject_dir = str(Path(scene_dir).parent)
-        dataset_dir = str(Path(subject_dir).parent)
-        
-        return DexYCBDataset(dataset_dir)
 
     @staticmethod
     def path_to_info(file_path):
@@ -589,6 +537,68 @@ class DexYCBDataset:
         subject_id = basename(subject_dir)
 
         return subject_id, scene_id, camera_id, frame_id
+
+class DexYCBSample(Dataset):
+    """Dex-YCB"""
+    _SUBJECTS = [
+        '20200709-subject-01',
+        '20200813-subject-02',
+        '20200820-subject-03',
+        '20200903-subject-04',
+        '20200908-subject-05',
+    ]
+    _SERIALS = [
+        '836212060125',
+        '839512060362',
+        '840412060917',
+        '841412060263',
+        '932122060857',
+        '932122060861',
+        '932122061900',
+        '932122062010',
+    ]
+    def __init__(self, data_root):
+        # Total Data Statics
+        self._data_dir = data_root
+        self._calib_dir = os.path.join(self._data_dir, "calibration")
+    
+        self._h = 480
+        self._w = 640
+        self._subjects = self._SUBJECTS
+        self._total_scene = []
+        self._scene_meta = {}
+        for sub in self._subjects:
+            # for each subject 100 sequence for dex-ycb
+            seq = sorted(os.listdir(os.path.join(self._data_dir, sub)))
+            self._scene_meta[sub] = {s: {} for s in seq}
+            # for each seq
+            for s in seq:
+                meta_file = os.path.join(self._data_dir, sub, s, "meta.yml")
+                with open(meta_file, 'r') as f:
+                    meta = yaml.load(f, Loader=yaml.FullLoader)
+                self._scene_meta[sub][s] = meta
+                self._total_scene.append((sub, s))
+        
+        self.print_dataset_info()
+        self.hand_models = {
+            "right": HandModel(side='right'),
+            "left": HandModel(side='left')
+        }
+        self.current_scene_idx = -1
+
+def load_dataset_from_file(file_path):
+    # initialize dataset directory # same as dex-ycb
+    camera_dir = str(Path(file_path).parent)
+    scene_dir = str(Path(camera_dir).parent)
+    subject_dir = str(Path(scene_dir).parent)
+    dataset_dir = str(Path(subject_dir).parent)
+    
+    if basename(dataset_dir)=='dex-ycb-sample':
+        return DexYCBSample(dataset_dir)
+    else:
+        raise NotImplementedError
+
+
 
 class Scene:
     
@@ -828,7 +838,7 @@ class AppWindow:
         self.dataset = None
         self.annotation_scene = None
         
-        self._labeling_stage = LabelingStage.LOADING
+        self._labeling_mode = LabelingMode.STATIC
         self._hands = None
         self._active_hand = None
         self.upscale_responsiveness = False
@@ -989,13 +999,13 @@ class AppWindow:
         try:
             # if already initialized
             if self.dataset is None:
-                self.dataset = DexYCBDataset.load_dataset_from_file(file_path)
+                self.dataset = load_dataset_from_file(file_path)
             else:
                 if self.dataset.check_same_data(file_path):
                     pass
                 else:
                     del self.dataset
-                    self.dataset = DexYCBDataset.load_dataset_from_file(file_path)
+                    self.dataset = load_dataset_from_file(file_path)
             if self.annotation_scene is None:
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
             else:
@@ -1188,44 +1198,33 @@ class AppWindow:
     # labeling stage edit
     def _init_stageedit_layout(self):
         em = self.window.theme.font_size
-        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택 (F1, F2, F3)", 0.33*em,
+        stageedit_layout = gui.CollapsableVert("라벨링 단계 선택 (F1, F2)", 0.33*em,
                                                   gui.Margins(0.25*em, 0, 0, 0))
         stageedit_layout.set_is_open(True)
         self._current_stage_str = gui.Label("현재 상태: 준비중")
         stageedit_layout.add_child(self._current_stage_str)
         
-        button = gui.Button(LabelingStage.ROOT)
-        button.set_on_clicked(self._on_translation_stage)
+        button = gui.Button(LabelingMode.STATIC)
+        button.set_on_clicked(self._on_static_mode)
         stageedit_layout.add_child(button)
         
-        button = gui.Button(LabelingStage.HAND_DETAIL)
-        button.set_on_clicked(self._on_hand_detail_stage)
+        button = gui.Button(LabelingMode.OPTIMIZE)
+        button.set_on_clicked(self._on_optimize_mode)
         stageedit_layout.add_child(button)
-        
-        button = gui.Button(LabelingStage.HAND_WHOLE)
-        button.set_on_clicked(self._on_hand_whole_stage)
-        stageedit_layout.add_child(button)
-        
+
         self._settings_panel.add_child(stageedit_layout)
 
-    def _on_translation_stage(self):
-        self._convert_stage(LabelingStage.ROOT)
-    def _on_hand_detail_stage(self):
-        self._convert_stage(LabelingStage.HAND_DETAIL)
-    def _on_hand_whole_stage(self):
-        self._convert_stage(LabelingStage.HAND_WHOLE)
-    def _convert_stage(self, labeling_stage):
+    def _on_static_mode(self):
+        self._convert_mode(LabelingMode.STATIC)
+    def _on_optimize_mode(self):
+        self._convert_mode(LabelingMode.OPTIMIZE)
+    def _convert_mode(self, labeling_mode):
         if self._hands is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_stage)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_mode)")
             return 
-        self._labeling_stage = labeling_stage
-        self._current_stage_str.text = "현재 상태: {}".format(self._labeling_stage)
-        if labeling_stage==LabelingStage.ROOT:
-            self._active_hand.set_optimize_state('root')
-        elif labeling_stage==LabelingStage.HAND_DETAIL:
-            self._active_hand.set_optimize_state('thumb')
-        elif labeling_stage==LabelingStage.HAND_WHOLE:
-            self._active_hand.set_optimize_state('whole')
+        self._labeling_mode = labeling_mode
+        self._current_stage_str.text = "현재 상태: {}".format(self._labeling_mode)
+        self._active_hand.set_optimize_state(labeling_mode)
         self._update_target_hand()
         
     # labeling hand edit
@@ -1269,10 +1268,15 @@ class AppWindow:
             else:
                 self._set_geometry_material(self._left_hand_mesh_name, self.settings.hand_mesh_material)
         
+        if self._check_geometry(self._target_joint_name):
+            self._remove_geometry(self._target_joint_name)
+        if self._check_geometry(self._target_link_name):
+            self._remove_geometry(self._target_link_name)
+        if self._check_geometry(self._active_joint_name):
+            self._remove_geometry(self._active_joint_name)
+            
         self._active_hand = self._hands[active_side]
-        self._convert_stage(self._labeling_stage)
-        
-        self._update_target_hand()
+        self._convert_mode(LabelingMode.STATIC)
 
     def _init_scene_control_layout(self):
         em = self.window.theme.font_size
@@ -1375,17 +1379,8 @@ class AppWindow:
             self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
             self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
     
-        target_geo = self._active_hand.get_target_geometry()
-        self._add_geometry(self._target_joint_name, 
-                           target_geo['joint'], self.settings.target_joint_material)
-        self._add_geometry(self._target_link_name, 
-                           target_geo['link'], self.settings.target_link_material)
-
-        self._convert_stage(LabelingStage.ROOT)
-        
+        self._convert_mode(LabelingMode.STATIC)
         active_geo = self._active_hand.get_active_geometry()
-        self._add_geometry(self._active_joint_name, 
-                           active_geo['joint'], self.settings.active_target_joint_material)
         self._add_geometry(self._control_joint_name, 
                            active_geo['control'], self.settings.control_target_joint_material)
         self.control_joint_geo = active_geo['control']
@@ -1526,9 +1521,8 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
         transform = np.eye(4)
-        current_xyz = self._active_hand.get_root_rotation()
-        transform[:3, :3] = Rotation.from_rotvec(current_xyz).as_matrix()
-        transform[:3, 3] = self._active_hand.get_control_joint().T
+        transform[:3, :3] = self._active_hand.get_control_rotation()
+        transform[:3, 3] = self._active_hand.get_control_position().T
         coord_frame.transform(transform)
         
         self.coord_labels = []
@@ -1590,42 +1584,49 @@ class AppWindow:
         self.window.set_needs_layout()
         self._last_change = time.time()
         if x != 0 or y != 0 or z != 0:
-            current_xyz = self._active_hand.get_control_joint()
+            current_xyz = self._active_hand.get_control_position()
             # convert x, y, z cam to world
             R = self._scene.scene.camera.get_view_matrix()[:3,:3]
             R_inv = np.linalg.inv(R)
             xyz = np.dot(R_inv, np.array([x, y, z]))
             xyz = current_xyz + xyz
-            self._active_hand.move_control_joint(xyz)
+            self._move_control_joint(xyz)
         else:
-            current_xyz = self._active_hand.get_root_rotation()
-            r = Rotation.from_rotvec(current_xyz)
-            current_rot_mat = r.as_matrix()
+            current_rot = self._active_hand.get_control_rotation()
             rot_mat = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
-            r = Rotation.from_matrix(np.matmul(current_rot_mat, rot_mat))
-            xyz = r.as_rotvec()
-            self._active_hand.set_root_rotation(xyz)
-        
+            target_rot = np.matmul(current_rot, rot_mat)
+            self._active_hand.set_control_rotation(target_rot)
         self._update_activate_hand()
         self._update_target_hand()
     def _move_control_joint(self, xyz):
         self._annotation_changed = True
-        self._active_hand.move_control_joint(xyz)
+        self._active_hand.set_control_position(xyz)
         self._update_activate_hand()
         self._update_target_hand()
     def _update_target_hand(self):
-        target_geo = self._active_hand.get_target_geometry()
-        self._add_geometry(self._target_joint_name, 
-                           target_geo['joint'], self.settings.target_joint_material)
-        self._add_geometry(self._target_link_name, 
-                           target_geo['link'], self.settings.target_link_material)
-        
-        active_geo = self._active_hand.get_active_geometry()
-        self._add_geometry(self._active_joint_name, 
-                           active_geo['joint'], self.settings.active_target_joint_material)
-        self._add_geometry(self._control_joint_name, 
-                           active_geo['control'], self.settings.control_target_joint_material)
-        self.control_joint_geo = active_geo['control']
+        if self._labeling_mode==LabelingMode.OPTIMIZE:
+            target_geo = self._active_hand.get_target_geometry()
+            self._add_geometry(self._target_joint_name, 
+                            target_geo['joint'], self.settings.target_joint_material)
+            self._add_geometry(self._target_link_name, 
+                            target_geo['link'], self.settings.target_link_material)
+            active_geo = self._active_hand.get_active_geometry()
+            self._add_geometry(self._active_joint_name, 
+                            active_geo['joint'], self.settings.active_target_joint_material)
+            self._add_geometry(self._control_joint_name, 
+                            active_geo['control'], self.settings.control_target_joint_material)
+            self.control_joint_geo = active_geo['control']
+        else:
+            if self._check_geometry(self._target_joint_name):
+                self._remove_geometry(self._target_joint_name)
+            if self._check_geometry(self._target_link_name):
+                self._remove_geometry(self._target_link_name)
+            if self._check_geometry(self._active_joint_name):
+                self._remove_geometry(self._active_joint_name)
+            active_geo = self._active_hand.get_active_geometry()
+            self._add_geometry(self._control_joint_name, 
+                            active_geo['control'], self.settings.control_target_joint_material)
+            self.control_joint_geo = active_geo['control']
     def _update_activate_hand(self):
         if self.settings.show_hand:
             hand_geo = self._active_hand.get_geometry()
@@ -1667,15 +1668,28 @@ class AppWindow:
         self.window.set_needs_layout()
         self._last_change = time.time()
         self._active_hand.optimize_to_target()
+        self._update_target_hand()
         self._update_activate_hand()
     def _on_key(self, event):
-        if self._labeling_stage == LabelingStage.LOADING:
-            return gui.Widget.EventCallbackResult.IGNORED
-        
+        # save label
         if event.key==gui.KeyName.F and event.type==gui.KeyEvent.DOWN:
             self._on_save_label()
-            return gui.Widget.EventCallbackResult.HANDLED
+            return gui.Widget.EventCallbackResult.CONSUMED
         
+        # convert hand
+        if (event.key == gui.KeyName.TAB) and (event.type==gui.KeyEvent.DOWN):
+            self._convert_hand()
+            return gui.Widget.EventCallbackResult.CONSUMED
+        
+        # mode change
+        if event.key == gui.KeyName.F1:
+            self._convert_mode(LabelingMode.STATIC)
+            return gui.Widget.EventCallbackResult.CONSUMED
+        elif event.key == gui.KeyName.F2:
+            self._convert_mode(LabelingMode.OPTIMIZE)
+            return gui.Widget.EventCallbackResult.CONSUMED
+            
+        # if shift pressed then rotation else translation
         if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
@@ -1699,65 +1713,54 @@ class AppWindow:
                     self.upscale_responsiveness = False
             return gui.Widget.EventCallbackResult.HANDLED
         
-        # optimze
-        if event.key == gui.KeyName.SPACE:
-            if self._active_hand is None:
-                pass
-            if not self._labeling_stage == LabelingStage.ROOT:
+        # convert finger
+        if event.key == gui.KeyName.BACKTICK:
+            self._active_hand.set_optimize_target('root')
+        elif event.key == gui.KeyName.ONE:
+            self._active_hand.set_optimize_target('thumb')
+        elif event.key == gui.KeyName.TWO:
+            self._active_hand.set_optimize_target('fore')
+        elif event.key == gui.KeyName.THREE:
+            self._active_hand.set_optimize_target('middle')
+        elif event.key == gui.KeyName.FOUR:
+            self._active_hand.set_optimize_target('ring')
+        elif event.key == gui.KeyName.FIVE:
+            self._active_hand.set_optimize_target('little')
+        
+        # convert joint
+        if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
+            ctrl_idx = self._active_hand.control_idx + 1
+            self._active_hand.set_control_joint(ctrl_idx)
+        elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
+            ctrl_idx = self._active_hand.control_idx - 1
+            self._active_hand.set_control_joint(ctrl_idx)
+        self._update_target_hand()
+        
+        if self._labeling_mode==LabelingMode.OPTIMIZE:
+            # optimze
+            if event.key == gui.KeyName.SPACE:
+                if self._active_hand is None:
+                    pass
                 self._on_optimize()
+                return gui.Widget.EventCallbackResult.CONSUMED
             
-        # reset hand pose
-        elif event.key == gui.KeyName.R:
-            if self._labeling_stage==LabelingStage.ROOT:
-                self._active_hand.reset_root_rot()
-            else:
+            # reset hand pose
+            elif event.key == gui.KeyName.R:
                 self._active_hand.reset_pose()
-            self._update_activate_hand()
-            self._update_target_hand()
-        
-        # reset guide pose
-        elif event.key == gui.KeyName.HOME:
-            self._active_hand.reset_target()
-            self._update_target_hand()
-        
-        # convert hand
-        elif (event.key == gui.KeyName.TAB) and (event.type==gui.KeyEvent.DOWN):
-            self._convert_hand()
-        
-        # stage change
-        elif event.key == gui.KeyName.F1:
-            self._convert_stage(LabelingStage.ROOT)
-        elif event.key == gui.KeyName.F2:
-            self._convert_stage(LabelingStage.HAND_DETAIL)
-        elif event.key == gui.KeyName.F3:
-            self._convert_stage(LabelingStage.HAND_WHOLE)
-
-        # change control joint
-        if self._labeling_stage==LabelingStage.HAND_DETAIL:
-            # convert finger
-            if event.key == gui.KeyName.ONE:
-                self._active_hand.set_optimize_state('thumb')
-            elif event.key == gui.KeyName.TWO:
-                self._active_hand.set_optimize_state('fore')
-            elif event.key == gui.KeyName.THREE:
-                self._active_hand.set_optimize_state('middle')
-            elif event.key == gui.KeyName.FOUR:
-                self._active_hand.set_optimize_state('ring')
-            elif event.key == gui.KeyName.FIVE:
-                self._active_hand.set_optimize_state('little')
+                self._update_activate_hand()
+                self._update_target_hand()
+                return gui.Widget.EventCallbackResult.CONSUMED
             
-            # convert joint
-            if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
-                ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
-                ctrl_idx = self._active_hand.control_idx - 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            self._update_target_hand()
-        
+            # reset guide pose
+            elif event.key == gui.KeyName.HOME:
+                self._active_hand.reset_target()
+                self._update_target_hand()
+                return gui.Widget.EventCallbackResult.CONSUMED
+            
         # Translation
         if event.type!=gui.KeyEvent.UP:
-            if not self._left_shift_modifier:
+            if not self._left_shift_modifier and \
+                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root'):
                 if event.key == gui.KeyName.D:
                     self.move( self.dist, 0, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.A:
@@ -1771,22 +1774,22 @@ class AppWindow:
                 elif event.key == gui.KeyName.E:
                     self.move( 0, 0, -self.dist, 0, 0, 0)
             # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
-            else:
-                if self._labeling_stage==LabelingStage.ROOT:
-                    self._remove_hand_frame()
-                    self._add_hand_frame()
-                    if event.key == gui.KeyName.E:
-                        self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
-                    elif event.key == gui.KeyName.Q:
-                        self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
-                    elif event.key == gui.KeyName.A:
-                        self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
-                    elif event.key == gui.KeyName.D:
-                        self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
-                    elif event.key == gui.KeyName.S:
-                        self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
-                    elif event.key == gui.KeyName.W:
-                        self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
+            elif self._left_shift_modifier and \
+                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
+                self._remove_hand_frame()
+                self._add_hand_frame()
+                if event.key == gui.KeyName.E:
+                    self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
+                elif event.key == gui.KeyName.Q:
+                    self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
+                elif event.key == gui.KeyName.A:
+                    self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
+                elif event.key == gui.KeyName.D:
+                    self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
+                elif event.key == gui.KeyName.S:
+                    self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
+                elif event.key == gui.KeyName.W:
+                    self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.IGNORED
     def _on_tick(self):
@@ -1799,7 +1802,7 @@ class AppWindow:
                 self.window.set_needs_layout()
         
         if self._auto_optimize.checked and self._active_hand is not None:
-            if not self._labeling_stage == LabelingStage.ROOT:
+            if self._labeling_mode==LabelingMode.OPTIMIZE:
                 self._on_optimize()
         
         if self._auto_save.checked and self.annotation_scene is not None:
