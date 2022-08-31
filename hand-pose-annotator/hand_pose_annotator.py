@@ -5,9 +5,6 @@
 
 import os
 import sys
-from pathlib import Path
-from tkinter import Label
-from xml.dom.expatbuilder import ParseEscape
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import open3d as o3d
@@ -20,7 +17,7 @@ from torch import optim
 
 import numpy as np
 
-from os.path import basename 
+
 import yaml
 import time
 import json
@@ -59,11 +56,11 @@ class HandModel:
     _IDX_OF_GUIDE = {
         'none'   : [],
         'root'   : [0],
-        'thumb'  : [1,2,3,4],
-        'fore'   : [5,6,7,8],
-        'middle' : [9,10,11,12],
-        'ring'   : [13,14,15,16],
-        'little' : [17,18,19,20],
+        'thumb'  : [1,3,4],
+        'fore'   : [5,7,8],
+        'middle' : [9,11,12],
+        'ring'   : [13,15,16],
+        'little' : [17,19,20],
     }
     # finger name
     _FINGER_NAME = [
@@ -91,7 +88,33 @@ class HandModel:
         if shape_param is None:
             shape_param = torch.zeros(10)
         self.reset(shape_param)
-    
+        
+    def undo(self):
+        if len(self.undo_stack) > 0:
+            state = self.undo_stack.pop()
+            self.set_state(state, only_pose=True)
+            self.redo_stack.append(state)
+            return True
+        else:
+            return False
+    def redo(self):
+        if len(self.redo_stack) > 0:
+            state = self.redo_stack.pop()
+            self.set_state(state, only_pose=True)
+            self.undo_stack.append(state)
+            return True
+        else:
+            return False
+    def save_undo(self, forced=False):
+        if len(self.redo_stack) > 0:
+            self.redo_stack = []
+            self.undo_stack = []
+        if forced or ((time.time()-self._last_undo) > 1):
+            if len(self.undo_stack) > 1000:
+                self.undo_stack.pop(0)
+            self.undo_stack.append(self.get_state())
+            self._last_undo = time.time()
+        
     def reset(self, shape_param=None):
         #1. shape
         if shape_param is None:
@@ -115,6 +138,10 @@ class HandModel:
         self.active_joints = None
         self.contorl_joint = None
         self.control_idx = -1
+        self.undo_stack = []
+        self.redo_stack = []
+        self._last_undo = time.time()
+
     
     #region mano model
     def update_mano(self):
@@ -154,19 +181,25 @@ class HandModel:
             name += "왼손 "
         if self.optimize_target=='root':
             name += "손목"
-        elif self.optimize_target=='tips':
-            name += "손끝"
+            return name
         elif self.optimize_target=='thumb':
-            name += "엄지"
+            name += "엄지 "
         elif self.optimize_target=='fore':
-            name += "검지"
+            name += "검지 "
         elif self.optimize_target=='middle':
-            name += "중지"
+            name += "중지 "
         elif self.optimize_target=='ring':
-            name += "약지"
+            name += "약지 "
         elif self.optimize_target=='little':
-            name += "소지"
+            name += "소지 "
         
+        if self.control_idx==0:
+            name += "첫번째 관절"
+        elif self.control_idx==0:
+            name += "두번째 관절"
+        elif self.control_idx==0:
+            name += "세번째 관절"
+
         return name
 
     def reset_pose(self):
@@ -279,21 +312,31 @@ class HandModel:
             'verts': np.array(self.verts.cpu().detach()[0, :]),
             'faces': np.array(self.faces.cpu().detach()[0, :])
         }
-    def set_state(self, state):
-        self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
-        pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
-        self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
-        self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
-        self.root_delta = torch.Tensor(state['root_delta'])
+    def set_state(self, state, only_pose=False):
+        if only_pose:
+            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
+            self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
+            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
+            self.update_mano()
+        else:
+            self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
+            assert state['pose_param'].size==48
+            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
+            self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
+            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
+            self.root_delta = torch.Tensor(state['root_delta'])
 
-        self.update_mano()
-        
-        self.optimize_state = LabelingMode.STATIC
-        self.optimize_idx = self._IDX_OF_HANDS
-        self.optimize_target = 'none'
-        self.active_joints = None
-        self.contorl_joint = None
-        self.control_idx = -1
+            self.update_mano()
+            
+            self.optimize_state = LabelingMode.STATIC
+            self.optimize_idx = self._IDX_OF_HANDS
+            self.optimize_target = 'none'
+            self.active_joints = None
+            self.contorl_joint = None
+            self.control_idx = -1
+            self.undo_stack = []
+            self.redo_stack = []
+            self._last_undo = time.time()
     def get_hand_pose(self):
         pose = np.array(self.joints.cpu().detach()[0, :])
         return pose.tolist()
@@ -336,6 +379,8 @@ class HandModel:
     
     def set_learning_rate(self, lr):
         self.learning_rate = lr
+        if self.optimizer is None:
+            return
         for g in self.optimizer.param_groups:
             g['lr'] = lr
     #endregion
@@ -406,9 +451,6 @@ class HandModel:
         }
         else:
             raise NotImplementedError
-    
-    #endregion
-    
     
 class Camera:
     # DexYCB Toolkit
@@ -520,22 +562,22 @@ class Dataset:
         return os.path.join(scene_dir, frame_file)
         
     def check_same_data(self, file_path):
-        camera_dir = str(Path(file_path).parent)
-        scene_dir = str(Path(camera_dir).parent)
-        subject_dir = str(Path(scene_dir).parent)
-        dataset_dir = str(Path(subject_dir).parent)
+        camera_dir = os.path.dirname(file_path)
+        scene_dir = os.path.dirname(camera_dir)
+        subject_dir = os.path.dirname(scene_dir)
+        dataset_dir = os.path.dirname(subject_dir)
         return self._data_dir == dataset_dir
 
     @staticmethod
     def path_to_info(file_path):
-        camera_dir = str(Path(file_path).parent)
-        scene_dir = str(Path(camera_dir).parent)
-        subject_dir = str(Path(scene_dir).parent)
+        camera_dir = os.path.dirname(file_path)
+        scene_dir = os.path.dirname(camera_dir)
+        subject_dir = os.path.dirname(scene_dir)
         
-        frame_id = int(os.path.splitext(basename(file_path))[0].split("_")[-1])
-        camera_id = basename(camera_dir)
-        scene_id = basename(scene_dir)
-        subject_id = basename(subject_dir)
+        frame_id = int(os.path.splitext(os.path.basename(file_path))[0].split("_")[-1])
+        camera_id = os.path.basename(camera_dir)
+        scene_id = os.path.basename(scene_dir)
+        subject_id = os.path.basename(subject_dir)
 
         return subject_id, scene_id, camera_id, frame_id
 
@@ -589,12 +631,12 @@ class DexYCBSample(Dataset):
 
 def load_dataset_from_file(file_path):
     # initialize dataset directory # same as dex-ycb
-    camera_dir = str(Path(file_path).parent)
-    scene_dir = str(Path(camera_dir).parent)
-    subject_dir = str(Path(scene_dir).parent)
-    dataset_dir = str(Path(subject_dir).parent)
+    camera_dir = os.path.dirname(file_path)
+    scene_dir = os.path.dirname(camera_dir)
+    subject_dir = os.path.dirname(scene_dir)
+    dataset_dir = os.path.dirname(subject_dir)
     
-    if basename(dataset_dir)=='dex-ycb-sample':
+    if os.path.basename(dataset_dir)=='dex-ycb-sample':
         return DexYCBSample(dataset_dir)
     else:
         raise NotImplementedError
@@ -622,7 +664,9 @@ class Scene:
         self._label_format = "hand_labels_{:06d}.npz"
         
         self._json_format = "labels_{:06d}.json"
-    
+        self._label = None
+        self._previous_label = None
+
     def _load_frame(self):
         try:
             pcd = self._load_point_cloud(self._frame_path)
@@ -691,6 +735,8 @@ class Scene:
         self._label = label
 
     def load_label(self):
+        if self._label is not None:
+            self._previous_label = self._label.copy()
         try:
             self._label = dict(np.load(self._label_path))
         except:
@@ -707,6 +753,22 @@ class Scene:
         for side, state in hand_states.items():
             self._hands[side].set_state(state)
         return True
+
+    def load_previous_label(self):
+        if self._previous_label is None:
+            return False
+        try:
+            hand_states = {}
+            for k, v in self._previous_label.items():
+                side = k.split('_')[0]
+                hand_states.setdefault(side, {})
+                param = k.replace(side + "_", "")
+                hand_states[side][param] = v
+            for side, state in hand_states.items():
+                self._hands[side].set_state(state, only_pose=True)
+            return True
+        except:
+            return False
 
     def save_json(self):
         json_path = os.path.join(self._scene_dir, self._json_format.format(self.frame_id))
@@ -888,7 +950,7 @@ class AppWindow:
         self._initialize_background()
         self._on_scene_point_size(5) # set default size to 1
         self._on_scene_transparency(0)
-        self._on_hand_point_size(5) # set default size to 5
+        self._on_hand_point_size(10) # set default size to 10
         self._on_hand_line_size(2) # set default size to 2
         self._on_responsiveness(5) # set default responsiveness to 5
         
@@ -921,6 +983,7 @@ class AppWindow:
     
     def _on_about_ok(self):
         self.window.close_dialog()
+        self.window.set_needs_layout()
     #endregion
     
     #region Layout and Callback
@@ -958,7 +1021,21 @@ class AppWindow:
         up = np.array([0, -1, 0])
         self._scene.look_at(center, eye, up)
         self._init_view_control()
-        
+    def _on_active_viewpoint(self):
+        if self.bounds is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
+            return
+        self._log.text = "\t 조작중인 객체 시점으로 이동합니다."
+        self.window.set_needs_layout()
+        center = np.array([0, 0, 0])
+        self._scene.setup_camera(60, self.bounds, center)
+        eye_on = self._active_hand.get_control_position()
+        center = eye_on - 0.4* eye_on/np.linalg.norm(eye_on)
+        up = np.array([0, -1, 0])
+        self._scene.look_at(eye_on, center, up)
+        self._init_view_control()
+
+
     def _init_view_control(self):
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
@@ -1036,18 +1113,18 @@ class AppWindow:
         # self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
         # viewctrl_layout.add_child(self._show_coord_frame)
 
-        self._show_hands = gui.Checkbox("손 라벨 보기")
+        self._show_hands = gui.Checkbox("손 라벨 보기 (Z)")
         self._show_hands.set_on_checked(self._on_show_hand)
         viewctrl_layout.add_child(self._show_hands)
         self._show_hands.checked = True
 
+        self._auto_optimize = gui.Checkbox("자동 정렬 활성화 (X)")
+        viewctrl_layout.add_child(self._auto_optimize)
+        self._auto_optimize.checked = False
+
         self._auto_save = gui.Checkbox("자동 저장 활성화")
         viewctrl_layout.add_child(self._auto_save)
         self._auto_save.checked = True
-        
-        self._auto_optimize = gui.Checkbox("자동 정렬 활성화")
-        viewctrl_layout.add_child(self._auto_optimize)
-        self._auto_optimize.checked = False
         
         grid = gui.VGrid(2, 0.25 * em)
         self._scene_point_size = gui.Slider(gui.Slider.INT)
@@ -1188,9 +1265,9 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_optimize_rate)")
             return
         self._log.text = "\t 자동 정렬 민감도 값을 변경합니다."
+        self._active_hand.set_learning_rate(optimize_rate*1e-3)
         self.window.set_needs_layout()
         self._last_change = time.time()
-        self._active_hand.set_learning_rate(optimize_rate*1e-3)
         self._optimize_rate.double_value = optimize_rate
     def _on_auto_save_interval(self, interval):
         self._log.text = "\t 자동 저장 간격을 변경합니다."
@@ -1240,11 +1317,74 @@ class AppWindow:
         self._current_hand_str = gui.Label("현재 대상: 준비중")
         handedit_layout.add_child(self._current_hand_str)
         
-        button = gui.Button("손 바꾸기")
+        button = gui.Button("현재 대상 리셋 (R)")
+        button.set_on_clicked(self._reset_current_hand)
+        handedit_layout.add_child(button)
+
+        h = gui.Horiz(0.4 * em)
+        label = gui.Label("관절이동:")
+        h.add_child(label)
+        button = gui.Button("이전 (PgDn)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._control_joint_down)
+        h.add_child(button)
+        button = gui.Button("다음 (PgUp)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._control_joint_up)
+        h.add_child(button)
+        handedit_layout.add_child(h)
+
+        h = gui.Horiz(0.4 * em)
+        button = gui.Button("손목 (`)")
+        button.horizontal_padding_em = 0.8
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_root)
+        h.add_child(button)  
+        button = gui.Button("엄지 (1)")
+        button.horizontal_padding_em = 0.6
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_thumb)
+        h.add_child(button)
+        button = gui.Button("검지 (2)")
+        button.horizontal_padding_em = 0.6
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_fore)
+        h.add_child(button)
+        handedit_layout.add_child(h)
+
+        h = gui.Horiz(0.4 * em)
+        button = gui.Button("중지 (3)")
+        button.horizontal_padding_em = 0.6
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_middle)
+        h.add_child(button)
+        button = gui.Button("약지 (4)")
+        button.horizontal_padding_em = 0.6
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_ring)
+        h.add_child(button)
+        button = gui.Button("소지 (5)")
+        button.horizontal_padding_em = 0.6
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_little)
+        h.add_child(button)
+        handedit_layout.add_child(h)
+
+        button = gui.Button("손 바꾸기 (Tab)")
         button.set_on_clicked(self._convert_hand)
         handedit_layout.add_child(button)
         
         self._settings_panel.add_child(handedit_layout)
+
+    def _reset_current_hand(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _reset_current_hand)")
+            return 
+        self._active_hand.reset_pose()
+        self._update_activate_hand()
+        self._update_target_hand()
     def _convert_hand(self):
         if self._hands is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_hand)")
@@ -1252,12 +1392,9 @@ class AppWindow:
 
         self._is_right_hand = not self._is_right_hand
         if self._is_right_hand:
-            self._current_hand_str.text = "현재 대상: 오른손"
             active_side = 'right'
         else:
-            self._current_hand_str.text = "현재 대상: 왼손"
             active_side = 'left'
-        
         if self._check_geometry(self._right_hand_mesh_name):
             if active_side == 'right':
                 self._set_geometry_material(self._right_hand_mesh_name, self.settings.active_hand_mesh_material)
@@ -1278,6 +1415,47 @@ class AppWindow:
             
         self._active_hand = self._hands[active_side]
         self._convert_mode(LabelingMode.STATIC)
+        self._update_current_hand_str()
+    # convert finger
+    def _convert_to_root(self):
+        self._convert_finger('root')
+    def _convert_to_thumb(self):
+        self._convert_finger('thumb')
+    def _convert_to_fore(self):
+        self._convert_finger('fore')
+    def _convert_to_middle(self):
+        self._convert_finger('middle')
+    def _convert_to_ring(self):
+        self._convert_finger('ring')
+    def _convert_to_little(self):
+        self._convert_finger('little')
+    def _convert_finger(self, name):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_finger)")
+            return
+        self._active_hand.set_optimize_target(name)
+        self._update_target_hand()
+        self._update_current_hand_str()
+    def _control_joint_up(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _control_joint_up)")
+            return
+        ctrl_idx = self._active_hand.control_idx + 1
+        self._active_hand.set_control_joint(ctrl_idx)
+        self._update_target_hand()
+        self._update_current_hand_str()
+
+    def _control_joint_down(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _control_joint_down)")
+            return
+        ctrl_idx = self._active_hand.control_idx - 1
+        self._active_hand.set_control_joint(ctrl_idx)
+        self._update_target_hand()
+        self._update_current_hand_str()
+
+    def _update_current_hand_str(self):
+        self._current_hand_str.text = "현재 대상: {}".format(self._active_hand.get_control_joint_name())
 
     def _init_scene_control_layout(self):
         em = self.window.theme.font_size
@@ -1323,8 +1501,8 @@ class AppWindow:
         button = gui.Button("라벨링 결과 저장하기 (F)")
         button.set_on_clicked(self._on_save_label)
         scene_control_layout.add_child(button)
-        button = gui.Button("라벨링 결과 불러오기")
-        button.set_on_clicked(self._on_load_label)
+        button = gui.Button("이전 라벨 불러오기")
+        button.set_on_clicked(self._on_load_previous_label)
         scene_control_layout.add_child(button)
         
         
@@ -1349,42 +1527,8 @@ class AppWindow:
         self.bounds = pcd.get_axis_aligned_bounding_box()
         self._on_initial_viewpoint()
         self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
-        
-        # visualize hand
-        hands = self._frame.hands
-        if self._is_right_hand > 0:
-            active_side = 'right'
-            self._current_hand_str.text = "현재 대상: 오른손"
-        else:
-            active_side = 'left'
-            self._current_hand_str.text = "현재 대상: 왼손"
-        self._hands = hands
-        self._active_hand = hands[active_side]
-        for side, hand in hands.items():
-            hand_geo = hand.get_geometry()
-            if side == 'right':
-                mesh_name = self._right_hand_mesh_name
-                joint_name = self._right_hand_joint_name
-                link_name = self._right_hand_link_name
-            elif side == 'left':
-                mesh_name = self._left_hand_mesh_name
-                joint_name = self._left_hand_joint_name
-                link_name = self._left_hand_link_name
-            else:
-                assert False, "visualize hand error"
-            if side == active_side:
-                mesh_mat = self.settings.active_hand_mesh_material
-            else:
-                mesh_mat = self.settings.hand_mesh_material
-            self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
-            self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
-            self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
-    
-        self._convert_mode(LabelingMode.STATIC)
-        active_geo = self._active_hand.get_active_geometry()
-        self._add_geometry(self._control_joint_name, 
-                           active_geo['control'], self.settings.control_target_joint_material)
-        self.control_joint_geo = active_geo['control']
+        self._init_hand_layer()
+
     def _update_progress_str(self):
         self._current_progress_str.text = self.dataset.get_current_file()
         self._current_file_pg.text = self.annotation_scene.get_progress()
@@ -1450,25 +1594,22 @@ class AppWindow:
         self._last_saved = time.time()
         self._log.text = "\t라벨링 결과를 저장했습니다."
         self._annotation_changed = False
-    def _on_load_label(self):
-        if self._annotation_changed:
-            self._on_error("현재 라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
-            self._annotation_changed = False
-        
-        self._log.text = "\t라벨링 결과를 불러오는 중입니다."
-        self.window.set_needs_layout()
-        
+    def _on_load_previous_label(self):
         if self.annotation_scene is None: # shsh
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_label)")
             return
-        if self.annotation_scene._is_label:
-            self.annotation_scene.load_label()
+        self._log.text = "\t라벨링 결과를 불러오는 중입니다."
+        self.window.set_needs_layout()
+        
+        ret = self.annotation_scene.load_previous_label()
+        if ret:
+            self._log.text = "\t이전 라벨링 결과를 불러왔습니다."
+            self._init_hand_layer()
+            self._annotation_changed = False
         else:
-            self._on_error("저장된 라벨이 없습니다. (error at _on_load_label)")
+            self._on_error("저장된 라벨이 없습니다. (error at _on_load_previous_label)")
             return
-        self._log.text = "\t라벨링 결과를 불러왔습니다."
-        self._annotation_changed = False
-    
+        
     #endregion
     
     #region ----- Open3DScene 
@@ -1520,11 +1661,12 @@ class AppWindow:
     def _add_hand_frame(self, size=0.05, origin=[0, 0, 0]):
         if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
+        self._remove_hand_frame()
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
         transform = np.eye(4)
         current_xyz = self._active_hand.get_control_rotation()
         transform[:3, :3] = Rotation.from_rotvec(current_xyz).as_matrix()
-        transform[:3, 3] = self._active_hand.get_control_position().T
+        transform[:3, 3] = self._active_hand.get_control_position()
         coord_frame.transform(transform)
         
         self.coord_labels = []
@@ -1573,15 +1715,9 @@ class AppWindow:
                 
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             return gui.Widget.EventCallbackResult.CONSUMED
-
-            
-        elif event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_button_down(gui.MouseButton.RIGHT):
-            self._toggle_hand_visible()
-            return gui.Widget.EventCallbackResult.CONSUMED
-
+        
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
-        self._annotation_changed = True
         self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
@@ -1601,13 +1737,53 @@ class AppWindow:
             r = Rotation.from_matrix(np.matmul(current_rot_mat, rot_mat))
             xyz = r.as_rotvec()
             self._active_hand.set_control_rotation(xyz)
+            self._active_hand.save_undo()
+            self._annotation_changed = True
         self._update_activate_hand()
         self._update_target_hand()
     def _move_control_joint(self, xyz):
-        self._annotation_changed = True
         self._active_hand.set_control_position(xyz)
+        if self._active_hand.get_optimize_target()=='root':
+            self._active_hand.save_undo(forced=True)
+            self._annotation_changed = True
         self._update_activate_hand()
         self._update_target_hand()
+    
+    def _init_hand_layer(self):
+        # visualize hand
+        hands = self._frame.hands
+        if self._is_right_hand > 0:
+            active_side = 'right'
+        else:
+            active_side = 'left'
+        self._hands = hands
+        self._active_hand = hands[active_side]
+        for side, hand in hands.items():
+            hand_geo = hand.get_geometry()
+            if side == 'right':
+                mesh_name = self._right_hand_mesh_name
+                joint_name = self._right_hand_joint_name
+                link_name = self._right_hand_link_name
+            elif side == 'left':
+                mesh_name = self._left_hand_mesh_name
+                joint_name = self._left_hand_joint_name
+                link_name = self._left_hand_link_name
+            else:
+                assert False, "visualize hand error"
+            if side == active_side:
+                mesh_mat = self.settings.active_hand_mesh_material
+            else:
+                mesh_mat = self.settings.hand_mesh_material
+            self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
+            self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
+            self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
+    
+        self._convert_mode(LabelingMode.STATIC)
+        active_geo = self._active_hand.get_active_geometry()
+        self._add_geometry(self._control_joint_name, 
+                           active_geo['control'], self.settings.control_target_joint_material)
+        self.control_joint_geo = active_geo['control']
+        self._update_current_hand_str()
     def _update_target_hand(self):
         if self._labeling_mode==LabelingMode.OPTIMIZE:
             target_geo = self._active_hand.get_target_geometry()
@@ -1674,7 +1850,54 @@ class AppWindow:
         self._annotation_changed = self._active_hand.optimize_to_target()
         self._update_target_hand()
         self._update_activate_hand()
+    def _undo(self):
+        self._auto_optimize.checked = False
+        ret = self._active_hand.undo()
+        if not ret:
+            self._on_error("이전 상태가 없습니다. (error at _undo)")
+        else:
+            self._log.text = "이전 상태를 불러옵니다."
+            self.window.set_needs_layout()
+            self._update_activate_hand()
+            self._update_target_hand()
+    def _redo(self):
+        self._auto_optimize.checked = False
+        ret = self._active_hand.redo()
+        if not ret:
+            self._on_error("이후 상태가 없습니다. (error at _redo)")
+        else:
+            self._log.text = "이후 상태를 불러옵니다."
+            self.window.set_needs_layout()
+            self._update_activate_hand()
+            self._update_target_hand()
     def _on_key(self, event):
+        if self._active_hand is None:
+            return gui.Widget.EventCallbackResult.IGNORED
+
+        if event.key == gui.KeyName.T and event.type == gui.KeyEvent.DOWN:
+            self._on_initial_viewpoint()
+            return gui.Widget.EventCallbackResult.HANDLED
+        if event.key == gui.KeyName.Y and event.type == gui.KeyEvent.DOWN:
+            self._on_active_viewpoint()
+            return gui.Widget.EventCallbackResult.HANDLED
+
+        # undo / redo
+        if (event.key==gui.KeyName.COMMA and event.type==gui.KeyEvent.DOWN):
+            self._undo()
+            return gui.Widget.EventCallbackResult.CONSUMED
+        elif (event.key==gui.KeyName.PERIOD and event.type==gui.KeyEvent.DOWN):
+            self._redo()
+            return gui.Widget.EventCallbackResult.CONSUMED
+        
+        # activate autosave
+        if event.key==gui.KeyName.Z and event.type==gui.KeyEvent.DOWN:
+            self._toggle_hand_visible()
+            return gui.Widget.EventCallbackResult.CONSUMED
+        if event.key==gui.KeyName.X and event.type==gui.KeyEvent.DOWN:
+            self._auto_optimize.checked = not self._auto_optimize.checked
+            return gui.Widget.EventCallbackResult.CONSUMED
+        
+        
         # save label
         if event.key==gui.KeyName.F and event.type==gui.KeyEvent.DOWN:
             self._on_save_label()
@@ -1692,9 +1915,16 @@ class AppWindow:
         elif event.key == gui.KeyName.F2:
             self._convert_mode(LabelingMode.OPTIMIZE)
             return gui.Widget.EventCallbackResult.CONSUMED
-            
+        # reset hand pose
+        if event.key == gui.KeyName.R:
+            self._active_hand.reset_pose()
+            self._update_activate_hand()
+            self._update_target_hand()
+            return gui.Widget.EventCallbackResult.CONSUMED
+
         # if shift pressed then rotation else translation
-        if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
+        if (event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT) \
+            and (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
                 self._add_hand_frame()
@@ -1718,6 +1948,7 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.HANDLED
         
         # convert finger
+        is_converted_finger = True
         if event.key == gui.KeyName.BACKTICK:
             self._active_hand.set_optimize_target('root')
         elif event.key == gui.KeyName.ONE:
@@ -1730,37 +1961,37 @@ class AppWindow:
             self._active_hand.set_optimize_target('ring')
         elif event.key == gui.KeyName.FIVE:
             self._active_hand.set_optimize_target('little')
+        else:
+            is_converted_finger = False
         
         # convert joint
+        is_convert_joint = True
         if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
             ctrl_idx = self._active_hand.control_idx + 1
             self._active_hand.set_control_joint(ctrl_idx)
         elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
             ctrl_idx = self._active_hand.control_idx - 1
             self._active_hand.set_control_joint(ctrl_idx)
-        self._update_target_hand()
+        else:
+            is_convert_joint = False
         
+        if is_converted_finger or is_convert_joint:
+            self._update_target_hand()
+            return gui.Widget.EventCallbackResult.CONSUMED
+
         if self._labeling_mode==LabelingMode.OPTIMIZE:
             # optimze
             if event.key == gui.KeyName.SPACE:
                 if self._active_hand is None:
-                    pass
+                    return gui.Widget.EventCallbackResult.IGNORED
                 self._on_optimize()
                 return gui.Widget.EventCallbackResult.CONSUMED
-            
-            # reset hand pose
-            elif event.key == gui.KeyName.R:
-                self._active_hand.reset_pose()
-                self._update_activate_hand()
-                self._update_target_hand()
-                return gui.Widget.EventCallbackResult.CONSUMED
-            
             # reset guide pose
             elif event.key == gui.KeyName.HOME:
                 self._active_hand.reset_target()
                 self._update_target_hand()
                 return gui.Widget.EventCallbackResult.CONSUMED
-            
+
         # Translation
         if event.type!=gui.KeyEvent.UP:
             if not self._left_shift_modifier and \
@@ -1774,14 +2005,12 @@ class AppWindow:
                 elif event.key == gui.KeyName.W:
                     self.move( 0, self.dist, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.Q:
-                    self.move( 0, 0, self.dist, 0, 0, 0)
-                elif event.key == gui.KeyName.E:
                     self.move( 0, 0, -self.dist, 0, 0, 0)
+                elif event.key == gui.KeyName.E:
+                    self.move( 0, 0, self.dist, 0, 0, 0)
             # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
             elif self._left_shift_modifier and \
                 (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
-                self._remove_hand_frame()
-                self._add_hand_frame()
                 if event.key == gui.KeyName.E:
                     self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
                 elif event.key == gui.KeyName.Q:
@@ -1794,6 +2023,7 @@ class AppWindow:
                     self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
                 elif event.key == gui.KeyName.W:
                     self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
+                self._add_hand_frame()
 
         return gui.Widget.EventCallbackResult.IGNORED
     def _on_tick(self):

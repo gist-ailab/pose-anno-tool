@@ -12,11 +12,11 @@ includefiles_list.append(scipy_path)
 # "packages": ["os"] is used as example only
 build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch"], 
                      "packages": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch"], 
-                     "include_files": [r'C:\\Users\\user\\Anaconda3\\Library\\plugins\\platforms'],
+                    #  "include_files": [r'C:\\Users\\user\\minionda3\\Library\\plugins\\platforms'],
                      "excludes": []}
 
-os.environ['TCL_LIBRARY'] = r'C:\\Users\\user\\Anaconda3\\envs\\pose-anno\\tcl\\tcl8.6'
-os.environ['TK_LIBRARY'] = r'C:\\Users\\user\\Anaconda3\\envs\\pose-anno\\tcl\\tcl8.6'
+# os.environ['TCL_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
+# os.environ['TK_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
 
 base = None
 
