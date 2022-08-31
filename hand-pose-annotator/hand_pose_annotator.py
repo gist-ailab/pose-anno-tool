@@ -56,11 +56,11 @@ class HandModel:
     _IDX_OF_GUIDE = {
         'none'   : [],
         'root'   : [0],
-        'thumb'  : [1,3,4],
-        'fore'   : [5,7,8],
-        'middle' : [9,11,12],
-        'ring'   : [13,15,16],
-        'little' : [17,19,20],
+        'thumb'  : [1,2,3,4],
+        'fore'   : [5,6,7,8],
+        'middle' : [9,10,11,12],
+        'ring'   : [13,14,15,16],
+        'little' : [17,18,19,20],
     }
     # finger name
     _FINGER_NAME = [
