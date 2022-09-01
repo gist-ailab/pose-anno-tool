@@ -268,7 +268,7 @@ class HandModel:
         
     #region save and load state
     def get_state(self):
-        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 51, 3
+        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 48, 3
         return {
             'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
             'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 16, 3, 3
@@ -294,8 +294,12 @@ class HandModel:
         self.active_joints = None
         self.contorl_joint = None
         self.control_idx = -1
-    def get_hand_pose(self):
+    def get_hand_position(self):
         pose = np.array(self.joints.cpu().detach()[0, :])
+        return pose.tolist()
+    def get_hand_pose(self):
+        pose_param = torch.concat([self.root_trans, *self.joint_rot], dim=1) # 1, 51, 3
+        pose = np.array(pose_param.cpu().detach()[0, :])
         return pose.tolist()
     def get_hand_shape(self):
         shape = np.array(self.shape_param.cpu().detach()[0, :])
@@ -1694,7 +1698,8 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.CONSUMED
             
         # if shift pressed then rotation else translation
-        if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT:
+        if event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT \
+            and (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
             if event.type == gui.KeyEvent.DOWN:
                 self._left_shift_modifier = True
                 self._add_hand_frame()
