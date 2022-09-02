@@ -1325,22 +1325,7 @@ class AppWindow:
         button = gui.Button("현재 대상 리셋 (R)")
         button.set_on_clicked(self._reset_current_hand)
         handedit_layout.add_child(button)
-
-        h = gui.Horiz(0.4 * em)
-        label = gui.Label("관절이동:")
-        h.add_child(label)
-        button = gui.Button("이전 (PgDn)")
-        button.horizontal_padding_em = 0.3
-        button.vertical_padding_em = 0
-        button.set_on_clicked(self._control_joint_down)
-        h.add_child(button)
-        button = gui.Button("다음 (PgUp)")
-        button.horizontal_padding_em = 0.3
-        button.vertical_padding_em = 0
-        button.set_on_clicked(self._control_joint_up)
-        h.add_child(button)
-        handedit_layout.add_child(h)
-
+        
         h = gui.Horiz(0.4 * em)
         button = gui.Button("손목 (`)")
         button.horizontal_padding_em = 0.8
@@ -1374,6 +1359,19 @@ class AppWindow:
         button.horizontal_padding_em = 0.6
         button.vertical_padding_em = 0.2
         button.set_on_clicked(self._convert_to_little)
+        h.add_child(button)
+        handedit_layout.add_child(h)
+        
+        h = gui.Horiz(0.4 * em)
+        button = gui.Button("이전 관절(PgDn)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._control_joint_down)
+        h.add_child(button)
+        button = gui.Button("다음 관절(PgUp)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0
+        button.set_on_clicked(self._control_joint_up)
         h.add_child(button)
         handedit_layout.add_child(h)
 
@@ -1503,12 +1501,26 @@ class AppWindow:
         h.add_stretch()
         scene_control_layout.add_child(h)
         
+        label = gui.Label("{0:-^35}".format("라벨 저장 및 불러오기"))
+        scene_control_layout.add_child(label)
+        
         button = gui.Button("라벨링 결과 저장하기 (F)")
         button.set_on_clicked(self._on_save_label)
         scene_control_layout.add_child(button)
-        button = gui.Button("이전 라벨 불러오기")
+        
+        button = gui.Button("이전 이미지 라벨 불러오기")
         button.set_on_clicked(self._on_load_previous_label)
         scene_control_layout.add_child(button)
+        
+        label = gui.Label("{0:-^40}".format("오른손 프리셋"))
+        scene_control_layout.add_child(label)
+        
+        text = gui.TextEdit()
+        scene_control_layout.add_child(text)
+        
+        label = gui.Label("{0:-^42}".format("왼손 프리셋"))
+        scene_control_layout.add_child(label)
+        
         
         
         self._settings_panel.add_child(scene_control_layout)
