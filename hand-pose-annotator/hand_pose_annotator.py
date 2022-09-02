@@ -3,6 +3,7 @@
 # Modified from the codes of Anas Gouda (anas.gouda@tu-dortmund.de)
 # FLW, TU Dortmund, Germany
 
+from genericpath import isdir
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -82,7 +83,7 @@ class HandModel:
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
+                            use_pca=False, flat_hand_mean=False, joint_rot_mode='axisang')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if shape_param is None:
@@ -304,7 +305,7 @@ class HandModel:
         pose_param = torch.concat(self.joint_rot, dim=1) # 1, 48, 3
         return {
             'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
-            'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 16, 3, 3
+            'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 48, 3
             'root_trans': np.array(self.root_trans.cpu().detach()[0, :]),
             'root_delta': np.array(self.root_delta),
             
@@ -338,6 +339,14 @@ class HandModel:
             self.redo_stack = []
             self._last_undo = time.time()
     
+    def set_joint_pose(self, pose):
+        pose_param = torch.Tensor(pose).unsqueeze(0) # 48, 3 -> 1, 48, 3
+        self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
+        self.update_mano()
+    def get_joint_pose(self):
+        pose_param = torch.concat(self.joint_rot, dim=1) # 1, 48, 3
+        pose = np.array(pose_param.cpu().detach()[0, :])
+        return pose
     def get_hand_position(self):
         pose = np.array(self.joints.cpu().detach()[0, :])
         return pose.tolist()
@@ -456,7 +465,32 @@ class HandModel:
         }
         else:
             raise NotImplementedError
-    
+
+class PoseTemplate:
+    template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pose_template")
+    def __init__(self):
+        if not os.path.isdir(self.template_dir):
+            os.makedirs(self.template_dir)
+        self.template = {}
+        for temp_npy in [os.path.join(self.template_dir, p) for p in os.listdir(self.template_dir)]:
+            try:
+                template_name = os.path.basename(temp_npy).replace(".npy", "")
+                self.template[template_name] = np.load(temp_npy)
+            except:
+                continue
+    def save_pose2template(self, name, pose):
+        self.template[name] = pose
+        npy_path = os.path.join(self.template_dir, "{}.npy".format(name))
+        np.save(npy_path, pose)
+    def get_template2pose(self, name):
+        return self.template[name]
+    def get_template_list(self):
+        return list(self.template.keys())
+    def remove_template(self, name):
+        del(self.template[name])
+        os.remove(os.path.join(self.template_dir, "{}.npy".format(name)))
+        
+
 class Camera:
     # DexYCB Toolkit
     # Copyright (C) 2021 NVIDIA Corporation
@@ -645,8 +679,6 @@ def load_dataset_from_file(file_path):
         return DexYCBSample(dataset_dir)
     else:
         raise NotImplementedError
-
-
 
 class Scene:
     
@@ -915,6 +947,7 @@ class AppWindow:
         self._last_change = time.time()
         self._last_saved = time.time()
         self.coord_labels = []
+        self.template = PoseTemplate()
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
         w = self.window
@@ -935,7 +968,7 @@ class AppWindow:
         self._init_handedit_layout()
         self._init_stageedit_layout()
         self._init_scene_control_layout()
-        
+        self._init_label_control_layout()
         
         # ---- log panel
         self._log_panel = gui.VGrid(1, em)
@@ -1500,30 +1533,8 @@ class AppWindow:
         h.add_child(button)
         h.add_stretch()
         scene_control_layout.add_child(h)
-        
-        label = gui.Label("{0:-^35}".format("라벨 저장 및 불러오기"))
-        scene_control_layout.add_child(label)
-        
-        button = gui.Button("라벨링 결과 저장하기 (F)")
-        button.set_on_clicked(self._on_save_label)
-        scene_control_layout.add_child(button)
-        
-        button = gui.Button("이전 이미지 라벨 불러오기")
-        button.set_on_clicked(self._on_load_previous_label)
-        scene_control_layout.add_child(button)
-        
-        label = gui.Label("{0:-^40}".format("오른손 프리셋"))
-        scene_control_layout.add_child(label)
-        
-        text = gui.TextEdit()
-        scene_control_layout.add_child(text)
-        
-        label = gui.Label("{0:-^42}".format("왼손 프리셋"))
-        scene_control_layout.add_child(label)
-        
-        
-        
         self._settings_panel.add_child(scene_control_layout)
+
     def _check_changes(self):
         if self._annotation_changed:
             self._on_error("라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
@@ -1545,12 +1556,10 @@ class AppWindow:
         self._on_initial_viewpoint()
         self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
         self._init_hand_layer()
-
     def _update_progress_str(self):
         self._current_progress_str.text = self.dataset.get_current_file()
         self._current_file_pg.text = self.annotation_scene.get_progress()
         self._current_scene_pg.text = self.dataset.get_progress()
-    
     def _on_previous_frame(self):
         if self._check_changes():
             return
@@ -1599,6 +1608,42 @@ class AppWindow:
         self._log.text = "\t 다음 작업 폴더로 이동했습니다."
         self.annotation_scene = scene
         self._load_scene()
+
+    def _init_label_control_layout(self):
+        em = self.window.theme.font_size
+        label_control_layout = gui.CollapsableVert("라벨 저장 및 불러오기", 0.33 * em,
+                                                   gui.Margins(0.25 * em, 0, 0, 0))
+        label_control_layout.set_is_open(True)
+        
+        button = gui.Button("라벨링 결과 저장하기 (F)")
+        button.set_on_clicked(self._on_save_label)
+        label_control_layout.add_child(button)
+        
+        button = gui.Button("이전 이미지 라벨 불러오기")
+        button.set_on_clicked(self._on_load_previous_label)
+        label_control_layout.add_child(button)
+
+        label = gui.Label("{0:-^45}".format("프리셋"))
+        label_control_layout.add_child(label)
+        self.preset_list = gui.ListView()
+        label_control_layout.add_child(self.preset_list)
+        self.preset_list.set_on_selection_changed(self._on_change_preset_select)
+        self.preset_list.set_items(self.template.get_template_list())
+
+        h = gui.Horiz(0.4 * em)
+        self._preset_name = gui.TextEdit()
+        self._preset_name.text_value = "프리셋 이름"
+        h.add_child(self._preset_name)
+        button = gui.Button("불러오기")
+        button.set_on_clicked(self._on_load_preset)
+        h.add_child(button)
+        button = gui.Button("저장하기")
+        button.set_on_clicked(self._on_save_preset)
+        h.add_child(button)
+        label_control_layout.add_child(h)
+        
+        self._settings_panel.add_child(label_control_layout)
+    
     def _on_save_label(self):
         self._log.text = "\t라벨링 결과를 저장 중입니다."
         self.window.set_needs_layout()
@@ -1626,7 +1671,32 @@ class AppWindow:
         else:
             self._on_error("저장된 라벨이 없습니다. (error at _on_load_previous_label)")
             return
+    def _on_load_preset(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_load_preset)")
+            return
+        name = self._preset_name.text_value
+        try:
+            pose = self.template.get_template2pose(name)
+            self._active_hand.set_joint_pose(pose)
+            self._update_activate_hand()
+            self._update_target_hand()
+        except:
+            self._on_error("프리셋 이름을 확인하세요. (error at _on_load_preset)")
+    def _on_save_preset(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_preset)")
+            return
+        name = self._preset_name.text_value
+        pose = self._active_hand.get_joint_pose()
+        self.template.save_pose2template(name, pose)
+        self.preset_list.set_items(self.template.get_template_list())
+    def _on_change_preset_select(self, preset_name, double):
+        self._preset_name.text_value = preset_name
+        if double:
+            self._on_load_preset()
         
+    
     #endregion
     
     #region ----- Open3DScene 
