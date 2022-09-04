@@ -280,34 +280,34 @@ class AppWindow:
         self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
         self._validation_panel.add_child(self.scene_obj_info_panel)
 
-        self._validation_panel.add_child(gui.Label("작업자 정보"))
+        self.scene_obj_info_panel.add_child(gui.Label("작업자 정보"))
         self.note_edit_1 = gui.TextEdit()
         self.note_edit_1.placeholder_text = "작업자"
         self.note_edit_1.set_on_value_changed(self._on_note_edit_1)
-        self._validation_panel.add_child(self.note_edit_1)
+        self.scene_obj_info_panel.add_child(self.note_edit_1)
 
-        self._validation_panel.add_child(gui.Label("검수자 정보"))
+        self.scene_obj_info_panel.add_child(gui.Label("검수자 정보"))
         self.note_edit_2 = gui.TextEdit()
         self.note_edit_2.placeholder_text = "검수자"
         self.note_edit_2.set_on_value_changed(self._on_note_edit_2)
-        self._validation_panel.add_child(self.note_edit_2)
+        self.scene_obj_info_panel.add_child(self.note_edit_2)
 
         note_title = gui.Label("라벨링 검토 의견")
-        self._validation_panel.add_child(note_title)
+        self.scene_obj_info_panel.add_child(note_title)
         self.note_edit_3 = gui.TextEdit()
         self.note_edit_3.placeholder_text = "검토 의견 1."
         self.note_edit_3.set_on_value_changed(self._on_note_edit_3)
-        self._validation_panel.add_child(self.note_edit_3)
+        self.scene_obj_info_panel.add_child(self.note_edit_3)
 
         self.note_edit_4 = gui.TextEdit()
         self.note_edit_4.placeholder_text = "검토 의견 2."
         self.note_edit_4.set_on_value_changed(self._on_note_edit_4)
-        self._validation_panel.add_child(self.note_edit_4)
+        self.scene_obj_info_panel.add_child(self.note_edit_4)
 
         self.note_edit_5 = gui.TextEdit()
         self.note_edit_5.placeholder_text = "검토 의견 3."
         self.note_edit_5.set_on_value_changed(self._on_note_edit_5)
-        self._validation_panel.add_child(self.note_edit_5)
+        self.scene_obj_info_panel.add_child(self.note_edit_5)
 
         self.anno_copy_panel = gui.Vert(
             em, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
@@ -334,7 +334,7 @@ class AppWindow:
         self.anno_copy_panel.add_child(source_grid)
         self.anno_copy_panel.add_child(target_grid)
         self.anno_copy_panel.add_child(self._copy_button)
-        self._validation_panel.add_child(self.anno_copy_panel)
+        self.scene_obj_info_panel.add_child(self.anno_copy_panel)
 
         # ---- Settings panel ----
         self._settings_panel = gui.Vert(
@@ -1024,9 +1024,9 @@ class AppWindow:
             if event.key == gui.KeyName.L:
                 self.icx += translate_factor
             if event.key == gui.KeyName.U:
-                self.scale_factor -= 0.1
-            if event.key == gui.KeyName.O:
                 self.scale_factor += 0.1
+            if event.key == gui.KeyName.O:
+                self.scale_factor -= 0.1
             if event.key == gui.KeyName.P:
                 self.icx, self.icy = self.W//2, self.H//2
                 self.scale_factor = 1.0
@@ -1051,7 +1051,8 @@ class AppWindow:
             _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
             _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
             self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
-        
+            return 
+
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
             self._on_error("라벨링 대상 물체를 선택하세요 (error at _transform)")
@@ -1139,23 +1140,6 @@ class AppWindow:
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             self._log.text = "\t물체 위치를 조정 중 입니다."
             self.window.set_needs_layout()
-            return gui.Widget.EventCallbackResult.HANDLED
-
-        if event.type == gui.MouseEvent.Type.WHEEL:
-            
-            print(event.wheel_dy, event.x, event.y)
-            x, y = event.x, event.y
-            im_x, im_y, im_w, im_h = self.image_panel_xywh
-            if im_x <=  x <= im_x + im_w and im_y <= y <= im_y + im_h:
-                self._log.text = "\이미지 크기를 조정 중 입니다."
-                print("asdf")
-                # self.window.set_needs_layout()
-                # if event.wheel_dy > 0:
-                    # self.scale(1.1)
-                # else:
-                    # self.scale(0.9)
-                # return gui.Widget.EventCallbackResult.HANDLED
-
             return gui.Widget.EventCallbackResult.HANDLED
 
         return gui.Widget.EventCallbackResult.HANDLED
@@ -1803,7 +1787,7 @@ class AppWindow:
         extrinsic = np.eye(4)
         self._scene.setup_camera(intrinsic, extrinsic, self.W, self.H, self.bounds)
         center = [0, 0, 1]  # look_at target
-        eye = [0, 0, 0.5]  # camera position
+        eye = [0, 0, -0.5]  # camera position
         up = [0, -1, 0]  # camera orientation
         self._scene.look_at(center, eye, up)
 
