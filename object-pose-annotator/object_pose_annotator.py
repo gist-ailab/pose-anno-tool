@@ -1051,7 +1051,7 @@ class AppWindow:
             _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
             _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
             self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
-            return 
+            return gui.Widget.EventCallbackResult.HANDLED
 
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
