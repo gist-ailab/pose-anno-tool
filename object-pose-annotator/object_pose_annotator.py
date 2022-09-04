@@ -238,7 +238,7 @@ class AppWindow:
             self._images_panel.calc_preferred_size(
                 layout_context, gui.Widget.Constraints()).height * 1.1)                     
         self._images_panel.frame = gui.Rect(0, r.y, width_im, height_im)   
-
+        self.image_panel_xywh = [0, r.y, width_im, height_im]
         width_obj = 1.5 * width_set
         height_obj = 1.5 * layout_context.theme.font_size
         self._log_panel.frame = gui.Rect(0, r.get_bottom() - height_obj, width_obj, height_obj) 
@@ -256,6 +256,9 @@ class AppWindow:
         self.mesh_names = []
         self.settings = Settings()
         self.ok_delta = 5
+        self.scale_factor = None
+
+
         self.window = gui.Application.instance.create_window(
             "6D Object Pose Annotator by GIST AILAB", width, height)
         w = self.window  
@@ -277,34 +280,34 @@ class AppWindow:
         self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
         self._validation_panel.add_child(self.scene_obj_info_panel)
 
-        self._validation_panel.add_child(gui.Label("작업자 정보"))
+        self.scene_obj_info_panel.add_child(gui.Label("작업자 정보"))
         self.note_edit_1 = gui.TextEdit()
         self.note_edit_1.placeholder_text = "작업자"
         self.note_edit_1.set_on_value_changed(self._on_note_edit_1)
-        self._validation_panel.add_child(self.note_edit_1)
+        self.scene_obj_info_panel.add_child(self.note_edit_1)
 
-        self._validation_panel.add_child(gui.Label("검수자 정보"))
+        self.scene_obj_info_panel.add_child(gui.Label("검수자 정보"))
         self.note_edit_2 = gui.TextEdit()
         self.note_edit_2.placeholder_text = "검수자"
         self.note_edit_2.set_on_value_changed(self._on_note_edit_2)
-        self._validation_panel.add_child(self.note_edit_2)
+        self.scene_obj_info_panel.add_child(self.note_edit_2)
 
         note_title = gui.Label("라벨링 검토 의견")
-        self._validation_panel.add_child(note_title)
+        self.scene_obj_info_panel.add_child(note_title)
         self.note_edit_3 = gui.TextEdit()
         self.note_edit_3.placeholder_text = "검토 의견 1."
         self.note_edit_3.set_on_value_changed(self._on_note_edit_3)
-        self._validation_panel.add_child(self.note_edit_3)
+        self.scene_obj_info_panel.add_child(self.note_edit_3)
 
         self.note_edit_4 = gui.TextEdit()
         self.note_edit_4.placeholder_text = "검토 의견 2."
         self.note_edit_4.set_on_value_changed(self._on_note_edit_4)
-        self._validation_panel.add_child(self.note_edit_4)
+        self.scene_obj_info_panel.add_child(self.note_edit_4)
 
         self.note_edit_5 = gui.TextEdit()
         self.note_edit_5.placeholder_text = "검토 의견 3."
         self.note_edit_5.set_on_value_changed(self._on_note_edit_5)
-        self._validation_panel.add_child(self.note_edit_5)
+        self.scene_obj_info_panel.add_child(self.note_edit_5)
 
         self.anno_copy_panel = gui.Vert(
             em, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
@@ -331,7 +334,7 @@ class AppWindow:
         self.anno_copy_panel.add_child(source_grid)
         self.anno_copy_panel.add_child(target_grid)
         self.anno_copy_panel.add_child(self._copy_button)
-        self._validation_panel.add_child(self.anno_copy_panel)
+        self.scene_obj_info_panel.add_child(self.anno_copy_panel)
 
         # ---- Settings panel ----
         self._settings_panel = gui.Vert(
@@ -603,6 +606,7 @@ class AppWindow:
         self._scene.set_on_mouse(self._on_mouse)
         self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
+
         
 
     def _on_note_edit_1(self, new_text):
@@ -995,6 +999,60 @@ class AppWindow:
             self.dist = 0.0004 * self._responsiveness.double_value
             self.deg = 0.2 * self._responsiveness.double_value
             return gui.Widget.EventCallbackResult.HANDLED      
+
+
+        if event.key in [gui.KeyName.I, gui.KeyName.J, gui.KeyName.K, gui.KeyName.L, gui.KeyName.U, gui.KeyName.O, gui.KeyName.P] and self.scale_factor is not None:
+            def translate(tx=0, ty=0):
+                T = np.eye(3)
+                T[0:2,2] = [tx, ty]
+                return T
+            def scale(s=1, sx=1, sy=1):
+                T = np.diag([s*sx, s*sy, 1])
+                return T
+            def rotate(degrees):
+                T = np.eye(3)
+                # just involves some sin() and cos()
+                T[0:2] = cv2.getRotationMatrix2D(center=(0,0), angle=-degrees, scale=1.0)
+                return T
+            translate_factor = 10
+            if event.key == gui.KeyName.I:
+                self.icy -= translate_factor
+            if event.key == gui.KeyName.K:
+                self.icy += translate_factor
+            if event.key == gui.KeyName.J:
+                self.icx -= translate_factor
+            if event.key == gui.KeyName.L:
+                self.icx += translate_factor
+            if event.key == gui.KeyName.U:
+                self.scale_factor += 0.1
+            if event.key == gui.KeyName.O:
+                self.scale_factor -= 0.1
+            if event.key == gui.KeyName.P:
+                self.icx, self.icy = self.W//2, self.H//2
+                self.scale_factor = 1.0
+            if self.icy < 0:
+                self.icy = 0
+            if self.icx < 0:
+                self.icx = 0
+            if self.icy > self.H:
+                self.icy = self.H
+            if self.icx > self.W:
+                self.icx = self.W
+            if self.scale_factor < 0.1:
+                self.scale_factor = 0.1
+            if self.scale_factor > 10:
+                self.scale_factor = 10
+            (ow, oh) = (self.W, self.H) # output size
+            (ocx, ocy) = ((ow-1)/2, (oh-1)/2) # put there in output (it's the exact center)
+            H = translate(+ocx, +ocy) @ rotate(degrees=0) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
+            M = H[0:2]
+            out = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            ratio = 640 / self.W
+            _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
+            _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
+            self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
+            return gui.Widget.EventCallbackResult.HANDLED
+
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
             self._on_error("라벨링 대상 물체를 선택하세요 (error at _transform)")
@@ -1034,6 +1092,7 @@ class AppWindow:
                 self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
 
         return gui.Widget.EventCallbackResult.HANDLED
+
 
     def _on_mouse(self, event):
         
@@ -1082,6 +1141,7 @@ class AppWindow:
             self._log.text = "\t물체 위치를 조정 중 입니다."
             self.window.set_needs_layout()
             return gui.Widget.EventCallbackResult.HANDLED
+
         return gui.Widget.EventCallbackResult.HANDLED
 
     def _on_selection_changed(self, a, b):
@@ -1288,6 +1348,8 @@ class AppWindow:
         bboxes = []
         is_oks = []
         self.H, self.W, _ = diff_vis.shape
+        self.icx, self.icy = self.W / 2, self.H / 2
+        self.scale_factor = 1
         ratio = 640 / self.W
         self.depth_diff_means = {}
         for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
@@ -1720,11 +1782,15 @@ class AppWindow:
             return
         self._log.text = "\t 처음 시점으로 이동합니다."
         self.window.set_needs_layout()
-        self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
-        center = np.array([0, 0, 0])
-        eye = center + np.array([0, 0, -0.5])
-        up = np.array([0, -1, 0])
+
+        intrinsic = np.array(self.cam_K).reshape((3, 3))
+        extrinsic = np.eye(4)
+        self._scene.setup_camera(intrinsic, extrinsic, self.W, self.H, self.bounds)
+        center = [0, 0, 1]  # look_at target
+        eye = [0, 0, -0.5]  # camera position
+        up = [0, -1, 0]  # camera orientation
         self._scene.look_at(center, eye, up)
+
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 

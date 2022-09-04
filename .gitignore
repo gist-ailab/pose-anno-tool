@@ -13,6 +13,7 @@ models/
 sample_dataset
 lmo/
 data2_source_ral*
+data2_source/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
