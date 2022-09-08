@@ -9,7 +9,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
-
+from open3d.visualization import MeshShadeOption
+ 
 import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
@@ -120,7 +121,7 @@ class HandModel:
     def __init__(self, side, shape_param=None):
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=False, joint_rot_mode='axisang')
+                            use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if shape_param is None:
@@ -449,9 +450,10 @@ class HandModel:
         verts = o3d.utility.Vector3dVector(verts)
         faces = o3d.utility.Vector3iVector(faces)
         tri_mesh = o3d.geometry.TriangleMesh(vertices=verts, triangles=faces)
-        lineset = o3d.geometry.LineSet.create_from_triangle_mesh(tri_mesh)
+        # lineset = o3d.geometry.LineSet.create_from_triangle_mesh(tri_mesh)
+        tri_mesh.compute_triangle_normals()
         
-        return lineset
+        return tri_mesh
     def _get_joints(self, idx=None):
         if idx is None:
             joints = self.joints.detach()[0, :]
@@ -541,17 +543,20 @@ class SceneObject:
     
     def reset(self):
         self.transform = np.eye(4)
+        self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
+        self.obj_geo.scale(0.001, [0, 0, 0])
+        self.obj_geo.transform(self.transform)
     
     def load_label(self, label):
         self.transform = label
+        self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
+        self.obj_geo.scale(0.001, [0, 0, 0])
+        self.obj_geo.transform(self.transform)
+        self.obj_geo.compute_triangle_normals()
         
     def get_geometry(self):
-        obj_geometry = o3d.io.read_point_cloud(self.model_path)
-        obj_geometry.points = o3d.utility.Vector3dVector(
-                            np.array(obj_geometry.points) / 1000) 
-        obj_geometry.transform(self.transform)
-        return obj_geometry
-    
+        return self.obj_geo
+        
 class Dataset:
     def __init__(self):
         """
@@ -782,9 +787,10 @@ class DexYCBSample(Dataset):
             for cam in self._cameras:
                 serial = self._cam2serial[cam]
                 K = self.get_intrinsic_from_yml(self._intrinsic_path.format(serial))
+                extrinsic = np.concatenate((np.array(extrinsics[serial], dtype=np.float32).reshape(3, 4), [[0, 0, 0, 1]]), axis=0)
                 self._scene_camera[sc_name][cam] = {
                     "intrinsic": K,
-                    "extrinsics": np.array(extrinsics[serial], dtype=np.float32).reshape(3, 4) # list of extrinsic len num_frames
+                    "extrinsics": extrinsic
                 }
         
         super().__init__()
@@ -1009,8 +1015,9 @@ class Scene:
     
 
 class Settings:
-    SHADER_POINT = "defaultUnlit"
+    SHADER_UNLIT = "defaultUnlit"
     SHADER_LINE = "unlitLine"
+    SHADER_LIT_TRANS = "defaultLitTransparency"
 
     def __init__(self):
         self.bg_color = gui.Color(1, 1, 1)
@@ -1019,26 +1026,28 @@ class Settings:
         self.show_hand = True
         self.show_objects = True
         self.show_pcd = True
-        self.transparency = 0.5
+        self.point_transparency =0
+        self.hand_transparency =0.5
+        self.obj_transparency = 0.5
 
         # ----- Material Settings -----
         self.apply_material = True  # clear to False after processing
 
         # ----- scene material
         self.scene_material = rendering.MaterialRecord()
-        self.scene_material.base_color = [1.0, 1.0, 1.0, 1.0]
-        self.scene_material.shader = Settings.SHADER_POINT
+        self.scene_material.base_color = [1.0, 1.0, 1.0, 1.0-self.point_transparency]
+        self.scene_material.shader = Settings.SHADER_LIT_TRANS
         self.scene_material.point_size = 1.0
 
         # ----- hand model setting
         self.hand_mesh_material = rendering.MaterialRecord()
-        self.hand_mesh_material.base_color = [0.8, 0.8, 0.8, 1.0]
-        self.hand_mesh_material.shader = Settings.SHADER_LINE
-        self.hand_mesh_material.line_width = 2.0
+        self.hand_mesh_material.base_color = [0.8, 0.8, 0.8, 1.0-self.hand_transparency]
+        self.hand_mesh_material.shader = Settings.SHADER_LIT_TRANS
+        # self.hand_mesh_material.line_width = 2.0
         
         self.hand_joint_material = rendering.MaterialRecord()
         self.hand_joint_material.base_color = [1.0, 0.0, 0.0, 1.0]
-        self.hand_joint_material.shader = Settings.SHADER_POINT
+        self.hand_joint_material.shader = Settings.SHADER_UNLIT
         self.hand_joint_material.point_size = 5.0
         
         self.hand_link_material = rendering.MaterialRecord()
@@ -1047,14 +1056,14 @@ class Settings:
         self.hand_link_material.line_width = 2.0
         
         self.active_hand_mesh_material = rendering.MaterialRecord()
-        self.active_hand_mesh_material.base_color = [0.0, 1.0, 0.75, 0.5]
-        self.active_hand_mesh_material.shader = Settings.SHADER_LINE
-        self.active_hand_mesh_material.line_width = 2.0
+        self.active_hand_mesh_material.base_color = [0.0, 1.0, 0.0, 1.0-self.hand_transparency]
+        self.active_hand_mesh_material.shader = Settings.SHADER_LIT_TRANS
+        # self.active_hand_mesh_material.line_width = 2.0
 
         # ----- hand label setting
         self.target_joint_material = rendering.MaterialRecord()
         self.target_joint_material.base_color = [0.0, 0.0, 1.0, 1.0]
-        self.target_joint_material.shader = Settings.SHADER_POINT
+        self.target_joint_material.shader = Settings.SHADER_UNLIT
         self.target_joint_material.point_size = 10.0
         
         self.target_link_material = rendering.MaterialRecord()
@@ -1064,7 +1073,7 @@ class Settings:
         
         self.active_target_joint_material = rendering.MaterialRecord()
         self.active_target_joint_material.base_color = [1.0, 0.75, 0.75, 1.0]
-        self.active_target_joint_material.shader = Settings.SHADER_POINT
+        self.active_target_joint_material.shader = Settings.SHADER_UNLIT
         self.active_target_joint_material.point_size = 20.0
         
         self.active_target_link_material = rendering.MaterialRecord()
@@ -1074,7 +1083,7 @@ class Settings:
         
         self.control_target_joint_material = rendering.MaterialRecord()
         self.control_target_joint_material.base_color = [0.0, 1.0, 0.0, 1.0]
-        self.control_target_joint_material.shader = Settings.SHADER_POINT
+        self.control_target_joint_material.shader = Settings.SHADER_UNLIT
         self.control_target_joint_material.point_size = 30.0
         
         self.coord_material = rendering.MaterialRecord()
@@ -1084,9 +1093,8 @@ class Settings:
         
         # object 
         self.obj_material = rendering.MaterialRecord()
-        self.obj_material.base_color = [0.9, 0.3, 0.3, 1 - self.transparency]
-        self.obj_material.shader = Settings.SHADER_POINT
-
+        self.obj_material.base_color = [1, 1, 1, 1 - self.obj_transparency]
+        self.obj_material.shader = Settings.SHADER_LIT_TRANS
         
 class AppWindow:
     
@@ -1140,7 +1148,9 @@ class AppWindow:
         
         # 3D widget
         self._scene = gui.SceneWidget()
-        self._scene.scene = rendering.Open3DScene(w.renderer)
+        scene = rendering.Open3DScene(w.renderer)
+        scene.set_lighting(scene.LightingProfile.NO_SHADOWS, (0, 0, 0))
+        self._scene.scene = scene
         
         # ---- Settings panel
         em = w.theme.font_size
@@ -1184,7 +1194,9 @@ class AppWindow:
         # ---- annotation tool settings ----
         self._initialize_background()
         self._on_scene_point_size(5) # set default size to 1
-        self._on_scene_transparency(0)
+        self._on_point_transparency(0)
+        self._on_object_transparency(0.5)
+        self._on_hand_transparency(0.5)
         self._on_hand_point_size(10) # set default size to 10
         self._on_hand_line_size(2) # set default size to 2
         self._on_responsiveness(5) # set default responsiveness to 5
@@ -1296,7 +1308,8 @@ class AppWindow:
         self.window.set_needs_layout()
         intrinsic = self._frame.cameras[cam_name].intrinsic
         extrinsic = self._frame.cameras[cam_name].extrinsics
-        self._scene.setup_camera(intrinsic, extrinsic, self.W, self.H, self.bounds)
+        self._scene.setup_camera(o3d.camera.PinholeCameraIntrinsic(self.W, self.H, intrinsic), extrinsic,  self.bounds)
+        # self._scene.setup_camera(intrinsic, extrinsic, self.W, self.H, self.bounds)
         self._init_view_control()
 
     def _init_view_control(self):
@@ -1353,6 +1366,7 @@ class AppWindow:
                 del self.annotation_scene
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
             self._load_scene()
+            self._init_cam_name()
             self.window.close_dialog()
             self._log.text = "\t 라벨링 대상 파일을 불러왔습니다."
         except Exception as e:
@@ -1368,14 +1382,6 @@ class AppWindow:
                                           gui.Margins(em, 0, 0, 0))
         viewctrl_layout.set_is_open(True)
         
-        # self._show_axes = gui.Checkbox("카메라 좌표계 보기")
-        # self._show_axes.set_on_checked(self._on_show_axes)
-        # viewctrl_layout.add_child(self._show_axes)
-
-        # self._show_coord_frame = gui.Checkbox("조작 중인 조인트 좌표계 보기")
-        # self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
-        # viewctrl_layout.add_child(self._show_coord_frame)
-
         self._show_hands = gui.Checkbox("손 라벨 보기 (Z)")
         self._show_hands.set_on_checked(self._on_show_hand)
         viewctrl_layout.add_child(self._show_hands)
@@ -1406,11 +1412,23 @@ class AppWindow:
         grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._scene_point_size)
         
-        # self._scene_transparency = gui.Slider(gui.Slider.DOUBLE)
-        # self._scene_transparency.set_limits(0, 1)
-        # self._scene_transparency.set_on_value_changed(self._on_scene_transparency)
-        # grid.add_child(gui.Label("포인트 투명도"))
-        # grid.add_child(self._scene_transparency)
+        self._point_transparency = gui.Slider(gui.Slider.DOUBLE)
+        self._point_transparency.set_limits(0, 1)
+        self._point_transparency.set_on_value_changed(self._on_point_transparency)
+        grid.add_child(gui.Label("포인트 투명도"))
+        grid.add_child(self._point_transparency)
+        
+        self._object_transparency = gui.Slider(gui.Slider.DOUBLE)
+        self._object_transparency.set_limits(0, 1)
+        self._object_transparency.set_on_value_changed(self._on_object_transparency)
+        grid.add_child(gui.Label("물체 투명도"))
+        grid.add_child(self._object_transparency)
+        
+        self._hand_transparency = gui.Slider(gui.Slider.DOUBLE)
+        self._hand_transparency.set_limits(0, 1)
+        self._hand_transparency.set_on_value_changed(self._on_hand_transparency)
+        grid.add_child(gui.Label("손 투명도"))
+        grid.add_child(self._hand_transparency)
         
         self._hand_point_size = gui.Slider(gui.Slider.INT)
         self._hand_point_size.set_limits(1, 20)
@@ -1489,17 +1507,42 @@ class AppWindow:
         if self._check_geometry(self._scene_name):
             self._set_geometry_material(self._scene_name, mat)
         self._scene_point_size.double_value = size
-    def _on_scene_transparency(self, transparency):
+    def _on_point_transparency(self, transparency):
         self._log.text = "\t 투명도 값을 변경합니다."
         self.window.set_needs_layout()
         self._last_change = time.time()
-        self.settings.transparency = transparency
-        if self.annotation_scene is None:
-            return
-        mat = self.settings.scene_material
-        mat.base_color = [1.0, 1.0, 1.0, 1.0]
-        self._set_geometry_material(self._scene_name, mat)
-        self._scene_transparency.double_value = transparency
+        self.settings.point_transparency = transparency
+        self.settings.scene_material.base_color = [1.0, 1.0, 1.0, 1.0-transparency]
+        self._point_transparency.double_value = transparency
+        if self._check_geometry(self._scene_name):
+            self._set_geometry_material(self._scene_name, self.settings.scene_material)
+    def _on_object_transparency(self, transparency):
+        self._log.text = "\t 투명도 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
+        self.settings.obj_transparency = transparency
+        self.settings.obj_material.base_color = [0.9, 0.0, 0.0, 1 - transparency]
+        self._object_transparency.double_value = transparency
+        if self._objects is not None:
+            for obj_id, _ in self._objects.items():
+                obj_name = "obj_{}".format(obj_id)
+                self._set_geometry_material(obj_name, self.settings.obj_material)
+    def _on_hand_transparency(self, transparency):
+        self._log.text = "\t 투명도 값을 변경합니다."
+        self.window.set_needs_layout()
+        self._last_change = time.time()
+        self.settings.hand_transparency = transparency
+        self.settings.hand_mesh_material.base_color = [0.8, 0.8, 0.8, 1.0-transparency]
+        self.settings.active_hand_mesh_material.base_color = [0.0, 1.0, 0.0, 1.0-transparency]
+        self._hand_transparency.double_value = transparency
+        if self._active_hand is not None:
+            active_side = self._active_hand.side
+            if active_side == 'right':
+                self._set_geometry_material(self._right_hand_mesh_name, self.settings.active_hand_mesh_material)
+                self._set_geometry_material(self._left_hand_mesh_name, self.settings.hand_mesh_material)
+            else:
+                self._set_geometry_material(self._right_hand_mesh_name, self.settings.hand_mesh_material)
+                self._set_geometry_material(self._left_hand_mesh_name, self.settings.active_hand_mesh_material)
     def _on_hand_point_size(self, size):
         self._log.text = "\t 손 관절 사이즈 값을 변경합니다."
         self.window.set_needs_layout()
@@ -1560,6 +1603,8 @@ class AppWindow:
         self._log.text = "\t 자동 저장 간격을 변경합니다."
         self.window.set_needs_layout()
         self._auto_save_interval.double_value = interval
+    
+    
     # labeling stage edit
     def _init_stageedit_layout(self):
         em = self.window.theme.font_size
@@ -1800,8 +1845,8 @@ class AppWindow:
         self._init_hand_layer()
         self._init_obj_layer()
         self._on_initial_viewpoint()
-        self._init_cam_name()
-        self._on_change_camera_0()
+        
+        self._on_change_camera_merge()
         self._init_image_viewer()
     def _update_progress_str(self):
         self._current_progress_str.text = self.dataset.get_current_file()
@@ -1973,9 +2018,15 @@ class AppWindow:
             show_error_layout.add_child(error_layout)
             self._view_error_layout_list.append((button, error_txt))
 
-        self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
+        error_layout = gui.Horiz(0.4 * em)
+        button = gui.Button("합쳐진 뷰")
+        button.set_on_clicked(self._on_change_camera_merge)
+        error_layout.add_child(button)
         self._total_error_txt = gui.Label("평균 에러: 없음")
-        show_error_layout.add_child(self._total_error_txt)
+        error_layout.add_child(self._total_error_txt)
+        show_error_layout.add_child(error_layout)
+
+        self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
         show_error_layout.add_child(self._activate_cam_txt)
 
         self._validation_panel.add_child(show_error_layout)
@@ -2027,12 +2078,21 @@ class AppWindow:
             return
         self._camera_idx = 7
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
+    def _on_change_camera_merge(self):
+        if self.annotation_scene is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+            return
+        self._camera_idx = -1
+        self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _init_cam_name(self):
         self._cam_name_list = list(self._frame.cameras.keys())
         self._cam_name_list.sort()
         for idx, (cam_button, _) in enumerate(self._view_error_layout_list):
             cam_button.text = self._cam_name_list[idx]
     def _init_image_viewer(self):
+        if self._camera_idx == -1:
+            self._rgb_proxy.set_widget(gui.ImageWidget())
+            return
         current_cam = self._cam_name_list[self._camera_idx]
         rgb_img, depth_img = self._frame.get_image(current_cam)
         self.H, self.W, _ = rgb_img.shape
