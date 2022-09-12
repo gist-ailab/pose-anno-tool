@@ -17,6 +17,7 @@ from torch import optim
 
 import numpy as np
 import cv2
+import pickle
 
 import yaml
 import time
@@ -68,6 +69,28 @@ class Utils:
     def save_dic_to_json(dic, json_path):
         with open(json_path, 'w') as j_file:
             json.dump(dic, j_file, sort_keys=True, indent=4)
+
+    def save_to_pickle(data, pickle_path):
+        with open(pickle_path, 'wb') as f:
+            pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+
+    def load_pickle(pickle_path):
+        with open(pickle_path, 'rb') as f:
+            try:
+                data = pickle.load(f)
+            except ValueError:
+                import pickle5
+                data = pickle5.load(f)
+
+        return data
+
+
+    def trimesh_to_open3d(mesh):
+        return mesh.as_open3d()
+
+    def open3d_to_trimesh(mesh):
+        pass
+
 
 class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
@@ -384,7 +407,7 @@ class HandModel:
             self._last_undo = time.time()
     
     def set_joint_pose(self, pose):
-        pose_param = torch.Tensor(pose).unsqueeze(0) # 48, 3 -> 1, 48, 3
+        pose_param = torch.Tensor(pose).unsqueeze(0) # 48 -> 1, 48
         self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
         self.update_mano()
     def get_joint_pose(self):
@@ -663,7 +686,7 @@ class Dataset:
         return "작업 폴더: {}\n현재 파일: {:06}".format(self.current_scene_file, self.current_frame_file)
         
     def get_progress(self):
-        return "작업 폴더: [{}/{}]".format(self.current_scene_idx, len(self._total_scene))
+        return "작업 폴더: [{}/{}]".format(self.current_scene_idx+1, len(self._total_scene))
     
     def get_next_scene(self):
         scene_idx = self.current_scene_idx + 1
@@ -766,7 +789,7 @@ class DexYCBSample(Dataset):
             if not os.path.isdir(pcd_dir):
                 continue
             
-            pcd_list = os.listdir(pcd_dir)
+            pcd_list = [os.path.join(pcd_dir, p) for p in os.listdir(pcd_dir)]
             pcd_list.sort()
             self._scene_pcd[sc_name] = pcd_list
             num_frames = meta['num_frames']
@@ -808,6 +831,7 @@ class DexYCBSample(Dataset):
                     "extrinsics": extrinsic
                 }
         
+        self._total_scene.sort()
         super().__init__()
 
     
@@ -849,7 +873,7 @@ class Scene:
             
             self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", "{:06d}.png".format(frame_idx)) 
             self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(frame_idx)) 
-            self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(frame_idx)) 
+            self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(frame_idx))
 
         def get_rgb(self, cam_name):
             rgb_path = self.rgb_format.format(cam_name)
@@ -871,9 +895,6 @@ class Scene:
             pcd = Scene._load_point_cloud(pcd_path)
             return pcd
             
-
-
-
     def __init__(self, scene_dir, hands, objects, cameras, pcd_list, current_frame):
         self._root_dir = scene_dir
         self._scene_dir = os.path.join(scene_dir, "merge")
@@ -988,9 +1009,27 @@ class Scene:
             return True
         except:
             print("Fail to load Label")
+        try:
+            for cam, _ in self._cameras.items():
+                try:
+                    ai_label_path = os.path.join(self._root_dir, cam, "hand_mocap", "{:06d}.json".format(self.frame_id))
+                    ai_label = Utils.load_json_to_dic(ai_label_path)
+                    for side, val in ai_label.items():
+                        mano_pose = np.concatenate((np.array(val['wrist_ori']).reshape(1, 3), np.array(val['mano_pose']))).reshape(-1)
+                        self._hands[side].set_joint_pose(mano_pose)
+                        self._hands[side].set_root_position(np.array(val['wrist_pos'])/1000)
+                        
+                    return True
+                except:
+                    continue
+        except:
+            print("Fail to load Label")
             for hand_model in self._hands.values():
                 hand_model.reset()
             return False
+
+        
+            
         
 
     def load_previous_label(self):
@@ -1044,7 +1083,6 @@ class Scene:
     
 
 class Settings:
-    SHADER_POINT = "pointcloud"
     SHADER_UNLIT = "defaultUnlit"
     SHADER_LINE = "unlitLine"
     SHADER_LIT_TRANS = "defaultLitTransparency"
@@ -1065,10 +1103,10 @@ class Settings:
 
         # ----- scene material
         self.scene_material = rendering.MaterialRecord()
-        self.scene_material.base_color = [1.0, 1.0, 1.0, 1.0-self.point_transparency]
+        self.scene_material.base_color = [1.0, 1.0, 1.0, 1.0]
         self.scene_material.base_reflectance = 0
         self.scene_material.base_roughness = 0.5
-        self.scene_material.shader = Settings.SHADER_LIT_TRANS
+        self.scene_material.shader = Settings.SHADER_UNLIT
         self.scene_material.point_size = 1.0
 
         # ----- hand model setting
@@ -1133,16 +1171,14 @@ class HeadlessRenderer:
     def __init__(self, W, H):
         self.W, self.H = W, H
         self.render = rendering.OffscreenRenderer(width=self.W, height=self.H)
-        self.render.scene.set_background([0, 0, 0, 1]) # black background color
-        self.render.scene.set_lighting(self.render.scene.LightingProfile.SOFT_SHADOWS, [0,0,0])
+        self.render.scene.set_background([0, 0, 0, 0]) # black background color
+        self.render.scene.set_lighting(self.render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
 
         # material
         self.obj_mtl = o3d.visualization.rendering.MaterialRecord()
-        self.obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         self.obj_mtl.shader = "defaultUnlit"
         
         self.hand_mtl = o3d.visualization.rendering.MaterialRecord()
-        self.hand_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         self.hand_mtl.shader = "defaultUnlit"
         
     def add_objects(self, objects, color=[1, 0, 0]):
@@ -1282,7 +1318,7 @@ class AppWindow:
         # ---- annotation tool settings ----
         self._initialize_background()
         self._on_scene_point_size(5) # set default size to 1
-        self._on_point_transparency(0)
+        # self._on_point_transparency(0)
         self._on_object_transparency(0.5)
         self._on_hand_transparency(0.5)
         self._on_hand_point_size(10) # set default size to 10
@@ -1396,7 +1432,9 @@ class AppWindow:
         self.window.set_needs_layout()
         intrinsic = self._frame.cameras[cam_name].intrinsic
         extrinsic = self._frame.cameras[cam_name].extrinsics
-        self._scene.setup_camera(o3d.camera.PinholeCameraIntrinsic(self.W, self.H, intrinsic), extrinsic,  self.bounds)
+        # self._scene.setup_camera(o3d.camera.PinholeCameraIntrinsic(self.W, self.H, intrinsic), extrinsic,  self.bounds)
+        self._scene.setup_camera(o3d.camera.PinholeCameraIntrinsic(self.W, self.H, 
+                                intrinsic[0, 0],intrinsic[1, 1], intrinsic[0, 2], intrinsic[1, 2]), extrinsic,  self.bounds)
         # master to active camera
         center = np.dot(extrinsic, np.array([0, 0, 1, 1]))[:3]  # look_at target 
         eye = np.dot(extrinsic, np.array([0, 0, 0, 1]))[:3]  # camera position
@@ -1506,11 +1544,11 @@ class AppWindow:
         grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._scene_point_size)
         
-        self._point_transparency = gui.Slider(gui.Slider.DOUBLE)
-        self._point_transparency.set_limits(0, 1)
-        self._point_transparency.set_on_value_changed(self._on_point_transparency)
-        grid.add_child(gui.Label("포인트 투명도"))
-        grid.add_child(self._point_transparency)
+        # self._point_transparency = gui.Slider(gui.Slider.DOUBLE)
+        # self._point_transparency.set_limits(0, 1)
+        # self._point_transparency.set_on_value_changed(self._on_point_transparency)
+        # grid.add_child(gui.Label("포인트 투명도"))
+        # grid.add_child(self._point_transparency)
         
         self._object_transparency = gui.Slider(gui.Slider.DOUBLE)
         self._object_transparency.set_limits(0, 1)
@@ -1838,6 +1876,7 @@ class AppWindow:
         self._active_hand = self._hands[active_side]
         self._convert_mode(LabelingMode.STATIC)
         self._update_current_hand_str()
+        self._update_valid_error()
 
     # convert finger
     def _convert_to_root(self):
@@ -1930,10 +1969,15 @@ class AppWindow:
     def _load_scene(self):
         self._frame = self.annotation_scene.get_current_frame()
         try:
-            self.annotation_scene.load_label()
+            ret = self.annotation_scene.load_label()
         except:
             self._log.text = "\t 저장된 라벨이 없습니다."
             pass
+        if not ret:
+            hands = self._frame.hands
+            pcd = self._frame.scene_pcd
+            for s, hand_model in hands.items():
+                hand_model.set_root_position(pcd.get_center())
         self._update_progress_str()
         self._on_change_camera_merge()
         # self._init_pcd_layer()
@@ -2278,8 +2322,8 @@ class AppWindow:
             rgb_rendered = np.array(rgb_rendered)
 
             # only hand mask
-            right_hand_mask = rgb_rendered[:, :, 1] == 1
-            left_hand_mask = rgb_rendered[:, :, 2] == 1
+            right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]==0, np.bitwise_and(rgb_rendered[:, :, 1]!=0, rgb_rendered[:, :, 2]==0))
+            left_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]==0, np.bitwise_and(rgb_rendered[:, :, 1]==0, rgb_rendered[:, :, 2]!=0))
 
             # set mask as rendered depth
             valid_mask = depth_rendered > 0
@@ -2292,22 +2336,21 @@ class AppWindow:
             diff_vis = rgb_rendered
             # calculate diff
             depth_diff = depth_captured - depth_rendered
+            depth_diff_abs = np.abs(np.copy(depth_diff))
+            inlier_mask = depth_diff_abs < 50
+
             # right_hand
-            r_valid_mask = valid_mask * right_hand_mask
-            r_depth_diff = depth_diff * r_valid_mask
-            depth_diff_abs = np.abs(np.copy(r_depth_diff))
-            try:
+            r_valid_mask = valid_mask * right_hand_mask * inlier_mask
+            if np.sum(r_valid_mask) > 0:
                 depth_diff_mean = np.sum(depth_diff_abs[r_valid_mask]) / np.sum(r_valid_mask)
-            except:
+            else:
                 depth_diff_mean = -1
             r_diff_mean = copy.deepcopy(depth_diff_mean)
             # left hand
-            l_valid_mask = valid_mask * left_hand_mask
-            l_depth_diff = depth_diff * l_valid_mask
-            depth_diff_abs = np.abs(np.copy(l_depth_diff))
-            try:
+            l_valid_mask = valid_mask * left_hand_mask * inlier_mask
+            if np.sum(l_valid_mask) > 0:
                 depth_diff_mean = np.sum(depth_diff_abs[l_valid_mask]) / np.sum(l_valid_mask)
-            except:
+            else:
                 depth_diff_mean = -1
             l_diff_mean = copy.deepcopy(depth_diff_mean)
             
@@ -2318,19 +2361,37 @@ class AppWindow:
             diff_vis = cv2.addWeighted(rgb_captured, 0.8, diff_vis, 1.0, 0)
             self._diff_images[cam_name] = diff_vis
             
-        total_mean = 0
-        count = 0
-        for depth_diff in depth_diff_list:
-            for diff in depth_diff:
-                if diff == -1:
+        total_mean = [0, 0]
+        count = [0, 0]
+        max_v = [-np.inf, -np.inf]
+        max_idx = [None, None]
+        for idx, diff in enumerate(depth_diff_list):
+            for s_idx, dif in enumerate(diff):
+                if dif==-1:
                     continue
-                total_mean += diff
-                count += 1
+                if dif > max_v[s_idx]:
+                    max_v[s_idx] = dif
+                    max_idx[s_idx] = idx
+                total_mean[s_idx] += dif
+                count[s_idx] += 1
+        if self._active_hand.side=='right':
+            max_idx = max_idx[0]
+        else:
+            max_idx = max_idx[1]
+        for idx, error_layout in enumerate(self._view_error_layout_list):
+            if idx==max_idx:
+                error_layout[1].text_color = gui.Color(1, 0, 0)
+            else:
+                error_layout[1].text_color = gui.Color(1, 1, 1)
         try:
-            total_mean /= count
+            total_mean[0] /= count[0]
         except:
-            total_mean = -1
-        self._total_error_txt.text = "평균 에러: {:.3f}".format(total_mean)
+            total_mean[0] = -1
+        try:
+            total_mean[1] /= count[1]
+        except:
+            total_mean[1] = -1
+        self._total_error_txt.text = "평균 에러: 오른손: {:.3f} | 왼손: {:.3f}".format(*total_mean)
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
         self.window.set_needs_layout()
