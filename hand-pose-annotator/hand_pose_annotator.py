@@ -536,7 +536,8 @@ class HandModel:
 
 class PoseTemplate:
     template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pose_template")
-    def __init__(self):
+    def __init__(self, side='right'):
+        self.template_dir = os.path.join(self.template_dir, side)
         if not os.path.isdir(self.template_dir):
             os.makedirs(self.template_dir)
         self.template = {}
@@ -1008,29 +1009,32 @@ class Scene:
                 self._hands[side].set_state(state)
             return True
         except:
-            print("Fail to load Label")
+            print("Fail to load previous Label -> Try to load AI label")
         try:
             for cam, _ in self._cameras.items():
                 try:
                     ai_label_path = os.path.join(self._root_dir, cam, "hand_mocap", "{:06d}.json".format(self.frame_id))
+                    all_pred_path = os.path.join(self._root_dir, cam, "hand_mocap", "{:06d}_prediction_result.pkl".format(self.frame_id))
                     ai_label = Utils.load_json_to_dic(ai_label_path)
+                    all_pred = Utils.load_pickle(all_pred_path)['pred_output_list'][0]
                     for side, val in ai_label.items():
-                        mano_pose = np.concatenate((np.array(val['wrist_ori']).reshape(1, 3), np.array(val['mano_pose']))).reshape(-1)
+                        mano_pose = np.array(val['mano_pose']).reshape(-1)
+                        pred_info = all_pred['{}_hand'.format(side)]
+                        # wrist_pos = np.array(val['wrist_pos'])/1000
+                        wrist_pos = pred_info['pred_joints_smpl'][0]
+                        wrist_ori = np.array(val['wrist_ori'])
+                        mano_pose = np.concatenate((wrist_ori, mano_pose))
                         self._hands[side].set_joint_pose(mano_pose)
-                        self._hands[side].set_root_position(np.array(val['wrist_pos'])/1000)
+                        # self._hands[side].set_root_position(wrist_pos)
                         
-                    return True
+                    return False
                 except:
                     continue
         except:
-            print("Fail to load Label")
+            print("Fail to load AI Label")
             for hand_model in self._hands.values():
                 hand_model.reset()
             return False
-
-        
-            
-        
 
     def load_previous_label(self):
         if self._previous_label is None:
@@ -1095,7 +1099,7 @@ class Settings:
         self.show_objects = True
         self.show_pcd = True
         self.point_transparency =0
-        self.hand_transparency =0.5
+        self.hand_transparency =0.2
         self.obj_transparency = 0.5
 
         # ----- Material Settings -----
@@ -1263,7 +1267,8 @@ class AppWindow:
         self.scale_factor = None
         
         
-        self.template = PoseTemplate()
+        self.right_template = PoseTemplate(side='right')
+        self.left_template = PoseTemplate(side='left')
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
         w = self.window
@@ -1295,10 +1300,11 @@ class AppWindow:
         self._init_image_view_layout()
 
         # ---- validation panel
-        self._validation_panel = gui.CollapsableVert("라벨링 검증 도구", 0,
-                                                 gui.Margins(em, 0, 0, 0))
+        self._validation_panel = gui.Vert(
+            0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
         
         self._init_show_error_layout()
+        self._init_preset_layout()
         
         # ---- log panel
         self._log_panel = gui.VGrid(1, em)
@@ -1320,7 +1326,7 @@ class AppWindow:
         self._on_scene_point_size(5) # set default size to 1
         # self._on_point_transparency(0)
         self._on_object_transparency(0.5)
-        self._on_hand_transparency(0.5)
+        self._on_hand_transparency(0.2)
         self._on_hand_point_size(10) # set default size to 10
         self._on_hand_line_size(2) # set default size to 2
         self._on_responsiveness(5) # set default responsiveness to 5
@@ -2053,26 +2059,6 @@ class AppWindow:
         button.set_on_clicked(self._on_load_previous_label)
         label_control_layout.add_child(button)
 
-        label = gui.Label("{0:-^45}".format("프리셋"))
-        label_control_layout.add_child(label)
-        self.preset_list = gui.ListView()
-        label_control_layout.add_child(self.preset_list)
-        self.preset_list.set_on_selection_changed(self._on_change_preset_select)
-        self.preset_list.set_items(self.template.get_template_list())
-
-        h = gui.Horiz(0.4 * em)
-        self._preset_name = gui.TextEdit()
-        self._preset_name.text_value = "프리셋 이름"
-        h.add_child(self._preset_name)
-        button = gui.Button("불러오기")
-        button.set_on_clicked(self._on_load_preset)
-        h.add_child(button)
-        button = gui.Button("저장하기")
-        button.set_on_clicked(self._on_save_preset)
-        h.add_child(button)
-        label_control_layout.add_child(h)
-        
-        self._settings_panel.add_child(label_control_layout)
     def _on_save_label(self):
         self._log.text = "\t라벨링 결과를 저장 중입니다."
         self.window.set_needs_layout()
@@ -2102,30 +2088,110 @@ class AppWindow:
         else:
             self._on_error("저장된 라벨이 없습니다. (error at _on_load_previous_label)")
             return
-    def _on_load_preset(self):
+    
+    def _init_preset_layout(self):
+        em = self.window.theme.font_size
+        preset_layout = gui.CollapsableVert("프리셋 저장 및 불러오기", 0.33 * em,
+                                                gui.Margins(0.25 * em, 0, 0, 0))
+        label = gui.Label("{0:-^45}".format("오른손 프리셋"))
+        preset_layout.add_child(label)
+        self.r_preset_list = gui.ListView()
+        preset_layout.add_child(self.r_preset_list)
+        self.r_preset_list.set_on_selection_changed(self._on_change_preset_select_r)
+        self.r_preset_list.set_items(self.right_template.get_template_list())
+        h = gui.Horiz(0.4 * em)
+        self._r_preset_name = gui.TextEdit()
+        self._r_preset_name.text_value = "프리셋 이름"
+        h.add_child(self._r_preset_name)
+        button = gui.Button("불러오기")
+        button.set_on_clicked(self._on_load_preset_r)
+        h.add_child(button)
+        button = gui.Button("저장하기")
+        button.set_on_clicked(self._on_save_preset_r)
+        h.add_child(button)
+        preset_layout.add_child(h)
+
+        label = gui.Label("{0:-^45}".format("왼손 프리셋"))
+        preset_layout.add_child(label)
+        self.l_preset_list = gui.ListView()
+        preset_layout.add_child(self.l_preset_list)
+        self.l_preset_list.set_on_selection_changed(self._on_change_preset_select_l)
+        self.l_preset_list.set_items(self.left_template.get_template_list())
+        h = gui.Horiz(0.4 * em)
+        self._l_preset_name = gui.TextEdit()
+        self._l_preset_name.text_value = "프리셋 이름"
+        h.add_child(self._l_preset_name)
+        button = gui.Button("불러오기")
+        button.set_on_clicked(self._on_load_preset_l)
+        h.add_child(button)
+        button = gui.Button("저장하기")
+        button.set_on_clicked(self._on_save_preset_l)
+        h.add_child(button)
+        preset_layout.add_child(h)
+        
+        self._validation_panel.add_child(preset_layout)
+    
+    def _on_load_preset_r(self):
         if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_load_preset)")
             return
-        name = self._preset_name.text_value
+        if self._active_hand.side=='left':
+            self._on_error("불러오는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
+            return
+        name = self._r_preset_name.text_value
         try:
-            pose = self.template.get_template2pose(name)
+            pose = self.right_template.get_template2pose(name)
             self._active_hand.set_joint_pose(pose)
             self._update_activate_hand()
             self._update_target_hand()
         except:
             self._on_error("프리셋 이름을 확인하세요. (error at _on_load_preset)")
-    def _on_save_preset(self):
+    def _on_save_preset_r(self):
         if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_preset)")
             return
-        name = self._preset_name.text_value
+        if self._active_hand.side=='left':
+            self._on_error("저장하려는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
+            return
+        name = self._r_preset_name.text_value
         pose = self._active_hand.get_joint_pose()
-        self.template.save_pose2template(name, pose)
-        self.preset_list.set_items(self.template.get_template_list())
-    def _on_change_preset_select(self, preset_name, double):
-        self._preset_name.text_value = preset_name
+        self.right_template.save_pose2template(name, pose)
+        self.r_preset_list.set_items(self.right_template.get_template_list())
+    def _on_change_preset_select_r(self, preset_name, double):
+        self._r_preset_name.text_value = preset_name
         if double:
-            self._on_load_preset()
+            self._on_load_preset_r()
+
+    def _on_load_preset_l(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_load_preset)")
+            return
+        if self._active_hand.side=='right':
+            self._on_error("불러오는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
+            return
+        name = self._l_preset_name.text_value
+        try:
+            pose = self.left_template.get_template2pose(name)
+            self._active_hand.set_joint_pose(pose)
+            self._update_activate_hand()
+            self._update_target_hand()
+        except:
+            self._on_error("프리셋 이름을 확인하세요. (error at _on_load_preset)")
+    def _on_save_preset_l(self):
+        if self._active_hand is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_preset)")
+            return
+        if self._active_hand.side=='right':
+            self._on_error("저장하려는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
+            return
+        name = self._l_preset_name.text_value
+        pose = self._active_hand.get_joint_pose()
+        self.left_template.save_pose2template(name, pose)
+        self.l_preset_list.set_items(self.left_template.get_template_list())
+    def _on_change_preset_select_l(self, preset_name, double):
+        self._l_preset_name.text_value = preset_name
+        if double:
+            self._on_load_preset_l()
         
     # image viewer
     def _init_image_view_layout(self):
@@ -2391,7 +2457,7 @@ class AppWindow:
             total_mean[1] /= count[1]
         except:
             total_mean[1] = -1
-        self._total_error_txt.text = "평균 에러: 오른손: {:.3f} | 왼손: {:.3f}".format(*total_mean)
+        self._total_error_txt.text = "평균: 오른손: {:.3f} | 왼손: {:.3f}".format(*total_mean)
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
         self.window.set_needs_layout()

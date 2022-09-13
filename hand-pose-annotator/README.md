@@ -4,9 +4,8 @@
 
 
 # TODO:
-- [ ] Save Debug log
-- [ ] Labeled Object Mesh Model
-- [ ] Image View with Current Label
+- [ ] Visualize Intersection Area
+- [ ] Calculate SDF base error
 
 ```
 # install requirements
