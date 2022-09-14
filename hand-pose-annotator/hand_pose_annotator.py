@@ -2058,6 +2058,7 @@ class AppWindow:
         button = gui.Button("이전 이미지 라벨 불러오기")
         button.set_on_clicked(self._on_load_previous_label)
         label_control_layout.add_child(button)
+        self._settings_panel.add_child(label_control_layout)
 
     def _on_save_label(self):
         self._log.text = "\t라벨링 결과를 저장 중입니다."
