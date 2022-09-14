@@ -893,6 +893,8 @@ class AppWindow:
             self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
             self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
             self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
+            if len(self.image_num_lists) == 0:
+                self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.jpg")])
             self.current_image_idx = self.image_num_lists.index(start_image_num)
             if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
                 self.update_obj_list()
@@ -1638,6 +1640,7 @@ class AppWindow:
 
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
         camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) # !TODO: change to scene_camera.json
+        print(camera_params_path)
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
@@ -1651,6 +1654,8 @@ class AppWindow:
             self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:06}.pcd')
             self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.png')
             self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}.png')
+        if not os.path.exists(self.rgb_path):
+            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.jpg')
 
         self.rgb_img = cv2.imread(self.rgb_path)
         depth_img = cv2.imread(self.depth_path, -1)

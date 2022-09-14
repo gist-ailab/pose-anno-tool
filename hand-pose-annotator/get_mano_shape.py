@@ -9,6 +9,7 @@ import trimesh
 import torch
 from manopth.manolayer import ManoLayer
 import image_geometry
+from scipy.spatial.transform import Rotation as R
 
 # hyper parameters
 roi = [0.3, 0.7, 0.2, 0.8] # x1, x2, y1, y2
@@ -59,9 +60,133 @@ distortion = k4a.calibration.get_distortion_coefficients(pyk4a.calibration.Calib
 intrinsic = o3d.camera.PinholeCameraIntrinsic(3840, 2160, cam_K[0, 0], cam_K[1, 1], cam_K[0, 2], cam_K[1, 2])
 
 # init mano
-mano_layer = ManoLayer(mano_root=mano_model_path, use_pca=False, ncomps=45, side=side)
+
+class MANO():
+
+    def __init__(self, side):
+        self.side = side
+        self.pose = [torch.zeros(1, 3) for _ in range(16)]
+        self.betas = torch.rand(1, 10)
+        self.mano_layer = ManoLayer(mano_root=mano_model_path, use_pca=False, ncomps=45, side=side)
+        self.optimizer = torch.optim.Adam(self.pose, lr=0.01)
+        self.criterion = torch.nn.MSELoss()
+
+    def update(self):
+
+        hand_verts, hand_joints = self.mano_layer(
+                                th_pose_coeffs=torch.concat(self.pose, dim=1), 
+                                th_betas=self.betas, 
+                                root_palm=torch.Tensor([1]))
+        hand_verts = self.transform_verts_joints(hand_verts, hand_joints)
+        pcd_mano = o3d.geometry.PointCloud()
+        pcd_mano.points = o3d.utility.Vector3dVector(hand_verts.detach()[0].numpy())
+        # pcd_mano.pa
+        self.pcd_mano = pcd_mano
+        self.hand_verts = hand_verts
+        return pcd_mano
+    
+    def transform_verts_joints(self, hand_verts, hand_joints):
+        hand_verts -= hand_joints[0, 0]
+        hand_verts *= 0.001
+        p_c = torch.Tensor(np.asarray(pcd_captured.points))
+        rot = torch.Tensor(R.from_euler('xyz', [90, 0, 0], degrees=True).as_matrix())
+        hand_verts = torch.matmul(hand_verts, rot)
+        hand_verts += torch.Tensor([
+                        torch.mean(p_c[:, 0]) - torch.mean(hand_verts[:, 0]), 
+                        torch.mean(p_c[:, 1]) - torch.mean(hand_verts[:, 1]), 
+                        torch.mean(p_c[:, 2]) - torch.mean(hand_verts[:, 2]), 
+                    ])
+        return hand_verts
 
 
+    def optimize_pose(self):
+        reg_p2p = o3d.pipelines.registration.registration_icp(
+            self.pcd_captured, self.pcd_mano, 0.01, np.eye(4),
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(
+            max_iteration=1)
+        )
+        p_captured = torch.Tensor(np.asarray(self.pcd_captured.points)[np.asarray(reg_p2p.correspondence_set[:, 0])])
+        p_captured.requires_grad = True
+        p_mano = self.hand_verts[0][torch.LongTensor(np.asarray(reg_p2p.correspondence_set))[:, 1]]
+        p_mano.requires_grad = True
+        loss = self.criterion(p_captured, p_mano)
+        self.optimizer.zero_grad()
+        loss.backward()
+        print(self.pose)
+        self.optimizer.step() 
+        print(self.pose)
+        self.update()
+        return self.pcd_mano
+
+    def move_left(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([-0.001, 0, 0])
+        vis.add_geometry(self.pcd_mano)
+    def move_right(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([+0.001, 0, 0])
+        vis.add_geometry(self.pcd_mano)
+    def move_up(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([0, +0.001, 0])
+        vis.add_geometry(self.pcd_mano)
+    def move_down(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([0, -0.001, 0])
+        vis.add_geometry(self.pcd_mano)
+    def move_forward(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([0, 0, +0.001])
+        vis.add_geometry(self.pcd_mano)
+    def move_backward(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.translate([0, 0, -0.001])
+        vis.add_geometry(self.pcd_mano)
+    def icp(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        reg_p2p = o3d.pipelines.registration.registration_icp(
+            pcd_captured, pcd_mano, 0.01, np.eye(4),
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(
+            max_iteration=50)
+        )
+        if np.sum(np.abs(reg_p2p.transformation[:3, 3])) < 0.1:
+            pcd_mano.transform(reg_p2p.transformation)
+        else:
+            print("ICP failed")
+        vis.add_geometry(self.pcd_mano)
+    def rotate_left(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [-1, 0, 0], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def rotate_right(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [+1, 0, 0], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def rotate_up(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [0, +1, 0], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def rotate_down(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [0, -1, 0], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def rotate_forward(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [0, 0, +1], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def rotate_backward(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        pcd_mano.rotate(R.from_euler('xyz', [0, 0, -1], degrees=True).as_matrix(), center=np.mean(np.asarray(pcd_mano.points), axis=0))
+        vis.add_geometry(self.pcd_mano)
+    def opt_pose(self, vis):
+        vis.remove_geometry(self.pcd_mano)
+        self.pcd_mano = mano.optimize_pose()
+        vis.add_geometry(self.pcd_mano)
+        
+
+mano = MANO(side)
 
 # Get the next capture (blocking function)
 while True:
@@ -96,7 +221,6 @@ while True:
     cv2.rectangle(vis_img, (int(width*roi[0]), int(height*roi[2])), (int(width*roi[1]), int(height*roi[3])), (0, 255, 0), 2)
 
 
-
     vis_img = cv2.resize(vis_img, (1280, 720))
     cv2.imshow("test", vis_img)
 
@@ -111,44 +235,42 @@ while True:
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             rgb_img_o3d, depth_img_o3d, depth_scale=1, convert_rgb_to_intensity=False)
         pcd_captured = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic)
-        
         u, v = wrist_pos
         cx, cy = cam_K[0, 2], cam_K[1, 2]
         fx, fy = cam_K[0, 0], cam_K[1, 1]
         d = depth_img[v][u]
         x = (u - cx) * d / fx
         y = (v - cy) * d / fy
-        z = d
-        points = np.asarray(pcd_captured.points)
-        # points -= np.array([x, y, z])
-        points *= 1000
-        pcd_captured.points = o3d.utility.Vector3dVector(points)
-        # pcd = trimesh.points.PointCloud(pcd_o3d.points, pcd_o3d.colors)
-        # pcd.show()
+        z = d 
+        pcd_captured = pcd_captured.translate(-np.array([x, y, z]))
+        se3 = R.from_euler('xyz', [0, -90, 90], degrees=True).as_matrix()
+        pcd_captured = pcd_captured.rotate(se3)
+        pcd_captured.rotate(R.from_euler('xyz', [90, 0, 0], degrees=True).as_matrix())
+        mano.pcd_captured = pcd_captured
 
-        wrist_pos_3d = torch.Tensor([[x, y, z]]) 
+        pcd_mano = mano.update()
+
+        
+
+        
+        key_to_callback = {}
+        key_to_callback[ord('A')] = mano.move_left
+        key_to_callback[ord('D')] = mano.move_right
+        key_to_callback[ord('W')] = mano.move_up
+        key_to_callback[ord('S')] = mano.move_down
+        key_to_callback[ord('Q')] = mano.move_forward
+        key_to_callback[ord('E')] = mano.move_backward
+        key_to_callback[ord('T')] = mano.icp
+        key_to_callback[ord('J')] = mano.rotate_left
+        key_to_callback[ord('L')] = mano.rotate_right
+        key_to_callback[ord('I')] = mano.rotate_up
+        key_to_callback[ord('K')] = mano.rotate_down
+        key_to_callback[ord('U')] = mano.rotate_forward
+        key_to_callback[ord('O')] = mano.rotate_backward
+        key_to_callback[ord('G')] = mano.opt_pose
 
 
-        betas = torch.rand(1, 10)*.1
-        pose = torch.cat([torch.zeros(1, 45)*.1, torch.Tensor([[0, 0, 0]])], 1)
-        hand_verts, hand_joints = mano_layer(
-                                pose, 
-                                betas, 
-                                th_trans = wrist_pos_3d, 
-                                root_palm=torch.Tensor([1]))
-        global_orient = torch.Tensor([0, 0, 0]).view(1, 3)
-        transl = torch.Tensor([0, 0, 0]).view(1, 3)
-
-
-        pcd_mano = o3d.geometry.PointCloud()
-        # pcd_mano.points = o3d.utility.Vector3dVector(h_meshes[0].vertices)
-        # pcd_mano.colors = o3d.utility.Vector3dVector(h_meshes[0].vertex_colors)
-        hand_verts = hand_verts[0].detach().cpu().numpy() 
-        print(hand_verts.shape)
-        pcd_mano.points = o3d.utility.Vector3dVector(hand_verts)
-        pcd_mano.paint_uniform_color([1, 0, 0])
-
-        o3d.visualization.draw_geometries([pcd_captured, pcd_mano])
+        o3d.visualization.draw_geometries_with_key_callbacks([pcd_captured, pcd_mano], key_to_callback)
 
     if key == ord('q'):
         cv2.destroyAllWindows()
