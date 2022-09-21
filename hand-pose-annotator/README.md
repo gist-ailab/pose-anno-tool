@@ -4,9 +4,11 @@
 
 
 # TODO:
-- [ ] Visualize Intersection Area
+- [X] Select Activate each cam pcd
+- [X] Fix redo, undo
+- [ ] Mocap pose 
 - [ ] Calculate SDF base error
-
+- [ ] Visualize Intersection Area
 ```
 # install requirements
 $ conda create -n pose-anno python=3.7

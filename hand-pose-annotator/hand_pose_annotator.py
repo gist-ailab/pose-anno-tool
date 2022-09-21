@@ -209,6 +209,7 @@ class HandModel:
         self.undo_stack = []
         self.redo_stack = []
         self._last_undo = time.time()
+        self.save_undo(forced=True)
 
     
     #region mano model
@@ -405,6 +406,7 @@ class HandModel:
             self.undo_stack = []
             self.redo_stack = []
             self._last_undo = time.time()
+            self.save_undo(forced=True)
     
     def set_joint_pose(self, pose):
         pose_param = torch.Tensor(pose).unsqueeze(0) # 48 -> 1, 48
@@ -875,11 +877,12 @@ class Scene:
             self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", "{:06d}.png".format(frame_idx)) 
             self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(frame_idx)) 
             self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(frame_idx))
-
+            self.points = {}
+            for cam_name in cams.keys():
+                self.points[cam_name] = Scene._load_point_cloud(self.pcd_format.format(cam_name))
+            
         def get_rgb(self, cam_name):
             rgb_path = self.rgb_format.format(cam_name)
-            
-
             rgb_img = cv2.imread(rgb_path)
             
             return rgb_img
@@ -890,10 +893,23 @@ class Scene:
             depth_img = np.float32(depth_img) # mm
             return depth_img
             
-        def get_pcd(self, cam_name):
-            pcd_path = self.pcd_format.format(cam_name)
-            return self.scene_pcd
-            pcd = Scene._load_point_cloud(pcd_path)
+        def get_pcd(self, cam_list):
+            """get target points by cam list
+
+            Args:
+                cam_list (list): list of cam_name
+
+            Returns:
+                pcd
+            """
+            pcd = o3d.geometry.PointCloud()
+            points = []
+            colors = []
+            for cam_name in cam_list:
+                points.append(np.asarray(self.points[cam_name].points))
+                colors.append(np.asarray(self.points[cam_name].colors))
+            pcd.points = o3d.utility.Vector3dVector(np.concatenate(points, axis=0))
+            pcd.colors = o3d.utility.Vector3dVector(np.concatenate(colors, axis=0))
             return pcd
             
     def __init__(self, scene_dir, hands, objects, cameras, pcd_list, current_frame):
@@ -1361,6 +1377,12 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
         self.window.set_needs_layout()
+    
+    def _check_annotation_scene(self):
+        if self.annotation_scene is None:
+            self._on_error("라벨링 대상 파일을 선택하세요.")
+            return False
+        return True
     #endregion
     
     #region Layout and Callback
@@ -1786,62 +1808,67 @@ class AppWindow:
         self._current_hand_str = gui.Label("현재 대상: 준비중")
         handedit_layout.add_child(self._current_hand_str)
         
+        grid = gui.VGrid(2, 0.25 * em)
+        
         button = gui.Button("현재 대상 리셋 (R)")
         button.set_on_clicked(self._reset_current_hand)
-        handedit_layout.add_child(button)
+        grid.add_child(button)
         
-        h = gui.Horiz(0.4 * em)
-        button = gui.Button("손목 (`)")
-        button.horizontal_padding_em = 0.8
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_root)
-        h.add_child(button)  
-        button = gui.Button("엄지 (1)")
-        button.horizontal_padding_em = 0.6
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_thumb)
-        h.add_child(button)
-        button = gui.Button("검지 (2)")
-        button.horizontal_padding_em = 0.6
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_fore)
-        h.add_child(button)
-        handedit_layout.add_child(h)
-
-        h = gui.Horiz(0.4 * em)
-        button = gui.Button("중지 (3)")
-        button.horizontal_padding_em = 0.6
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_middle)
-        h.add_child(button)
-        button = gui.Button("약지 (4)")
-        button.horizontal_padding_em = 0.6
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_ring)
-        h.add_child(button)
-        button = gui.Button("소지 (5)")
-        button.horizontal_padding_em = 0.6
-        button.vertical_padding_em = 0.2
-        button.set_on_clicked(self._convert_to_little)
-        h.add_child(button)
-        handedit_layout.add_child(h)
-        
-        h = gui.Horiz(0.4 * em)
-        button = gui.Button("이전 관절(PgDn)")
-        button.horizontal_padding_em = 0.3
-        button.vertical_padding_em = 0
-        button.set_on_clicked(self._control_joint_down)
-        h.add_child(button)
-        button = gui.Button("다음 관절(PgUp)")
-        button.horizontal_padding_em = 0.3
-        button.vertical_padding_em = 0
-        button.set_on_clicked(self._control_joint_up)
-        h.add_child(button)
-        handedit_layout.add_child(h)
-
         button = gui.Button("손 바꾸기 (Tab)")
         button.set_on_clicked(self._convert_hand)
-        handedit_layout.add_child(button)
+        grid.add_child(button)
+        
+        button = gui.Button("이전 관절(PgDn)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0.3
+        button.set_on_clicked(self._control_joint_down)
+        grid.add_child(button)
+        button = gui.Button("다음 관절(PgUp)")
+        button.horizontal_padding_em = 0.3
+        button.vertical_padding_em = 0.3
+        button.set_on_clicked(self._control_joint_up)
+        grid.add_child(button)
+        
+        handedit_layout.add_child(grid)
+        
+        grid = gui.VGrid(3, 0.25 * em)
+        
+        button = gui.Button("손목 (`)")
+        button.horizontal_padding_em = 0.95
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_root)
+        grid.add_child(button)  
+        button = gui.Button("엄지 (1)")
+        button.horizontal_padding_em = 0.75
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_thumb)
+        grid.add_child(button)
+        button = gui.Button("검지 (2)")
+        button.horizontal_padding_em = 0.75
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_fore)
+        grid.add_child(button)
+        
+        button = gui.Button("중지 (3)")
+        button.horizontal_padding_em = 0.75
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_middle)
+        grid.add_child(button)
+        button = gui.Button("약지 (4)")
+        button.horizontal_padding_em = 0.75
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_ring)
+        grid.add_child(button)
+        button = gui.Button("소지 (5)")
+        button.horizontal_padding_em = 0.75
+        button.vertical_padding_em = 0.2
+        button.set_on_clicked(self._convert_to_little)
+        grid.add_child(button)
+        
+        handedit_layout.add_child(grid)
+
+        
+
         
         self._settings_panel.add_child(handedit_layout)
     def _reset_current_hand(self):
@@ -1998,8 +2025,7 @@ class AppWindow:
     def _on_previous_frame(self):
         if self._check_changes():
             return
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_frame)")
+        if not self._check_annotation_scene():
             return
         if not self.annotation_scene.moveto_previous_frame():
             self._on_error("이전 포인트 클라우드가 존재하지 않습니다.")
@@ -2009,8 +2035,7 @@ class AppWindow:
     def _on_next_frame(self):
         if self._check_changes():
             return
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_frame)")
+        if not self._check_annotation_scene():
             return
         if not self.annotation_scene.moveto_next_frame():
             self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
@@ -2020,8 +2045,7 @@ class AppWindow:
     def _on_previous_scene(self):
         if self._check_changes():
             return
-        if self.dataset is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_scene)")
+        if not self._check_annotation_scene():
             return
         scene = self.dataset.get_previous_scene()
         if scene is None:
@@ -2033,8 +2057,7 @@ class AppWindow:
     def _on_next_scene(self):
         if self._check_changes():
             return
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_scene)")
+        if not self._check_annotation_scene():
             return
         scene = self.dataset.get_next_scene()
         if scene is None:
@@ -2064,8 +2087,7 @@ class AppWindow:
         self._log.text = "\t라벨링 결과를 저장 중입니다."
         self.window.set_needs_layout()
         
-        if self.annotation_scene is None: # shsh
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_label)")
+        if not self._check_annotation_scene():
             return
         
         self.annotation_scene.save_label()
@@ -2075,8 +2097,7 @@ class AppWindow:
         self._log.text = "\t라벨링 결과를 저장했습니다."
         self._annotation_changed = False
     def _on_load_previous_label(self):
-        if self.annotation_scene is None: # shsh
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_label)")
+        if not self._check_annotation_scene():
             return
         self._log.text = "\t라벨링 결과를 불러오는 중입니다."
         self.window.set_needs_layout()
@@ -2208,137 +2229,164 @@ class AppWindow:
     # validate
     def _init_show_error_layout(self):
         em = self.window.theme.font_size
-        show_error_layout = gui.CollapsableVert("시점 별 에러율", 0.33 * em,
+        show_error_layout = gui.CollapsableVert("카메라 시점 조정", 0.33 * em,
                                                    gui.Margins(0.25 * em, 0, 0, 0))
         show_error_layout.set_is_open(True)
         
         self._view_error_layout_list = []
+        
         for i in range(8):
-            error_layout = gui.Horiz(0.4 * em)
-
+            h = gui.Horiz(0)
+            
             button = gui.Button("카메라 {}".format(i+1))
             button.set_on_clicked(self.__getattribute__("_on_change_camera_{}".format(i)))
-            error_layout.add_child(button)
-            error_txt = gui.Label("준비 안됨")
-            error_layout.add_child(error_txt)
-            show_error_layout.add_child(error_layout)
-            self._view_error_layout_list.append((button, error_txt))
+            button.vertical_padding_em = 0.1
+            h.add_child(button)
+            h.add_child(gui.Label(" | \n | "))
+            
+            v = gui.Vert(0)
+            right_error_txt = gui.Label("준비 안됨")
+            v.add_child(right_error_txt)
+            left_error_txt = gui.Label("준비 안됨")
+            v.add_child(left_error_txt)
+            h.add_child(v)
+            h.add_child(gui.Label(" | \n | "))
+            
+            box = gui.Checkbox("")
+            box.set_on_checked(self._on_change_bbox)
+            h.add_child(box)
+            h.add_child(gui.Label(" | \n | "))
 
-        error_layout = gui.Horiz(0.4 * em)
-        button = gui.Button("합쳐진 뷰")
+            _button = gui.Button("*")
+            _button.set_on_clicked(self.__getattribute__("_on_click_focus_{}".format(i)))
+            _button.vertical_padding_em = 0.1
+            h.add_child(_button)
+            
+            show_error_layout.add_child(h)
+            
+            self._view_error_layout_list.append((button, right_error_txt, left_error_txt, box))
+
+        show_error_layout.add_child(gui.Label("-"*60))
+
+        h = gui.Horiz(0.4 * em)
+        button = gui.Button("합친 상태")
+        button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_change_camera_merge)
-        error_layout.add_child(button)
-        self._total_error_txt = gui.Label("평균 에러: 없음")
-        error_layout.add_child(self._total_error_txt)
-        show_error_layout.add_child(error_layout)
-
+        h.add_child(button)
+        h.add_child(gui.Label(" | \n | "))
+        
+        v = gui.Vert(0)
+        right_error_txt = gui.Label("준비 안됨")
+        v.add_child(right_error_txt)
+        left_error_txt = gui.Label("준비 안됨")
+        v.add_child(left_error_txt)
+        h.add_child(v)
+        self._total_error_txt = (right_error_txt, left_error_txt)
+        show_error_layout.add_child(h)
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
         show_error_layout.add_child(self._activate_cam_txt)
 
         self._validation_panel.add_child(show_error_layout)
     def _on_change_camera_0(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 0
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_1(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 1
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_2(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 2
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_3(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 3
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_4(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 4
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_5(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 5
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_6(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 6
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_7(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = 7
-        self._reset_image_viewer()
-        self._update_image_viewer()
-        self._update_diff_viewer()
-        self._init_pcd_layer()
-        self._on_active_camera_viewpoint()
+        self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_merge(self):
-        if self.annotation_scene is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_change_camera)")
+        if not self._check_annotation_scene():
             return
         self._camera_idx = -1
+        for but, _, _, bbox in self._view_error_layout_list:
+            bbox.checked = True
+        self._on_change_camera()
+        self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
+    def _on_change_camera(self):
         self._reset_image_viewer()
         self._update_image_viewer()
         self._update_diff_viewer()
         self._init_pcd_layer()
         self._on_active_camera_viewpoint()
-        self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
+    def _on_change_bbox(self, visible):
+        if not self._check_annotation_scene():
+            return
+        self._init_pcd_layer()
+    def _get_activate_cam(self):
+        cam_list = []
+        for but, _, _, bbox in self._view_error_layout_list:
+            if bbox.checked:
+                cam_list.append(but.text)
+        return cam_list
+    def _on_click_focus_0(self):
+        self._on_focus(0)
+    def _on_click_focus_1(self):
+        self._on_focus(1)
+    def _on_click_focus_2(self):
+        self._on_focus(2)
+    def _on_click_focus_3(self):
+        self._on_focus(3)
+    def _on_click_focus_4(self):
+        self._on_focus(4)
+    def _on_click_focus_5(self):
+        self._on_focus(5)
+    def _on_click_focus_6(self):
+        self._on_focus(6)
+    def _on_click_focus_7(self):
+        self._on_focus(7)
+    def _on_focus(self, idx):
+        for i, (_, _, _, bbox) in enumerate(self._view_error_layout_list):
+            if i == idx:
+                bbox.checked = True
+            else:
+                bbox.checked = False
+        self._init_pcd_layer()
+
     def _init_cam_name(self):
         self._cam_name_list = list(self.annotation_scene._cameras.keys())
         self._cam_name_list.sort()
-        for idx, (cam_button, _) in enumerate(self._view_error_layout_list):
+        for idx, (cam_button, _, _, _) in enumerate(self._view_error_layout_list):
             cam_button.text = self._cam_name_list[idx]
         self._diff_images = {cam_name: None for cam_name in self._cam_name_list}
     def _update_image_viewer(self):
@@ -2422,7 +2470,8 @@ class AppWindow:
             l_diff_mean = copy.deepcopy(depth_diff_mean)
             
             depth_diff_list.append([r_diff_mean, l_diff_mean])
-            error_layout[1].text = "오른손: {:.3f} | 왼손: {:.3f}".format(r_diff_mean, l_diff_mean)
+            error_layout[1].text = "오른손: {:.2f}".format(r_diff_mean)
+            error_layout[2].text = "왼손: {:.2f}".format(l_diff_mean)
             
             # diff_vis[depth_rendered > 0] = [255, 0, 0]
             diff_vis = cv2.addWeighted(rgb_captured, 0.8, diff_vis, 1.0, 0)
@@ -2448,8 +2497,10 @@ class AppWindow:
         for idx, error_layout in enumerate(self._view_error_layout_list):
             if idx==max_idx:
                 error_layout[1].text_color = gui.Color(1, 0, 0)
+                error_layout[2].text_color = gui.Color(1, 0, 0)
             else:
                 error_layout[1].text_color = gui.Color(1, 1, 1)
+                error_layout[2].text_color = gui.Color(1, 1, 1)
         try:
             total_mean[0] /= count[0]
         except:
@@ -2458,7 +2509,9 @@ class AppWindow:
             total_mean[1] /= count[1]
         except:
             total_mean[1] = -1
-        self._total_error_txt.text = "평균: 오른손: {:.3f} | 왼손: {:.3f}".format(*total_mean)
+        self._total_error_txt[0].text = "오른손: {:.2f}".format(total_mean[0])
+        self._total_error_txt[1].text = "왼손: {:.2f}".format(total_mean[1])
+        
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
         self.window.set_needs_layout()
@@ -2484,7 +2537,7 @@ class AppWindow:
         if self._check_geometry(name):
             self._remove_geometry(name)
         self._scene.scene.add_geometry(name, geo, mat,
-                                       add_downsampled_copy_for_fast_rendering=True)
+                                       add_downsampled_copy_for_fast_rendering=False)
     
     def _clear_geometry(self):
         self._scene.scene.clear_geometry()
@@ -2611,10 +2664,13 @@ class AppWindow:
     
     def _init_pcd_layer(self):
         if self.settings.show_pcd:
-            if self._camera_idx==-1:
-                self._pcd = self._frame.scene_pcd
-            else:
-                self._pcd = self._frame.get_pcd(self._cam_name_list[self._camera_idx])
+            cam_name_list = []
+            for cam_name in self._get_activate_cam():
+                cam_name_list.append(cam_name)
+            if cam_name_list == []:
+                self._remove_geometry(self._scene_name)
+                return    
+            self._pcd = self._frame.get_pcd(cam_name_list)
             self.bounds = self._pcd.get_axis_aligned_bounding_box()
             self._add_geometry(self._scene_name, self._pcd, self.settings.scene_material)
         else:
