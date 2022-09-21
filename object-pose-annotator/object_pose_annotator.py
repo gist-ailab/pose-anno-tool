@@ -257,6 +257,8 @@ class AppWindow:
         self.settings = Settings()
         self.ok_delta = 5
         self.scale_factor = None
+        self.is_keyframe = False
+        self.load_keyframe_first = True
 
 
         self.window = gui.Application.instance.create_window(
@@ -510,6 +512,7 @@ class AppWindow:
 
         self._images_buttons_label = gui.Label("이미지:")
         self._samples_buttons_label = gui.Label("작업 폴더: ")
+        self._keyframe_buttons_label = gui.Label("키프레임: ")
 
         self._pre_image_button = gui.Button("이전")
         self._pre_image_button.horizontal_padding_em = 0.8
@@ -527,6 +530,14 @@ class AppWindow:
         self._next_sample_button.horizontal_padding_em = 0.8
         self._next_sample_button.vertical_padding_em = 0
         self._next_sample_button.set_on_clicked(self._on_next_scene)
+        self._pre_keyframe_button = gui.Button("이전")
+        self._pre_keyframe_button.horizontal_padding_em = 0.8
+        self._pre_keyframe_button.vertical_padding_em = 0
+        self._pre_keyframe_button.set_on_clicked(self._on_previous_keyframe)
+        self._next_keyframe_button = gui.Button("다음")
+        self._next_keyframe_button.horizontal_padding_em = 0.8
+        self._next_keyframe_button.vertical_padding_em = 0
+        self._next_keyframe_button.set_on_clicked(self._on_next_keyframe)
         # 2 rows for sample and scene control
         h = gui.Horiz(0.4 * em)  # row 1
         h.add_child(self._images_buttons_label)
@@ -538,6 +549,12 @@ class AppWindow:
         h.add_child(self._samples_buttons_label)
         h.add_child(self._pre_sample_button)
         h.add_child(self._next_sample_button)
+        h.add_stretch()
+        self._scene_control.add_child(h)
+        h = gui.Horiz(0.4 * em)  # row 2
+        h.add_child(self._keyframe_buttons_label)
+        h.add_child(self._pre_keyframe_button)
+        h.add_child(self._next_keyframe_button)
         h.add_stretch()
         self._scene_control.add_child(h)
 
@@ -1638,9 +1655,28 @@ class AppWindow:
         self.note_edit_4.text_value = ""
         self.note_edit_5.text_value = ""
 
+        keyframes_path = os.path.join(scenes_path, f'{scene_num:06}', 'keyframes.json')
+        if os.path.exists(keyframes_path):
+            with open(keyframes_path) as keyframes_file:
+                try:
+                    data = json.load(keyframes_file)
+                    self.keyframe_ids = data
+                    # use only first camera's keyframe
+                    # filter out only one of three consecutive keyframes
+                    self.keyframe_ids = [i for i in self.keyframe_ids if int(i) % 3 == 1]
+                    self.is_keyframe = True
+                except json.decoder.JSONDecodeError:
+                    self._on_error("저장된 키프레임 파일을 불러오지 못했습니다. (error at _scene_load)")
+                    return
+                if self.load_keyframe_first:
+                    image_num = self.image_num_lists[self.current_image_idx]
+                    if "{0:06d}".format(image_num) not in self.keyframe_ids:
+                        image_num = int(self.keyframe_ids[0])
+                        self.current_image_idx = self.image_num_lists.index(image_num)
+                        self._on_error("키프레임이 아닙니다. 첫번째 키프레임으로 이동합니다. (error at _scene_load)")
+                    self.load_keyframe_first = False
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
         camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) # !TODO: change to scene_camera.json
-        print(camera_params_path)
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
@@ -1720,9 +1756,9 @@ class AppWindow:
                                                         add_downsampled_copy_for_fast_rendering=True)
                         active_meshes.append(obj_name)
                     self._meshes_used.set_items(active_meshes)
-        self._update_scene_numbers()
 
-    
+
+        self._update_scene_numbers()
         self._validate_anno()
 
         # load scene_obj_info.json
@@ -1819,6 +1855,7 @@ class AppWindow:
         self._log.text = "\t 다음 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
         self.current_scene_idx += 1
+        self.load_keyframe_first = True
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
 
     def _on_previous_scene(self):
@@ -1833,6 +1870,7 @@ class AppWindow:
         self.current_scene_idx -= 1
         self._log.text = "\t 이전 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
+        self.load_keyframe_first = True
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
 
     def _on_change_image(self):
@@ -1884,6 +1922,79 @@ class AppWindow:
         self._log.text = "\t 이전 포인트 클라우드로 이동했습니다."
         self.window.set_needs_layout()
         self.current_image_idx -= 1
+        self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+            100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+            self.current_image_idx + 1, len(self.image_num_lists))
+
+
+    def _on_next_keyframe(self):
+        if self._check_changes():
+            return
+        if self.current_image_idx is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_keyframe)")
+            return
+        if not self.is_keyframe:
+            self._on_next_image()
+            return
+
+        image_num = self.image_num_lists[self.current_image_idx]
+        if "{0:06d}".format(image_num) not in self.keyframe_ids:
+            # get the first keyframe after the current image
+            for keyframe_id in self.keyframe_ids:
+                if int(keyframe_id) > image_num:
+                    image_num = int(keyframe_id)
+                    break
+            self.current_image_idx = self.image_num_lists.index(image_num)
+        # move to the next keyframe
+        else:
+            for i in range(self.current_image_idx + 1, len(self.image_num_lists)):
+                if "{0:06d}".format(self.image_num_lists[i]) in self.keyframe_ids:
+                    self.current_image_idx = i
+                    break
+
+        if self.current_image_idx  >= len(self.image_num_lists) - 1:
+            self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
+        self.window.set_needs_layout()
+        self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+            100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+            self.current_image_idx + 1, len(self.image_num_lists))
+
+    def _on_previous_keyframe(self):
+        if self._check_changes():
+            return
+        if self._check_changes():
+            return
+        if self.current_image_idx is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_keyframe)")
+            return
+        if not self.is_keyframe:
+            self._on_previous_image()
+            return
+        image_num = self.image_num_lists[self.current_image_idx]
+        if "{0:06d}".format(image_num) not in self.keyframe_ids:
+            # get the first keyframe before the current image
+            for keyframe_id in self.keyframe_ids[::-1]:
+                if int(keyframe_id) < image_num:
+                    image_num = int(keyframe_id)
+                    break
+            self.current_image_idx = self.image_num_lists.index(image_num)
+        # move to the previous keyframe
+        else:
+            for i in range(self.current_image_idx - 1, -1, -1):
+                if "{0:06d}".format(self.image_num_lists[i]) in self.keyframe_ids:
+                    self.current_image_idx = i
+                    break
+        if self.current_image_idx < -4:
+            self._on_error("이전 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 이전 포인트 클라우드로 이동했습니다."
+        self.window.set_needs_layout()
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
         self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
