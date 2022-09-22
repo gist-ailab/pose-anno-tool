@@ -14,6 +14,7 @@ from open3d.visualization import MeshShadeOption
 import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
+from pytorch3d.ops import knn_points
 
 import numpy as np
 import cv2
@@ -92,6 +93,23 @@ class Utils:
         pass
 
 
+    #https://gist.github.com/JosueCom/7e89afc7f30761022d7747a501260fe3
+    def distance_matrix(x, y=None, p = 2): #pairwise distance of vectors
+        
+        y = x if type(y) == type(None) else y
+
+        n = x.size(0)
+        m = y.size(0)
+        d = x.size(1)
+
+        x = x.unsqueeze(1).expand(n, m, d)
+        y = y.unsqueeze(0).expand(n, m, d)
+        
+        dist = torch.pow(x - y, p).sum(2) ** (1/p)
+        
+        return dist
+
+
 class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
     OPTIMIZE    = "F2. 가이드 기반 라벨링"
@@ -148,6 +166,7 @@ class HandModel:
                             use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
+        # self.point_loss = o3d.t.pipelines.registration.TransformationEstimationPointToPoint().compute_rmse
         if shape_param is None:
             shape_param = torch.zeros(10)
         self.reset(shape_param)
@@ -196,6 +215,7 @@ class HandModel:
             self.joint_rot += [torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*i:3*(i+1)]).unsqueeze(0) for i in range(15)]
             
         self.optimizer = None
+        self.icp_optimizer = torch.optim.SGD(self.joint_rot, lr=1e-2, momentum=0.9)
         self.update_mano()
         self.root_delta = self.joints.cpu().detach()[0, 0]
         self.reset_target()
@@ -447,6 +467,29 @@ class HandModel:
         else:
             return False
     
+    def optimize_to_points(self, target_points):
+        previous_grad = []
+        for rot_param in self.joint_rot:
+            previous_grad.append(rot_param.requires_grad)
+            rot_param.requires_grad = True
+        
+        self.update_mano()
+        loss = self._p2p_loss(target_points)
+        loss.backward()
+
+        print("loss: ", loss)
+        
+        with torch.no_grad():
+            # grad descent
+            for rot_param in self.joint_rot:
+                rot_param -= torch.clip(rot_param.grad, -0.01, 0.01)
+            # zero grad
+            for rot_param in self.joint_rot:
+                rot_param.grad = None
+
+        for idx, rot_param in enumerate(self.joint_rot):
+            rot_param.requires_grad = previous_grad[idx]
+        
     def get_target(self):
         return self.targets.cpu().detach()[0, :]
     
@@ -459,6 +502,18 @@ class HandModel:
         assert self.optimize_state==LabelingMode.OPTIMIZE
         target_idx = self.optimize_idx[self.optimize_target]
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
+    
+    def _p2p_loss(self, target_points):
+        p1 = self.verts[0]
+        # print(p1)
+        p2 = torch.Tensor(target_points)
+        dist = Utils.distance_matrix(p1, p2)
+        # print(dist)
+        min_dist, _ = torch.min(dist, dim=1)
+        min_dist = torch.sum(min_dist)
+        # print(min_dist)
+        
+        return min_dist
     
     def set_learning_rate(self, lr):
         self.learning_rate = lr
@@ -2281,6 +2336,12 @@ class AppWindow:
         left_error_txt = gui.Label("준비 안됨")
         v.add_child(left_error_txt)
         h.add_child(v)
+        
+        button = gui.Button("손가락 정렬")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_icp)
+        h.add_child(button)
+        
         self._total_error_txt = (right_error_txt, left_error_txt)
         show_error_layout.add_child(h)
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
@@ -2382,6 +2443,21 @@ class AppWindow:
             else:
                 bbox.checked = False
         self._init_pcd_layer()
+    def _on_icp(self):
+        if not self._check_annotation_scene():
+            return
+        hand_mesh = self._active_hand.get_geometry()['mesh']
+        bounds = hand_mesh.get_oriented_bounding_box()
+        target_pcd = self._pcd.crop(bounds.scale(1.2, bounds.center))
+        if len(target_pcd.points) < 1000:
+            self._on_error("활성화된 손 근처에 포인트가 부족합니다. 손을 더 맞춰주세요")
+            return
+        # downsampling
+        target_pcd = target_pcd.farthest_point_down_sample(5000)
+        target_points = np.asarray(target_pcd.points)
+        
+        self._active_hand.optimize_to_points(target_points)
+        self._init_hand_layer()
 
     def _init_cam_name(self):
         self._cam_name_list = list(self.annotation_scene._cameras.keys())
@@ -2829,9 +2905,11 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.HANDLED
         if event.key == gui.KeyName.Y and event.type == gui.KeyEvent.DOWN:
             self._on_active_viewpoint()
-            return gui.Widget.EventCallbackResult.HANDLED
-
-        # undo / redo
+            return gui.Widget.EventCallbackResult.HANDLEDf event.key == gui.KeyName.B:
+        #     if self._active_hand is None:
+        #         return gui.Widget.EventCallbackResult.IGNORED
+        #     self._on_icp()
+        #  
         if (event.key==gui.KeyName.COMMA and event.type==gui.KeyEvent.DOWN):
             self._undo()
             return gui.Widget.EventCallbackResult.CONSUMED
@@ -3000,6 +3078,12 @@ class AppWindow:
             self._update_target_hand()
             return gui.Widget.EventCallbackResult.CONSUMED
 
+        # if event.key == gui.KeyName.B:
+        #     if self._active_hand is None:
+        #         return gui.Widget.EventCallbackResult.IGNORED
+        #     self._on_icp()
+        #     return gui.Widget.EventCallbackResult.CONSUMED
+        
         if self._labeling_mode==LabelingMode.OPTIMIZE:
             # optimze
             if event.key == gui.KeyName.SPACE:
@@ -3012,7 +3096,8 @@ class AppWindow:
                 self._active_hand.reset_target()
                 self._update_target_hand()
                 return gui.Widget.EventCallbackResult.CONSUMED
-
+        
+        
         # Translation
         if event.type!=gui.KeyEvent.UP:
             if not self._left_shift_modifier and \
