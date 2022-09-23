@@ -115,6 +115,10 @@ class LabelingMode:
     OPTIMIZE    = "F2. 가이드 기반 라벨링"
 
 class HandModel:
+    # JOINT IMG () # 180, 340
+    LEFT_JOINT_IMG = {0: [91, 166], 1: [66, 148], 2: [46, 131], 3: [33, 113], 17: [125, 110], 13: [112, 99], 18: [136, 96], 5: [73, 94], 4: [14, 89], 9: [93, 88], 19: [144, 83], 14: [116, 76], 20: [153, 69], 6: [72, 67], 10: [98, 63], 15: [123, 56], 7: [71, 49], 11: [101, 44],  16: [129, 38], 8: [68, 30], 12:[105, 25]}
+    RIGHT_JOINT_IMG = {0: [248, 166], 1: [272, 148], 2: [292, 131], 3: [306, 113], 17: [213, 110], 13: [226, 99], 18: [203, 96], 5: [266, 94], 4: [325, 89], 9: [245, 88], 19: [194, 83], 14: [222, 76], 20: [185, 69], 6: [267, 67], 10: [240, 63], 15: [216, 56],12: [233, 23],  8: [270, 30], 16: [210, 38],11: [237, 44], 7: [267, 49]}
+    
     # link pair of hand
     LINK = [
         [0, 1], [1, 2], [2, 3], [3, 4],
@@ -166,6 +170,14 @@ class HandModel:
                             use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
+        if side=='right':
+            self._active_img = self.RIGHT_JOINT_IMG
+            self._nactive_img = self.LEFT_JOINT_IMG
+        else:
+            self._nactive_img = self.RIGHT_JOINT_IMG
+            self._active_img = self.LEFT_JOINT_IMG
+        self.init_joint_mask()
+        
         # self.point_loss = o3d.t.pipelines.registration.TransformationEstimationPointToPoint().compute_rmse
         if shape_param is None:
             shape_param = torch.zeros(10)
@@ -230,7 +242,6 @@ class HandModel:
         self.redo_stack = []
         self._last_undo = time.time()
         self.save_undo(forced=True)
-
     
     #region mano model
     def update_mano(self):
@@ -240,6 +251,8 @@ class HandModel:
                                         th_trans=self.root_trans)
         self.verts = verts / 1000
         self.joints = joints / 1000
+        # self.verts = verts
+        # self.joints = joints
         self.faces = self.mano_layer.th_faces
     
     def _get_control_joint_param_idx(self):
@@ -489,6 +502,7 @@ class HandModel:
 
         for idx, rot_param in enumerate(self.joint_rot):
             rot_param.requires_grad = previous_grad[idx]
+        self.update_mano()
         
     def get_target(self):
         return self.targets.cpu().detach()[0, :]
@@ -591,6 +605,34 @@ class HandModel:
         else:
             raise NotImplementedError
 
+    def init_joint_mask(self):
+        total_mask = np.zeros((180, 340, 3), np.uint8)
+        mask = (total_mask > 0)[:, :, 0]
+        self.joint_mask = {
+            'active': {},
+            'nactive': {}
+        }
+        for idx, (j, i) in self._active_img.items():
+            temp = mask.copy()
+            xs, xe = max(i-5, 0), min(i+5, 180)
+            ys, ye = max(j-5, 0), min(j+5, 340)
+            temp[xs:xe, ys:ye] = True
+            self.joint_mask['active'][idx] = temp
+            total_mask[xs:xe, ys:ye] = [0, 0, 255]
+        for idx, (j, i) in self._nactive_img.items():
+            temp = mask.copy()
+            xs, xe = max(i-5, 0), min(i+5, 180)
+            ys, ye = max(j-5, 0), min(j+5, 340)
+            temp[xs:xe, ys:ye] = True
+            self.joint_mask['nactive'][idx] = temp
+            total_mask[xs:xe, ys:ye] = [255, 255, 255]
+        self.total_mask = total_mask
+        
+    def get_joint_mask(self):
+        mask = self.total_mask.copy()
+        mask[self.joint_mask['active'][self.contorl_joint]] = [255, 0, 0]
+        return mask
+        
 class PoseTemplate:
     template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pose_template")
     def __init__(self, side='right'):
@@ -904,6 +946,113 @@ class DexYCBSample(Dataset):
     def get_extrinsic_from_yml(extrinsic_yml):
         x = Utils.load_yaml_to_dic(extrinsic_yml)['extrinsics']
         return x
+
+
+class OurDataset(Dataset):
+    def __init__(self, data_root):
+        self.H, self.W = 1440, 2560
+        
+        # Total Data Statics
+        self._data_dir = data_root
+        # self._calib_dir = os.path.join(self._data_dir, "calibration")
+        # self._model_dir = os.path.join(self._data_dir, "models")
+
+        # self._mano_shape_path = os.path.join(self._calib_dir, "mano_{}", 'mano.yml')
+
+        self._calib_result = Utils.load_json_to_dic('self._data_dir')
+
+
+        self._camera_num = 8
+        self._cameras = ["camera_{}".format(i) for i in range(1, 1+self._camera_num)]
+        self._cam2serial = {cam: self._SERIALS[i] for i , cam in enumerate(self._cameras)}
+        self._intrinsic_path = os.path.join(self._calib_dir, "intrinsics", "{}_640x480.yml")
+        self._extrinsic_path = os.path.join(self._calib_dir, "extrinsics_{}", "extrinsics.yml")
+
+        self._obj_path = os.path.join(self._model_dir, "obj_{:06d}.ply")
+        
+        self._total_scene = [] # list of scene, idx -> sc_name
+        self._scene_path = {} # sc_name: scene dir
+        self._scene_hand = {} # sc_name: scene hand info
+        self._scene_object = {} # sc_name: scene object info
+        self._scene_camera = {} # sc_name: scene camera info
+        self._scene_pcd = {} # sc_name: scene points(merged)
+        
+        for sc_dir in [os.path.join(self._data_dir, p) for p in os.listdir(self._data_dir)]:
+            sc_name = os.path.basename(sc_dir)
+            if sc_name in ['calibration', 'models']:
+                continue
+            meta_file = os.path.join(sc_dir, "meta.yml")
+            if not os.path.isfile(meta_file):
+                continue
+            with open(meta_file, 'r') as f:
+                meta = yaml.load(f, Loader=yaml.FullLoader)
+
+            
+            # points
+            pcd_dir = os.path.join(sc_dir, "merge", "pcd")
+            if not os.path.isdir(pcd_dir):
+                continue
+            
+            pcd_list = [os.path.join(pcd_dir, p) for p in os.listdir(pcd_dir)]
+            pcd_list.sort()
+            self._scene_pcd[sc_name] = pcd_list
+            num_frames = meta['num_frames']
+            
+            # scene list
+            self._total_scene.append(sc_name)
+            
+            # scene dir
+            self._scene_path[sc_name] = sc_dir
+            
+            # hand
+            shape = Utils.load_yaml_to_dic(self._mano_shape_path.format(meta['mano_calib'][0]))['betas']
+            self._scene_hand[sc_name] = {
+                "right": shape,
+                "left": shape,
+            }
+            
+            # objects
+            self._scene_object[sc_name] = {
+                obj_id : self._obj_path.format(obj_id) for obj_id in meta['ycb_ids']
+            }
+
+            # camera 
+            extrinsics = self.get_extrinsic_from_yml(self._extrinsic_path.format(meta['extrinsics']))
+            self._scene_camera[sc_name] = {}
+            for cam in self._cameras:
+                serial = self._cam2serial[cam]
+                K = self.get_intrinsic_from_yml(self._intrinsic_path.format(serial))
+                extr = np.array(extrinsics[serial], dtype=np.float32).reshape(3, 4)
+                R = extr[:, :3]
+                t = extr[:, 3]
+                R_inv = np.linalg.inv(R)
+                t_inv = np.dot(R, -t)
+                extrinsic = np.eye(4)
+                extrinsic[:3, :3] = R
+                extrinsic[:3, 3] = t
+                self._scene_camera[sc_name][cam] = {
+                    "intrinsic": K,
+                    "extrinsics": extrinsic
+                }
+        
+        self._total_scene.sort()
+        super().__init__()
+
+    
+        
+    @staticmethod
+    def get_intrinsic_from_yml(intrinsic_yml):
+        x = Utils.load_yaml_to_dic(intrinsic_yml)['color']
+        return np.array([[x['fx'], 0.0, x['ppx']], 
+                            [0.0, x['fy'], x['ppy']], 
+                            [0.0, 0.0, 1.0]], dtype=np.float32)
+    @staticmethod
+    def get_extrinsic_from_yml(extrinsic_yml):
+        x = Utils.load_yaml_to_dic(extrinsic_yml)['extrinsics']
+        return x
+
+
+
     
 def load_dataset_from_file(file_path):
     data_dir = os.path.dirname(file_path)
@@ -1092,11 +1241,12 @@ class Scene:
                         mano_pose = np.array(val['mano_pose']).reshape(-1)
                         pred_info = all_pred['{}_hand'.format(side)]
                         # wrist_pos = np.array(val['wrist_pos'])/1000
-                        wrist_pos = pred_info['pred_joints_smpl'][0]
+                        wrist_pos = pred_info['pred_joints_smpl'][0]*pred_info['pred_camera'][0]
                         wrist_ori = np.array(val['wrist_ori'])
+                        wrist_ori = np.array([wrist_ori[1], wrist_ori[0], wrist_ori[2]])
                         mano_pose = np.concatenate((wrist_ori, mano_pose))
                         self._hands[side].set_joint_pose(mano_pose)
-                        # self._hands[side].set_root_position(wrist_pos)
+                        self._hands[side].set_root_position(wrist_pos)
                         
                     return False
                 except:
@@ -1156,7 +1306,6 @@ class Scene:
     def _obj_label_path(self):
         return os.path.join(self._scene_dir, self._object_label_format.format(self.frame_id))
     
-
 class Settings:
     SHADER_UNLIT = "defaultUnlit"
     SHADER_LINE = "unlitLine"
@@ -1242,6 +1391,7 @@ class Settings:
         self.obj_material.shader = Settings.SHADER_LIT_TRANS
 
 class HeadlessRenderer:
+    flat_hand_position = {'right': [[0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [0.07744278013706207, 0.006146649364382029, 0.180849090218544], [0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [0.019351951777935028, -0.001628118334338069, 0.12375511229038239]], 'left': [[-0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [-0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [-0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [-0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [-0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [-0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [-0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [-0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [-0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [-0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [-0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [-0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [-0.07929610460996628, 0.010507885366678238, 0.17927193641662598], [-0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [-0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [-0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [-0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [-0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [-0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [-0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [-0.019351951777935028, -0.001628118334338069, 0.12375511229038239]]}
     
     def __init__(self, W, H):
         self.W, self.H = W, H
@@ -1249,7 +1399,6 @@ class HeadlessRenderer:
         self.render.scene.set_background([0, 0, 0, 0]) # black background color
         self.render.scene.set_lighting(self.render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
 
-        # material
         self.obj_mtl = o3d.visualization.rendering.MaterialRecord()
         self.obj_mtl.shader = "defaultUnlit"
         
@@ -1291,7 +1440,6 @@ class HeadlessRenderer:
     
     def reset(self):
         self.render.scene.clear_geometry()
-    
 
 class AppWindow:
     
@@ -1338,8 +1486,11 @@ class AppWindow:
         self.scale_factor = None
         
         
-        self.right_template = PoseTemplate(side='right')
-        self.left_template = PoseTemplate(side='left')
+        self._template = {
+            "right": PoseTemplate(side='right'),
+            "left": PoseTemplate(side='left')
+            } 
+        self._activate_template = None
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
         w = self.window
@@ -1962,9 +2113,12 @@ class AppWindow:
             self._remove_geometry(self._active_joint_name)
             
         self._active_hand = self._hands[active_side]
+        self._activate_template = self._template[active_side]
+        self.preset_list.set_items(self._activate_template.get_template_list())
         self._convert_mode(LabelingMode.STATIC)
         self._update_current_hand_str()
         self._update_valid_error()
+        self._update_joint_mask()
 
     # convert finger
     def _convert_to_root(self):
@@ -1992,6 +2146,7 @@ class AppWindow:
             return
         ctrl_idx = self._active_hand.control_idx + 1
         self._active_hand.set_control_joint(ctrl_idx)
+        self._update_joint_mask()
         self._update_target_hand()
         self._update_current_hand_str()
     def _control_joint_down(self):
@@ -2000,6 +2155,7 @@ class AppWindow:
             return
         ctrl_idx = self._active_hand.control_idx - 1
         self._active_hand.set_control_joint(ctrl_idx)
+        self._update_joint_mask()
         self._update_target_hand()
         self._update_current_hand_str()
     def _update_current_hand_str(self):
@@ -2170,106 +2326,75 @@ class AppWindow:
         em = self.window.theme.font_size
         preset_layout = gui.CollapsableVert("프리셋 저장 및 불러오기", 0.33 * em,
                                                 gui.Margins(0.25 * em, 0, 0, 0))
-        label = gui.Label("{0:-^45}".format("오른손 프리셋"))
+        
+        label = gui.Label("{0:-^50}".format("프리셋"))
         preset_layout.add_child(label)
-        self.r_preset_list = gui.ListView()
-        preset_layout.add_child(self.r_preset_list)
-        self.r_preset_list.set_on_selection_changed(self._on_change_preset_select_r)
-        self.r_preset_list.set_items(self.right_template.get_template_list())
+        self.preset_list = gui.ListView()
+        preset_layout.add_child(self.preset_list)
+        self.preset_list.set_on_selection_changed(self._on_change_preset_select)
         h = gui.Horiz(0.4 * em)
-        self._r_preset_name = gui.TextEdit()
-        self._r_preset_name.text_value = "프리셋 이름"
-        h.add_child(self._r_preset_name)
+        self.preset_name = gui.TextEdit()
+        self.preset_name.text_value = "프리셋 이름"
+        h.add_child(self.preset_name)
         button = gui.Button("불러오기")
-        button.set_on_clicked(self._on_load_preset_r)
+        button.set_on_clicked(self._on_load_preset)
         h.add_child(button)
         button = gui.Button("저장하기")
-        button.set_on_clicked(self._on_save_preset_r)
+        button.set_on_clicked(self._on_save_preset)
         h.add_child(button)
         preset_layout.add_child(h)
 
-        label = gui.Label("{0:-^45}".format("왼손 프리셋"))
-        preset_layout.add_child(label)
-        self.l_preset_list = gui.ListView()
-        preset_layout.add_child(self.l_preset_list)
-        self.l_preset_list.set_on_selection_changed(self._on_change_preset_select_l)
-        self.l_preset_list.set_items(self.left_template.get_template_list())
-        h = gui.Horiz(0.4 * em)
-        self._l_preset_name = gui.TextEdit()
-        self._l_preset_name.text_value = "프리셋 이름"
-        h.add_child(self._l_preset_name)
-        button = gui.Button("불러오기")
-        button.set_on_clicked(self._on_load_preset_l)
-        h.add_child(button)
-        button = gui.Button("저장하기")
-        button.set_on_clicked(self._on_save_preset_l)
-        h.add_child(button)
-        preset_layout.add_child(h)
+        # label = gui.Label("{0:-^45}".format("왼손 프리셋"))
+        # preset_layout.add_child(label)
+        # self.l_preset_list = gui.ListView()
+        # preset_layout.add_child(self.l_preset_list)
+        # self.l_preset_list.set_on_selection_changed(self._on_change_preset_select_l)
+        # self.l_preset_list.set_items(self.left_template.get_template_list())
+        # h = gui.Horiz(0.4 * em)
+        # self._l_preset_name = gui.TextEdit()
+        # self._l_preset_name.text_value = "프리셋 이름"
+        # h.add_child(self._l_preset_name)
+        # button = gui.Button("불러오기")
+        # button.set_on_clicked(self._on_load_preset_l)
+        # h.add_child(button)
+        # button = gui.Button("저장하기")
+        # button.set_on_clicked(self._on_save_preset_l)
+        # h.add_child(button)
+        # preset_layout.add_child(h)
         
+        self._joint_mask_proxy = gui.WidgetProxy()
+        self._joint_mask_proxy.set_widget(gui.ImageWidget())
+        self._validation_panel.add_child(self._joint_mask_proxy)
         self._validation_panel.add_child(preset_layout)
     
-    def _on_load_preset_r(self):
-        if self._active_hand is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_load_preset)")
+    def _on_load_preset(self):
+        if not self._check_annotation_scene():
             return
-        if self._active_hand.side=='left':
-            self._on_error("불러오는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
-            return
-        name = self._r_preset_name.text_value
+        name = self.preset_name.text_value
         try:
-            pose = self.right_template.get_template2pose(name)
+            pose = self._activate_template.get_template2pose(name)
             self._active_hand.set_joint_pose(pose)
             self._update_activate_hand()
             self._update_target_hand()
         except:
             self._on_error("프리셋 이름을 확인하세요. (error at _on_load_preset)")
-    def _on_save_preset_r(self):
-        if self._active_hand is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_preset)")
+    def _on_save_preset(self):
+        if not self._check_annotation_scene():
             return
-        if self._active_hand.side=='left':
-            self._on_error("저장하려는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
-            return
-        name = self._r_preset_name.text_value
+        name = self.preset_name.text_value
         pose = self._active_hand.get_joint_pose()
-        self.right_template.save_pose2template(name, pose)
-        self.r_preset_list.set_items(self.right_template.get_template_list())
-    def _on_change_preset_select_r(self, preset_name, double):
-        self._r_preset_name.text_value = preset_name
+        self._activate_template.save_pose2template(name, pose)
+        self.preset_list.set_items(self._activate_template.get_template_list())
+    def _on_change_preset_select(self, preset_name, double):
+        self.preset_name.text_value = preset_name
         if double:
-            self._on_load_preset_r()
+            self._on_load_preset()
+    def _update_joint_mask(self):
+        img = self._active_hand.get_joint_mask()
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = o3d.geometry.Image(img)
+        self._joint_mask_proxy.set_widget(gui.ImageWidget(img))
 
-    def _on_load_preset_l(self):
-        if self._active_hand is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_load_preset)")
-            return
-        if self._active_hand.side=='right':
-            self._on_error("불러오는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
-            return
-        name = self._l_preset_name.text_value
-        try:
-            pose = self.left_template.get_template2pose(name)
-            self._active_hand.set_joint_pose(pose)
-            self._update_activate_hand()
-            self._update_target_hand()
-        except:
-            self._on_error("프리셋 이름을 확인하세요. (error at _on_load_preset)")
-    def _on_save_preset_l(self):
-        if self._active_hand is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_save_preset)")
-            return
-        if self._active_hand.side=='right':
-            self._on_error("저장하려는 프리셋과 손이 다릅니다. (error at _on_load_preset)")
-            return
-        name = self._l_preset_name.text_value
-        pose = self._active_hand.get_joint_pose()
-        self.left_template.save_pose2template(name, pose)
-        self.l_preset_list.set_items(self.left_template.get_template_list())
-    def _on_change_preset_select_l(self, preset_name, double):
-        self._l_preset_name.text_value = preset_name
-        if double:
-            self._on_load_preset_l()
-        
     # image viewer
     def _init_image_view_layout(self):
         self._rgb_proxy = gui.WidgetProxy()
@@ -2458,6 +2583,7 @@ class AppWindow:
         
         self._active_hand.optimize_to_points(target_points)
         self._init_hand_layer()
+        self._active_hand.save_undo(forced=True)
 
     def _init_cam_name(self):
         self._cam_name_list = list(self.annotation_scene._cameras.keys())
@@ -2782,6 +2908,9 @@ class AppWindow:
             active_side = 'left'
         self._hands = hands
         self._active_hand = hands[active_side]
+        self._activate_template = self._template[active_side]
+        self.preset_list.set_items(self._activate_template.get_template_list())
+        
         for side, hand in hands.items():
             hand_geo = hand.get_geometry()
             if side == 'right':
@@ -2807,6 +2936,7 @@ class AppWindow:
         self._add_geometry(self._control_joint_name, 
                            active_geo['control'], self.settings.control_target_joint_material)
         self.control_joint_geo = active_geo['control']
+        self._update_joint_mask()
         self._update_current_hand_str()
     def _update_target_hand(self):
         if self._labeling_mode==LabelingMode.OPTIMIZE:
@@ -2905,7 +3035,9 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.HANDLED
         if event.key == gui.KeyName.Y and event.type == gui.KeyEvent.DOWN:
             self._on_active_viewpoint()
-            return gui.Widget.EventCallbackResult.HANDLEDf event.key == gui.KeyName.B:
+            return gui.Widget.EventCallbackResult.HANDLED
+        
+        # if event.key == gui.KeyName.B:
         #     if self._active_hand is None:
         #         return gui.Widget.EventCallbackResult.IGNORED
         #     self._on_icp()
@@ -3076,6 +3208,7 @@ class AppWindow:
         
         if is_converted_finger or is_convert_joint:
             self._update_target_hand()
+            self._update_joint_mask()
             return gui.Widget.EventCallbackResult.CONSUMED
 
         # if event.key == gui.KeyName.B:
@@ -3157,9 +3290,6 @@ class AppWindow:
                     
         
         self._init_view_control()
-
-
-
 
 def main():
     gui.Application.instance.initialize()
