@@ -14,7 +14,6 @@ from open3d.visualization import MeshShadeOption
 import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
-from pytorch3d.ops import knn_points
 
 import numpy as np
 import cv2
@@ -251,6 +250,8 @@ class HandModel:
                                         th_trans=self.root_trans)
         self.verts = verts / 1000
         self.joints = joints / 1000
+        self.verts = self.verts.to(torch.float32)
+        self.joints = self.joints.to(torch.float32)
         # self.verts = verts
         # self.joints = joints
         self.faces = self.mano_layer.th_faces
@@ -304,14 +305,17 @@ class HandModel:
 
         return name
 
-    def reset_pose(self):
+    def reset_pose(self, flat_hand=False):
         if self.optimize_state==LabelingMode.OPTIMIZE:
             if self.optimize_target=='root':
                 self.joint_rot[0] = torch.zeros(1, 3)
                 self.joint_rot[0].requires_grad = True
             else:
                 for target_idx in [self._ORDER_OF_PARAM[self.optimize_target]*3+i+1 for i in range(3)]:
-                    self.joint_rot[target_idx] = torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*target_idx-3:3*target_idx]).unsqueeze(0)
+                    if flat_hand:
+                        self.joint_rot[target_idx] = torch.zeros(1, 3)
+                    else:
+                        self.joint_rot[target_idx] = torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*target_idx-3:3*target_idx]).unsqueeze(0)
                     self.joint_rot[target_idx].requires_grad = True
             self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
             self.update_mano()
@@ -518,7 +522,7 @@ class HandModel:
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
     
     def _p2p_loss(self, target_points):
-        p1 = self.verts[0]
+        p1 = self._sampling_points_from_mesh()
         # print(p1)
         p2 = torch.Tensor(target_points)
         dist = Utils.distance_matrix(p1, p2)
@@ -529,6 +533,26 @@ class HandModel:
         
         return min_dist
     
+    def _sampling_points_from_mesh(self):
+        verts = self.verts[0]
+        faces = self.faces
+        max_vert = len(verts)
+
+        verts2points = torch.zeros((faces.shape[0]*4, max_vert))
+        # center
+        for i, idx in enumerate(faces):
+            verts2points[i*4, idx] = 1/3
+        # random N points
+        for i, idx in enumerate(faces):
+            for j in range(3):
+                weight = torch.rand(3)
+                weight /= torch.sum(weight)
+                verts2points[i*4 + j + 1, idx] = weight
+
+        face_verts = torch.matmul(verts2points, verts)
+        points = torch.concat((verts, face_verts), dim=0)
+        return points
+
     def set_learning_rate(self, lr):
         self.learning_rate = lr
         if self.optimizer is None:
@@ -1484,6 +1508,8 @@ class AppWindow:
         self._camera_idx = -1
         self._cam_name_list = []
         self.scale_factor = None
+        self.reset_flat = False
+        self.joint_back = False
         
         
         self._template = {
@@ -2001,6 +2027,7 @@ class AppWindow:
         self._current_stage_str.text = "현재 상태: {}".format(self._labeling_mode)
         self._active_hand.set_optimize_state(labeling_mode)
         self._update_target_hand()
+        self._update_joint_mask()
         
     # labeling hand edit
     def _init_handedit_layout(self):
@@ -2024,12 +2051,12 @@ class AppWindow:
         button.set_on_clicked(self._convert_hand)
         grid.add_child(button)
         
-        button = gui.Button("이전 관절(PgDn)")
+        button = gui.Button("이전 관절")
         button.horizontal_padding_em = 0.3
         button.vertical_padding_em = 0.3
         button.set_on_clicked(self._control_joint_down)
         grid.add_child(button)
-        button = gui.Button("다음 관절(PgUp)")
+        button = gui.Button("다음 관절")
         button.horizontal_padding_em = 0.3
         button.vertical_padding_em = 0.3
         button.set_on_clicked(self._control_joint_up)
@@ -2573,12 +2600,13 @@ class AppWindow:
             return
         hand_mesh = self._active_hand.get_geometry()['mesh']
         bounds = hand_mesh.get_oriented_bounding_box()
-        target_pcd = self._pcd.crop(bounds.scale(1.2, bounds.center))
+        target_pcd = self._pcd.crop(bounds.scale(1.1, bounds.center))
         if len(target_pcd.points) < 1000:
             self._on_error("활성화된 손 근처에 포인트가 부족합니다. 손을 더 맞춰주세요")
             return
         # downsampling
-        target_pcd = target_pcd.farthest_point_down_sample(5000)
+        sample = min(10000, len(target_pcd.points))
+        target_pcd = target_pcd.uniform_down_sample(sample)
         target_points = np.asarray(target_pcd.points)
         
         self._active_hand.optimize_to_points(target_points)
@@ -3030,18 +3058,58 @@ class AppWindow:
         if self._active_hand is None:
             return gui.Widget.EventCallbackResult.IGNORED
 
+        # if shift pressed then 
+        # 1. translation -> rotation
+        if (event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT) \
+            and (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
+            if event.type == gui.KeyEvent.DOWN:
+                self._left_shift_modifier = True
+                self._add_hand_frame()
+            elif event.type == gui.KeyEvent.UP:
+                self._left_shift_modifier = False
+                self._remove_hand_frame()
+            return gui.Widget.EventCallbackResult.HANDLED
+        
+        # if ctrl is pressed then 
+        # increase translation
+        # reset finger to flat
+        if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
+            if event.type == gui.KeyEvent.DOWN:
+                if not self.upscale_responsiveness:
+                    self.dist = self.dist * 15
+                    self.deg = self.deg * 15
+                    self.upscale_responsiveness = True
+                if not self.reset_flat:
+                    self.reset_flat = True
+                if not self.joint_back:
+                    self.joint_back = True
+            elif event.type == gui.KeyEvent.UP:
+                if self.upscale_responsiveness:
+                    self.dist = self.dist / 15
+                    self.deg = self.deg / 15
+                    self.upscale_responsiveness = False
+                if self.reset_flat:
+                    self.reset_flat = False
+                if self.joint_back:
+                    self.joint_back = False
+            return gui.Widget.EventCallbackResult.HANDLED
+
+
         if event.key == gui.KeyName.T and event.type == gui.KeyEvent.DOWN:
-            self._on_active_camera_viewpoint()
+            self._on_initial_viewpoint()
             return gui.Widget.EventCallbackResult.HANDLED
         if event.key == gui.KeyName.Y and event.type == gui.KeyEvent.DOWN:
+            self._on_active_camera_viewpoint()
+            return gui.Widget.EventCallbackResult.HANDLED
+        if event.key == gui.KeyName.G and event.type == gui.KeyEvent.DOWN:
             self._on_active_viewpoint()
             return gui.Widget.EventCallbackResult.HANDLED
         
-        # if event.key == gui.KeyName.B:
-        #     if self._active_hand is None:
-        #         return gui.Widget.EventCallbackResult.IGNORED
-        #     self._on_icp()
-        #  
+        if event.key == gui.KeyName.B:
+            if self._active_hand is None:
+                return gui.Widget.EventCallbackResult.IGNORED
+            self._on_icp()
+         
         if (event.key==gui.KeyName.COMMA and event.type==gui.KeyEvent.DOWN):
             self._undo()
             return gui.Widget.EventCallbackResult.CONSUMED
@@ -3148,65 +3216,69 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.CONSUMED
         # reset hand pose
         if event.key == gui.KeyName.R:
-            self._active_hand.reset_pose()
+            if self.reset_flat:
+                self._active_hand.reset_pose(flat_hand=True)
+            else:
+                self._active_hand.reset_pose()
             self._update_activate_hand()
             self._update_target_hand()
             return gui.Widget.EventCallbackResult.CONSUMED
 
-        # if shift pressed then rotation else translation
-        if (event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT) \
-            and (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
-            if event.type == gui.KeyEvent.DOWN:
-                self._left_shift_modifier = True
-                self._add_hand_frame()
-            elif event.type == gui.KeyEvent.UP:
-                self._left_shift_modifier = False
-                self._remove_hand_frame()
-            return gui.Widget.EventCallbackResult.HANDLED
         
-        # if ctrl is pressed then increase translation
-        if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
-            if event.type == gui.KeyEvent.DOWN:
-                if not self.upscale_responsiveness:
-                    self.dist = self.dist * 15
-                    self.deg = self.deg * 15
-                    self.upscale_responsiveness = True
-            elif event.type == gui.KeyEvent.UP:
-                if self.upscale_responsiveness:
-                    self.dist = self.dist / 15
-                    self.deg = self.deg / 15
-                    self.upscale_responsiveness = False
-            return gui.Widget.EventCallbackResult.HANDLED
         
         # convert finger
         is_converted_finger = True
         if event.key == gui.KeyName.BACKTICK:
             self._active_hand.set_optimize_target('root')
-        elif event.key == gui.KeyName.ONE:
-            self._active_hand.set_optimize_target('thumb')
-        elif event.key == gui.KeyName.TWO:
-            self._active_hand.set_optimize_target('fore')
-        elif event.key == gui.KeyName.THREE:
-            self._active_hand.set_optimize_target('middle')
-        elif event.key == gui.KeyName.FOUR:
-            self._active_hand.set_optimize_target('ring')
-        elif event.key == gui.KeyName.FIVE:
-            self._active_hand.set_optimize_target('little')
+        elif event.key == gui.KeyName.ONE and (event.type==gui.KeyEvent.DOWN):
+            if self._active_hand.get_optimize_target()=='thumb':
+                if self.joint_back:
+                    ctrl_idx = self._active_hand.control_idx - 1
+                else:
+                    ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            else:
+                self._active_hand.set_optimize_target('thumb')
+        elif event.key == gui.KeyName.TWO and (event.type==gui.KeyEvent.DOWN):
+            if self._active_hand.get_optimize_target()=='fore':
+                if self.joint_back:
+                    ctrl_idx = self._active_hand.control_idx - 1
+                else:
+                    ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            else:
+                self._active_hand.set_optimize_target('fore')
+        elif event.key == gui.KeyName.THREE and (event.type==gui.KeyEvent.DOWN):
+            if self._active_hand.get_optimize_target()=='middle':
+                if self.joint_back:
+                    ctrl_idx = self._active_hand.control_idx - 1
+                else:
+                    ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            else:
+                self._active_hand.set_optimize_target('middle')
+        elif event.key == gui.KeyName.FOUR and (event.type==gui.KeyEvent.DOWN):
+            if self._active_hand.get_optimize_target()=='ring':
+                if self.joint_back:
+                    ctrl_idx = self._active_hand.control_idx - 1
+                else:
+                    ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            else:
+                self._active_hand.set_optimize_target('ring')
+        elif event.key == gui.KeyName.FIVE and (event.type==gui.KeyEvent.DOWN):
+            if self._active_hand.get_optimize_target()=='little':
+                if self.joint_back:
+                    ctrl_idx = self._active_hand.control_idx - 1
+                else:
+                    ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+            else:
+                self._active_hand.set_optimize_target('little')
         else:
             is_converted_finger = False
         
-        # convert joint
-        is_convert_joint = True
-        if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
-            ctrl_idx = self._active_hand.control_idx + 1
-            self._active_hand.set_control_joint(ctrl_idx)
-        elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
-            ctrl_idx = self._active_hand.control_idx - 1
-            self._active_hand.set_control_joint(ctrl_idx)
-        else:
-            is_convert_joint = False
-        
-        if is_converted_finger or is_convert_joint:
+        if is_converted_finger:
             self._update_target_hand()
             self._update_joint_mask()
             return gui.Widget.EventCallbackResult.CONSUMED
