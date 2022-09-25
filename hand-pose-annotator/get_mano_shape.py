@@ -66,9 +66,9 @@ class MANO():
     def __init__(self, side):
         self.side = side
         self.pose = [torch.zeros(1, 3) for _ in range(16)]
-        self.betas = torch.rand(1, 10)
+        self.betas = torch.rand(1, 10, dtype=torch.float32)
         self.mano_layer = ManoLayer(mano_root=mano_model_path, use_pca=False, ncomps=45, side=side)
-        self.optimizer = torch.optim.Adam(self.pose, lr=0.01)
+        self.optimizer = torch.optim.Adam([self.betas], lr=0.001)
         self.criterion = torch.nn.MSELoss()
 
     def update(self):
@@ -79,7 +79,7 @@ class MANO():
                                 root_palm=torch.Tensor([1]))
         hand_verts = self.transform_verts_joints(hand_verts, hand_joints)
         pcd_mano = o3d.geometry.PointCloud()
-        pcd_mano.points = o3d.utility.Vector3dVector(hand_verts.detach()[0].numpy())
+        pcd_mano.points = o3d.utility.Vector3dVector(torch.clone(hand_verts).detach()[0].numpy())
         # pcd_mano.pa
         self.pcd_mano = pcd_mano
         self.hand_verts = hand_verts
@@ -106,16 +106,16 @@ class MANO():
             o3d.pipelines.registration.ICPConvergenceCriteria(
             max_iteration=1)
         )
-        p_captured = torch.Tensor(np.asarray(self.pcd_captured.points)[np.asarray(reg_p2p.correspondence_set[:, 0])])
+        p_captured = torch.Tensor(np.asarray(self.pcd_captured.points)[np.asarray(reg_p2p.correspondence_set)[:, 0]])
         p_captured.requires_grad = True
         p_mano = self.hand_verts[0][torch.LongTensor(np.asarray(reg_p2p.correspondence_set))[:, 1]]
         p_mano.requires_grad = True
         loss = self.criterion(p_captured, p_mano)
         self.optimizer.zero_grad()
         loss.backward()
-        print(self.pose)
+        print(self.pose, self.betas)
         self.optimizer.step() 
-        print(self.pose)
+        print(self.pose, self.betas)
         self.update()
         return self.pcd_mano
 
