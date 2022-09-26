@@ -13,7 +13,7 @@
 # install requirements
 $ conda create -n pose-anno python=3.7
 $ conda activate pose-anno
-$ pip install numpy open3d==0.15.1 PyYAML opencv-python==4.5.3.56 Cython
+$ pip install numpy open3d PyYAML opencv-python==4.5.3.56 Cython
 
 # install torch
 $ (linux) pip3 install torch --extra-index-url https://download.pytorch.org/whl/cpu
