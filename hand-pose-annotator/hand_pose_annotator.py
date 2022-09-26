@@ -1443,6 +1443,7 @@ class AppWindow:
         
         self._init_show_error_layout()
         self._init_preset_layout()
+        self._init_joint_mask_layout()
         
         # ---- log panel
         self._log_panel = gui.VGrid(1, em)
@@ -2241,7 +2242,6 @@ class AppWindow:
         em = self.window.theme.font_size
         preset_layout = gui.CollapsableVert("프리셋 저장 및 불러오기", 0.33 * em,
                                                 gui.Margins(0.25 * em, 0, 0, 0))
-        
         label = gui.Label("{0:-^50}".format("프리셋"))
         preset_layout.add_child(label)
         self.preset_list = gui.ListView()
@@ -2258,28 +2258,6 @@ class AppWindow:
         button.set_on_clicked(self._on_save_preset)
         h.add_child(button)
         preset_layout.add_child(h)
-
-        # label = gui.Label("{0:-^45}".format("왼손 프리셋"))
-        # preset_layout.add_child(label)
-        # self.l_preset_list = gui.ListView()
-        # preset_layout.add_child(self.l_preset_list)
-        # self.l_preset_list.set_on_selection_changed(self._on_change_preset_select_l)
-        # self.l_preset_list.set_items(self.left_template.get_template_list())
-        # h = gui.Horiz(0.4 * em)
-        # self._l_preset_name = gui.TextEdit()
-        # self._l_preset_name.text_value = "프리셋 이름"
-        # h.add_child(self._l_preset_name)
-        # button = gui.Button("불러오기")
-        # button.set_on_clicked(self._on_load_preset_l)
-        # h.add_child(button)
-        # button = gui.Button("저장하기")
-        # button.set_on_clicked(self._on_save_preset_l)
-        # h.add_child(button)
-        # preset_layout.add_child(h)
-        
-        self._joint_mask_proxy = gui.WidgetProxy()
-        self._joint_mask_proxy.set_widget(gui.ImageWidget())
-        self._validation_panel.add_child(self._joint_mask_proxy)
         self._validation_panel.add_child(preset_layout)
     
     def _on_load_preset(self):
@@ -2304,6 +2282,16 @@ class AppWindow:
         self.preset_name.text_value = preset_name
         if double:
             self._on_load_preset()
+
+    def _init_joint_mask_layout(self):
+        em = self.window.theme.font_size
+        joint_mask_layout = gui.CollapsableVert("활성화된 관절 시각화", 0.33 * em,
+                                                gui.Margins(0.25 * em, 0, 0, 0))
+        self._joint_mask_proxy = gui.WidgetProxy()
+        self._joint_mask_proxy.set_widget(gui.ImageWidget())
+        joint_mask_layout.add_child(self._joint_mask_proxy)
+        self._validation_panel.add_child(joint_mask_layout)
+
     def _update_joint_mask(self):
         img = self._active_hand.get_joint_mask()
         # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
