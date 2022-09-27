@@ -208,7 +208,7 @@ class HandModel:
         if shape_param is None:
             shape_param = torch.zeros(10)
         self.reset(shape_param)
-        
+    
     def undo(self):
         if len(self.undo_stack) > 0:
             state = self.undo_stack.pop()
@@ -253,7 +253,6 @@ class HandModel:
             self.joint_rot += [torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*i:3*(i+1)]).unsqueeze(0) for i in range(15)]
             
         self.optimizer = None
-        self.icp_optimizer = torch.optim.SGD(self.joint_rot, lr=1e-2, momentum=0.9)
         with torch.no_grad():
             self.update_mano()
         self.root_delta = self.joints.cpu().detach()[0, 0]
@@ -303,6 +302,21 @@ class HandModel:
             else:
                 raise NotImplementedError
         return target_idx
+    def _param2control_idx(self, param_idx):
+        order = (param_idx-1)//3 
+        if order==0: 
+            finger = 1
+        elif order==1: 
+            finger = 2
+        elif order==2: 
+            finger = 4
+        elif order==3: 
+            finger = 3
+        elif order==4: 
+            finger = 0
+        else:
+            return 0
+        return 4*finger + ((param_idx+2)%3 + 1)
     def _get_control_joint_idx(self):
         return self.optimize_idx[self.optimize_target][self.control_idx]
     def get_control_joint_name(self):
@@ -337,10 +351,13 @@ class HandModel:
     def reset_pose(self, flat_hand=False):
         if self.optimize_state==LabelingMode.OPTIMIZE:
             if self.optimize_target=='root':
-                self.joint_rot[0] = torch.zeros(1, 3)
-                self.joint_rot[0].requires_grad = True
+                if not self.lock_state[1]:
+                    self.joint_rot[0] = torch.zeros(1, 3)
+                    self.joint_rot[0].requires_grad = True
             else:
                 for target_idx in [self._ORDER_OF_PARAM[self.optimize_target]*3+i+1 for i in range(3)]:
+                    if self.lock_state[target_idx+1]:
+                        continue
                     if flat_hand:
                         self.joint_rot[target_idx] = torch.zeros(1, 3)
                     else:
@@ -350,8 +367,9 @@ class HandModel:
             self.update_mano()
         else:
             target_idx = self._get_control_joint_param_idx()
-            self.joint_rot[target_idx] = torch.zeros(1, 3)
-            self.update_mano()    
+            if not self.lock_state[target_idx+1]:
+                self.joint_rot[target_idx] = torch.zeros(1, 3)
+            self.update_mano()
     
     def get_control_rotation(self):
         target_idx = self._get_control_joint_param_idx()
@@ -359,9 +377,11 @@ class HandModel:
     def set_control_rotation(self, rot_mat):
         assert (self.optimize_state==LabelingMode.STATIC or self.optimize_target=='root'), "error on set_control_rotation"
         target_idx = self._get_control_joint_param_idx()
+        if self.lock_state[target_idx+1]:
+            return
         if self.optimize_state==LabelingMode.OPTIMIZE and self.optimize_target=='root':
-            self.joint_rot[0] = torch.Tensor(rot_mat).unsqueeze(0)
-            self.joint_rot[0].requires_grad = True
+            self.joint_rot[target_idx] = torch.Tensor(rot_mat).unsqueeze(0)
+            self.joint_rot[target_idx].requires_grad = True
             self.update_mano()
             self.reset_target()
         else:    
@@ -391,6 +411,8 @@ class HandModel:
     def get_root_position(self):
         return self.root_trans[0, :] + self.root_delta
     def set_root_position(self, xyz):
+        if self.lock_state[0]:
+            return False
         self.root_trans = torch.Tensor(xyz).unsqueeze(0) - self.root_delta
         self.update_mano()
     
@@ -434,6 +456,26 @@ class HandModel:
         self.control_idx = idx
         self.contorl_joint = self.active_joints[idx]
         
+    def toggle_current_joint_lock(self):
+        if self.control_idx > 2:
+            return
+        target_idx = self._get_control_joint_param_idx()
+        if target_idx==0: # root
+            self.lock_state[0] = not self.lock_state[0]
+            self.lock_state[1] = not self.lock_state[1]
+        else:
+            self.lock_state[target_idx+1] = not self.lock_state[target_idx+1]
+
+    def _check_lock_state(self):
+        for idx, lock_state in enumerate(self.lock_state):
+            if idx == 0:
+                self.root_trans.requires_grad = False
+                self.root_trans.grad = None
+            else:
+                idx = idx - 1
+                self.joint_rot[idx].requires_grad = False
+                self.joint_rot[idx].grad = None
+
     #region save and load state
     def get_state(self):
         pose_param = torch.concat(self.joint_rot, dim=1) # 1, 48, 3
@@ -508,6 +550,9 @@ class HandModel:
             # loss term
             loss = self._mse_loss()
             loss.backward()
+
+            self._check_lock_state()
+
             self.optimizer.step()
             return True
         else:
@@ -684,6 +729,26 @@ class HandModel:
     def get_joint_mask(self):
         mask = self.total_mask.copy()
         mask[self.joint_mask['active'][self.contorl_joint]] = [255, 0, 0]
+        
+        # draw lock state
+        for i in range(16):
+            if i == 0:
+                lock_idx = 0 # + 1
+            else:
+                lock_idx = i + 1
+            is_lock = self.lock_state[lock_idx]
+
+            contorl_joint = self._param2control_idx(i)
+            cnt = self._active_img[contorl_joint]
+
+            if is_lock:
+                s1, e1 = [cnt[0]-7, cnt[1]-7], [cnt[0]+7, cnt[1]+7]
+                s2, e2 = [cnt[0]-7, cnt[1]+7], [cnt[0]+7, cnt[1]-7]
+                mask = cv2.line(mask, s1, e1, [255, 0, 0], 2)
+                mask = cv2.line(mask, s2, e2, [255, 0, 0], 2)
+            else:
+                mask = cv2.circle(mask, cnt, 7, [0, 255, 0], 2)
+        
         return mask
         
 class PoseTemplate:
@@ -1515,12 +1580,12 @@ class HeadlessRenderer:
         for side, hand in hands.items():
             hand_geo = hand.get_geometry()
             geo = hand_geo['mesh']
-            geo = copy.deepcopy(geo)
+            tmp_geo = copy.deepcopy(geo)
             if side=='right':
-                geo.paint_uniform_color([0, 1, 0])
+                tmp_geo.paint_uniform_color([1, 1, 0])
             else:    
-                geo.paint_uniform_color([0, 0, 1])
-            self.render.scene.add_geometry(side, geo, self.hand_mtl)
+                tmp_geo.paint_uniform_color([0, 0, 1])
+            self.render.scene.add_geometry(side, tmp_geo, self.hand_mtl)
 
     def set_camera(self, intrinsic, extrinsic, W, H):
         self.render.setup_camera(intrinsic, extrinsic, W, H)
@@ -1627,8 +1692,8 @@ class AppWindow:
             0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
         
         self._init_show_error_layout()
-        self._init_preset_layout()
         self._init_joint_mask_layout()
+        self._init_preset_layout()
         
         # ---- log panel
         self._log_panel = gui.VGrid(1, em)
@@ -1881,6 +1946,10 @@ class AppWindow:
         self._auto_save = gui.Checkbox("자동 저장 활성화")
         viewctrl_layout.add_child(self._auto_save)
         self._auto_save.checked = True
+
+        self._error_box = gui.Checkbox("자동 에러율 계산")
+        viewctrl_layout.add_child(self._error_box)
+        self._error_box.checked = False
         
         grid = gui.VGrid(2, 0.25 * em)
         self._scene_point_size = gui.Slider(gui.Slider.INT)
@@ -2373,7 +2442,6 @@ class AppWindow:
         self._init_hand_layer()
         self._init_obj_layer()
         self._update_valid_error()
-        
     def _update_progress_str(self):
         self.logger.debug('_update_progress_str')
         self._current_file_pg.text = self.annotation_scene.get_progress()
@@ -2598,7 +2666,7 @@ class AppWindow:
         button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_change_camera_merge)
         h.add_child(button)
-        h.add_child(gui.Label(" | \n | "))
+        h.add_child(gui.Label("|\n|"))
         
         v = gui.Vert(0)
         right_error_txt = gui.Label("준비 안됨")
@@ -2611,6 +2679,7 @@ class AppWindow:
         button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_update_error)
         h.add_child(button)
+
         
         self._total_error_txt = (right_error_txt, left_error_txt)
         show_error_layout.add_child(h)
@@ -2792,7 +2861,7 @@ class AppWindow:
         self._log.text = "\t라벨링 검증용 이미지를 생성 중입니다."
         self.window.set_needs_layout()   
 
-        if calculate or (self._depth_diff_list==[]):
+        if calculate or (self._depth_diff_list==[]) or self._error_box:
             self.logger.debug('\tset hl renderer')
             self.hl_renderer.reset()    
             self.hl_renderer.add_objects(self._objects, color=[1, 0, 0])
@@ -2814,13 +2883,25 @@ class AppWindow:
                 depth_rendered = np.array(depth_rendered, dtype=np.float32)
                 depth_rendered[np.isposinf(depth_rendered)] = 0
                 depth_rendered *= 1000 # convert meter to mm
-
+                # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'depth_rendered.png'), depth_rendered)
+                
                 rgb_rendered = self.hl_renderer.render_rgb()
                 rgb_rendered = np.array(rgb_rendered)
+                # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rgb_rendered.png'), rgb_rendered)
+
+                
 
                 # only hand mask
-                right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]==0, np.bitwise_and(rgb_rendered[:, :, 1]!=0, rgb_rendered[:, :, 2]==0))
-                left_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]==0, np.bitwise_and(rgb_rendered[:, :, 1]==0, rgb_rendered[:, :, 2]!=0))
+                right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]>2, np.bitwise_and(rgb_rendered[:, :, 1]>2, rgb_rendered[:, :, 2]>2))
+                # right_hand_mask_vis = np.zeros_like(rgb_rendered)
+                # right_hand_mask_vis[right_hand_mask] = 255
+                # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'right_hand_mask_vis.png'), right_hand_mask_vis)
+
+                left_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]<2, np.bitwise_and(rgb_rendered[:, :, 1]<2, rgb_rendered[:, :, 2]>2))
+                # left_hand_mask_vis = np.zeros_like(rgb_rendered)
+                # left_hand_mask_vis[left_hand_mask] = 255
+                # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'left_hand_mask_vis.png'), left_hand_mask_vis)
+
 
                 # set mask as rendered depth
                 valid_mask = depth_rendered > 0
@@ -2829,16 +2910,23 @@ class AppWindow:
                 rgb_captured = self._frame.get_rgb(cam_name)
                 depth_captured = self._frame.get_depth(cam_name)
 
-                # diff_vis = np.zeros_like(rgb_captured)
-                diff_vis = rgb_rendered
+                diff_vis = np.zeros_like(rgb_captured)
+                diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
+                diff_vis[left_hand_mask] = [0, 255, 0] # BGR
+
+
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
                 depth_diff_abs = np.abs(np.copy(depth_diff))
                 inlier_mask = depth_diff_abs < 50
 
+                high_error_mask = np.bitwise_and(inlier_mask, depth_diff_abs > 10)
+                diff_vis[high_error_mask] = [0, 0, 255]
+
                 # right_hand
                 r_valid_mask = valid_mask * right_hand_mask * inlier_mask
                 if np.sum(r_valid_mask) > 0:
+                    
                     depth_diff_mean = np.sum(depth_diff_abs[r_valid_mask]) / np.sum(r_valid_mask)
                 else:
                     depth_diff_mean = -1
@@ -2908,7 +2996,48 @@ class AppWindow:
         self.logger.debug('_reset_image_viewer')
         self.icx, self.icy = self.W / 2, self.H / 2
         self.scale_factor = 1
-        
+        self._move_viewer()
+    @staticmethod
+    def _viewer_translate(tx=0, ty=0):
+                T = np.eye(3)
+                T[0:2,2] = [tx, ty]
+                return T
+    @staticmethod
+    def _viewer_scale(s=1, sx=1, sy=1):
+        T = np.diag([s*sx, s*sy, 1])
+        return T
+    @staticmethod
+    def _viewer_rotate(degrees):
+        T = np.eye(3)
+        # just involves some sin() and cos()
+        T[0:2] = cv2.getRotationMatrix2D(center=(0,0), angle=-degrees, scale=1.0)
+        return T
+    def _move_viewer(self):
+        if self.icy < 0:
+            self.icy = 0
+        if self.icx < 0:
+            self.icx = 0
+        if self.icy > self.H:
+            self.icy = self.H
+        if self.icx > self.W:
+            self.icx = self.W
+        if self.scale_factor < 0.1:
+            self.scale_factor = 0.1
+        if self.scale_factor > 10:
+            self.scale_factor = 10
+        (ow, oh) = (self.W, self.H) # output size
+        (ocx, ocy) = ((ow-1)/2, (oh-1)/2) # put there in output (it's the exact center)
+        H = self._viewer_translate(+ocx, +ocy) @ self._viewer_rotate(degrees=0) @ self._viewer_scale(self.scale_factor) @ self._viewer_translate(-self.icx, -self.icy)
+        M = H[0:2]
+        def img_wrapper(img):
+            out = cv2.warpAffine(img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            ratio = 640 / self.W
+            img = cv2.resize(out, (640, int(self.H*ratio)))
+            return o3d.geometry.Image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        self._img_wrapper = img_wrapper
+        self._update_image_viewer()
+        self._update_diff_viewer()
+
     #endregion
     
     #region ----- Open3DScene 
@@ -2919,7 +3048,8 @@ class AppWindow:
     
     def _remove_geometry(self, name):
         self.logger.debug('_remove_geometry')
-        self._scene.scene.remove_geometry(name)
+        if self._check_geometry(name):
+            self._scene.scene.remove_geometry(name)
     
     def _add_geometry(self, name, geo, mat):
         self.logger.debug('_add_geometry')
@@ -3301,6 +3431,17 @@ class AppWindow:
             self._redo()
             return gui.Widget.EventCallbackResult.CONSUMED
         
+        if event.key == gui.KeyName.SLASH and (event.type==gui.KeyEvent.DOWN):
+            self._update_valid_error(calculate=True)
+            return gui.Widget.EventCallbackResult.HANDLED
+        
+
+
+        if event.key == gui.KeyName.ZERO and (event.type==gui.KeyEvent.DOWN):
+            self._active_hand.toggle_current_joint_lock()
+            self._update_joint_mask()
+            return gui.Widget.EventCallbackResult.HANDLED
+
         # activate autosave
         if event.key==gui.KeyName.Z and event.type==gui.KeyEvent.DOWN:
             self._toggle_hand_visible()
@@ -3316,18 +3457,7 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.CONSUMED
         
         if event.key in [gui.KeyName.I, gui.KeyName.J, gui.KeyName.K, gui.KeyName.L, gui.KeyName.U, gui.KeyName.O, gui.KeyName.P] and self.scale_factor is not None:
-            def translate(tx=0, ty=0):
-                T = np.eye(3)
-                T[0:2,2] = [tx, ty]
-                return T
-            def scale(s=1, sx=1, sy=1):
-                T = np.diag([s*sx, s*sy, 1])
-                return T
-            def rotate(degrees):
-                T = np.eye(3)
-                # just involves some sin() and cos()
-                T[0:2] = cv2.getRotationMatrix2D(center=(0,0), angle=-degrees, scale=1.0)
-                return T
+            
             translate_factor = 10
             if event.key == gui.KeyName.I:
                 self.icy -= translate_factor
@@ -3343,41 +3473,19 @@ class AppWindow:
                 self.scale_factor -= 0.1
             if event.key == gui.KeyName.P:
                 self._reset_image_viewer()
-            if self.icy < 0:
-                self.icy = 0
-            if self.icx < 0:
-                self.icx = 0
-            if self.icy > self.H:
-                self.icy = self.H
-            if self.icx > self.W:
-                self.icx = self.W
-            if self.scale_factor < 0.1:
-                self.scale_factor = 0.1
-            if self.scale_factor > 10:
-                self.scale_factor = 10
-            (ow, oh) = (self.W, self.H) # output size
-            (ocx, ocy) = ((ow-1)/2, (oh-1)/2) # put there in output (it's the exact center)
-            H = translate(+ocx, +ocy) @ rotate(degrees=0) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
-            M = H[0:2]
-            def img_wrapper(img):
-                out = cv2.warpAffine(img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
-                ratio = 640 / self.W
-                img = cv2.resize(out, (640, int(self.H*ratio)))
-                return o3d.geometry.Image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            self._img_wrapper = img_wrapper
-            
+            self._move_viewer()
             
             # out = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
             # ratio = 640 / self.W
             # _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
             # _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
-            self._rgb_proxy.set_widget(gui.ImageWidget(self._img_wrapper(self.rgb_img)))
+            
             
             # out = cv2.warpAffine(self.diff_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
             # ratio = 640 / self.W
             # _diff_img = cv2.resize(out, (640, int(self.H*ratio)))
             # _diff_img = o3d.geometry.Image(cv2.cvtColor(_diff_img, cv2.COLOR_BGR2RGB))
-            self._diff_proxy.set_widget(gui.ImageWidget(self._img_wrapper(self.diff_img)))
+            
             
             return gui.Widget.EventCallbackResult.HANDLED
         
@@ -3538,13 +3646,14 @@ class AppWindow:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value and self._annotation_changed:
                 self._annotation_changed = False
                 self.annotation_scene.save_label()
-                # self._update_valid_error()
-                # self._update_diff_viewer()
                 self._last_saved = time.time()
                 self._log.text = "라벨 결과 자동 저장중입니다."
                 self.window.set_needs_layout()
-                    
+                if self._error_box.checked:
+                    self._update_valid_error()
+                    self._update_diff_viewer()
         
+                
         self._init_view_control()
 
 def main(logger):
