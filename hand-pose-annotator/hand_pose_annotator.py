@@ -468,13 +468,20 @@ class HandModel:
 
     def _check_lock_state(self):
         for idx, lock_state in enumerate(self.lock_state):
-            if idx == 0:
-                self.root_trans.requires_grad = False
-                self.root_trans.grad = None
-            else:
-                idx = idx - 1
-                self.joint_rot[idx].requires_grad = False
-                self.joint_rot[idx].grad = None
+            if lock_state:
+                if idx == 0:
+                    self.root_trans.requires_grad = False
+                    self.root_trans.grad = None
+                else:
+                    idx = idx - 1
+                    self.joint_rot[idx].requires_grad = False
+                    self.joint_rot[idx].grad = None
+    @property
+    def _can_be_move(self):
+        is_lock = []
+        for i in range(3):
+            is_lock.append(self.lock_state[self._ORDER_OF_PARAM[self.optimize_target]*3 + i + 2])
+        return not all(is_lock)
 
     #region save and load state
     def get_state(self):
@@ -543,7 +550,9 @@ class HandModel:
         self._target_changed = False
     
     def optimize_to_target(self):
-        if self._target_changed:
+        if self.optimize_target=='root':
+            return False
+        if self._target_changed and self._can_be_move:
             self.optimizer.zero_grad()
             # forward
             self.update_mano()
@@ -1337,6 +1346,7 @@ class Scene:
         if frame_idx > self.total_frame - 1:
             return False
         else:
+            self._frame_idx = frame_idx
             self.frame_id = self._frame_list[frame_idx]
             return True
     def moveto_previous_frame(self):
@@ -1344,6 +1354,7 @@ class Scene:
         if frame_idx < 0:
             return False
         else:
+            self._frame_idx = frame_idx
             self.frame_id = self._frame_list[frame_idx]
             return True
     def get_progress(self):
@@ -1650,7 +1661,8 @@ class AppWindow:
         self.scale_factor = None
         self.reset_flat = False
         self.joint_back = False
-        
+        self._move_root = False
+        self._guide_changed = False
         
         self._template = {
             "right": PoseTemplate(side='right'),
@@ -1950,7 +1962,12 @@ class AppWindow:
         self._error_box = gui.Checkbox("자동 에러율 계산")
         viewctrl_layout.add_child(self._error_box)
         self._error_box.checked = False
-        
+
+        self._down_sample_pcd = gui.Checkbox("손 중심 랜더링")
+        viewctrl_layout.add_child(self._down_sample_pcd)
+        self._down_sample_pcd.set_on_checked(self._on_down_sample_pcd)
+        self._down_sample_pcd.checked = False
+
         grid = gui.VGrid(2, 0.25 * em)
         self._scene_point_size = gui.Slider(gui.Slider.INT)
         self._scene_point_size.set_limits(1, 20)
@@ -2163,8 +2180,13 @@ class AppWindow:
         self._log.text = "\t 자동 저장 간격을 변경합니다."
         self.window.set_needs_layout()
         self._auto_save_interval.double_value = interval
-    
-    
+    def _on_down_sample_pcd(self, checked):
+        if checked:
+            if self._active_hand is None:
+                self._on_error("손이 없습니다.")
+                self._down_sample_pcd.checked = False
+                return
+        self._init_pcd_layer()
     # labeling stage edit
     def _init_stageedit_layout(self):
         self.logger.debug('_init_stageedit_layout')
@@ -2224,12 +2246,12 @@ class AppWindow:
         button.set_on_clicked(self._convert_hand)
         grid.add_child(button)
         
-        button = gui.Button("이전 관절")
+        button = gui.Button("이전 관절 (PgDn)")
         button.horizontal_padding_em = 0.3
         button.vertical_padding_em = 0.3
         button.set_on_clicked(self._control_joint_down)
         grid.add_child(button)
-        button = gui.Button("다음 관절")
+        button = gui.Button("다음 관절 (PgUp)")
         button.horizontal_padding_em = 0.3
         button.vertical_padding_em = 0.3
         button.set_on_clicked(self._control_joint_up)
@@ -2321,6 +2343,7 @@ class AppWindow:
         self._update_current_hand_str()
         self._update_valid_error()
         self._update_joint_mask()
+        self._init_pcd_layer()
 
     # convert finger
     def _convert_to_root(self):
@@ -2438,7 +2461,6 @@ class AppWindow:
                 hand_model.set_root_position(pcd.get_center())
         self._update_progress_str()
         self._on_change_camera_merge()
-        # self._init_pcd_layer()
         self._init_hand_layer()
         self._init_obj_layer()
         self._update_valid_error()
@@ -2892,7 +2914,7 @@ class AppWindow:
                 
 
                 # only hand mask
-                right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]>2, np.bitwise_and(rgb_rendered[:, :, 1]>2, rgb_rendered[:, :, 2]>2))
+                right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]>10, rgb_rendered[:, :, 2]>2))
                 # right_hand_mask_vis = np.zeros_like(rgb_rendered)
                 # right_hand_mask_vis[right_hand_mask] = 255
                 # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'right_hand_mask_vis.png'), right_hand_mask_vis)
@@ -2914,13 +2936,14 @@ class AppWindow:
                 diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
                 diff_vis[left_hand_mask] = [0, 255, 0] # BGR
 
+                hand_mask = np.bitwise_or(right_hand_mask, left_hand_mask)
 
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
                 depth_diff_abs = np.abs(np.copy(depth_diff))
                 inlier_mask = depth_diff_abs < 50
 
-                high_error_mask = np.bitwise_and(inlier_mask, depth_diff_abs > 10)
+                high_error_mask = np.bitwise_and(hand_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
                 diff_vis[high_error_mask] = [0, 0, 255]
 
                 # right_hand
@@ -3192,6 +3215,9 @@ class AppWindow:
         if self._active_hand.get_optimize_target()=='root':
             self._active_hand.save_undo(forced=True)
             self._annotation_changed = True
+            self._move_root = True
+        else:
+            self._guide_changed = True
         self._update_activate_hand()
         self._update_target_hand()
     
@@ -3206,9 +3232,22 @@ class AppWindow:
                 return    
             self._pcd = self._frame.get_pcd(cam_name_list)
             self.bounds = self._pcd.get_axis_aligned_bounding_box()
-            self._add_geometry(self._scene_name, self._pcd, self.settings.scene_material)
+            if self._down_sample_pcd.checked:
+                pcd = self._get_active_pcd(self._pcd)
+            else:
+                pcd = self._pcd
+            self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
         else:
             self._remove_geometry(self._scene_name)
+    def _get_active_pcd(self, pcd):
+        hand = self._active_hand.get_geometry()['mesh']
+        bbox = hand.get_axis_aligned_bounding_box()
+        bbox = bbox.scale(3, bbox.get_center())
+        
+        active_pcd = pcd.crop(bbox)
+        nactive_pcd = pcd.voxel_down_sample(0.02)
+        return active_pcd+nactive_pcd
+
     def _toggle_pcd_visible(self):
         self.logger.debug('_toggle_pcd_visible')
         show = self._show_pcd.checked
@@ -3342,9 +3381,10 @@ class AppWindow:
         self.window.set_needs_layout()
         self._last_change = time.time()
         self._annotation_changed = self._active_hand.optimize_to_target()
-        self._update_target_hand()
-        self._update_activate_hand()
-    
+        if self._annotation_changed:
+            self._update_target_hand()
+            self._update_activate_hand()
+        
     def _undo(self):
         self.logger.debug('_undo')
         self._auto_optimize.checked = False
@@ -3523,54 +3563,29 @@ class AppWindow:
         if event.key == gui.KeyName.BACKTICK:
             self._active_hand.set_optimize_target('root')
         elif event.key == gui.KeyName.ONE and (event.type==gui.KeyEvent.DOWN):
-            if self._active_hand.get_optimize_target()=='thumb':
-                if self.joint_back:
-                    ctrl_idx = self._active_hand.control_idx - 1
-                else:
-                    ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            else:
-                self._active_hand.set_optimize_target('thumb')
+            self._active_hand.set_optimize_target('thumb')
         elif event.key == gui.KeyName.TWO and (event.type==gui.KeyEvent.DOWN):
-            if self._active_hand.get_optimize_target()=='fore':
-                if self.joint_back:
-                    ctrl_idx = self._active_hand.control_idx - 1
-                else:
-                    ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            else:
-                self._active_hand.set_optimize_target('fore')
+            self._active_hand.set_optimize_target('fore')
         elif event.key == gui.KeyName.THREE and (event.type==gui.KeyEvent.DOWN):
-            if self._active_hand.get_optimize_target()=='middle':
-                if self.joint_back:
-                    ctrl_idx = self._active_hand.control_idx - 1
-                else:
-                    ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            else:
-                self._active_hand.set_optimize_target('middle')
+            self._active_hand.set_optimize_target('middle')
         elif event.key == gui.KeyName.FOUR and (event.type==gui.KeyEvent.DOWN):
-            if self._active_hand.get_optimize_target()=='ring':
-                if self.joint_back:
-                    ctrl_idx = self._active_hand.control_idx - 1
-                else:
-                    ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            else:
-                self._active_hand.set_optimize_target('ring')
+            self._active_hand.set_optimize_target('ring')
         elif event.key == gui.KeyName.FIVE and (event.type==gui.KeyEvent.DOWN):
-            if self._active_hand.get_optimize_target()=='little':
-                if self.joint_back:
-                    ctrl_idx = self._active_hand.control_idx - 1
-                else:
-                    ctrl_idx = self._active_hand.control_idx + 1
-                self._active_hand.set_control_joint(ctrl_idx)
-            else:
-                self._active_hand.set_optimize_target('little')
+            self._active_hand.set_optimize_target('little')
         else:
             is_converted_finger = False
-        
-        if is_converted_finger:
+
+        is_convert_joint = True
+        if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
+            ctrl_idx = self._active_hand.control_idx + 1
+            self._active_hand.set_control_joint(ctrl_idx)
+        elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
+            ctrl_idx = self._active_hand.control_idx - 1
+            self._active_hand.set_control_joint(ctrl_idx)
+        else:
+            is_convert_joint = False
+
+        if is_converted_finger or is_convert_joint:
             self._update_target_hand()
             self._update_joint_mask()
             return gui.Widget.EventCallbackResult.CONSUMED
@@ -3590,6 +3605,7 @@ class AppWindow:
                 return gui.Widget.EventCallbackResult.CONSUMED
             # reset guide pose
             elif event.key == gui.KeyName.HOME:
+                self._guide_changed = False
                 self._active_hand.reset_target()
                 self._update_target_hand()
                 return gui.Widget.EventCallbackResult.CONSUMED
@@ -3639,8 +3655,9 @@ class AppWindow:
                 self.window.set_needs_layout()
         
         if self._auto_optimize.checked and self._active_hand is not None:
-            if self._labeling_mode==LabelingMode.OPTIMIZE:
-                self._on_optimize()
+            if self._labeling_mode==LabelingMode.OPTIMIZE and self._guide_changed:
+                if not self._active_hand.get_optimize_target()=='root':
+                    self._on_optimize()
         
         if self._auto_save.checked and self.annotation_scene is not None:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value and self._annotation_changed:
@@ -3653,7 +3670,10 @@ class AppWindow:
                     self._update_valid_error()
                     self._update_diff_viewer()
         
-                
+        if self._down_sample_pcd.checked and self._move_root:
+            self._init_pcd_layer()
+            self._move_root = False
+
         self._init_view_control()
 
 def main(logger):
