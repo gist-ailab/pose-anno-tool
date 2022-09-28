@@ -1,21 +1,23 @@
-from __future__ import annotations
 import imgviz
 import cv2
 import numpy as np
-import glob
 import os
 from threading import Thread, Lock
 import json
 from pycocotools import mask as M
 import matplotlib
-import networkx as nx
 import string
-import matplotlib.pyplot as plt
 matplotlib.use('agg')
 
 
 lock = Lock()
 
+def read_image(path):
+    stream = open(path, "rb")
+    bytes = bytearray(stream.read())
+    numpyarray = np.asarray(bytes, dtype=np.uint8)
+    bgrImage = cv2.imdecode(numpyarray, cv2.IMREAD_UNCHANGED)
+    return bgrImage
 
 class GTVisualizer():
 
@@ -25,15 +27,17 @@ class GTVisualizer():
         self.width, self.height = 1920, 720
         self.frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         self.is_updated = True
-        # !TODO: get this by user
-        self.aihub_root = "/home/seung/OccludedObjectDataset/aihub/원천데이터/다수물체가림/실제"
+
+        aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요: \n")
+        self.aihub_root = aihub_root
         self.scene_id = 1
-        self.get_sub_dirs_from_scene_id
+        self.get_sub_dirs_from_scene_id()
         self.image_id = 1
 
         self.init_cv2()
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
+        self.black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
 
     def get_sub_dirs_from_scene_id(self):
         
@@ -43,9 +47,9 @@ class GTVisualizer():
                     if int(scene_id) == self.scene_id:
                         self.sub_dir_1 = sub_dir_1
                         self.sub_dir_2 = sub_dir_2
+                        print("scene_id에 해당하는 {}을 불러옵니다.".format(os.path.join(self.aihub_root, sub_dir_1, sub_dir_2)))
                         return
-        print("scene_id is not valid")
-        exit()
+        print("존재하지 않는 scene_id가 입력되었습니다.")
         
 
 
@@ -61,6 +65,8 @@ class GTVisualizer():
         self.get_sub_dirs_from_scene_id()
         self.scene_path = os.path.join(self.aihub_root, self.sub_dir_1, self.sub_dir_2, "{0:06d}".format(self.scene_id))
         self.is_updated = False
+        self.on_image_id(self.image_id)
+        cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
 
     def on_image_id(self, val):
         self.image_id = val
@@ -68,26 +74,30 @@ class GTVisualizer():
         self.depth_path = os.path.join(self.scene_path, "depth", "{0:06d}.png".format(self.image_id))
         self.gt_path = os.path.join(self.scene_path, "gt", "{0:06d}.json".format(self.image_id))
         self.is_updated = False
+        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
 
     def update_vis(self):
         if not self.is_updated:
-            self.rgb, self.depth = self.load_rgbd()
-            self.amodal, self.vis, self.occ = self.visualize_masks()
-
-        self.rgb = cv2.putText(self.rgb, "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        self.depth = cv2.putText(self.depth, "DEPTH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        self.amodal = cv2.putText(self.amodal, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        self.occ = cv2.putText(self.occ, "INVISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
-        rgbd = np.hstack((self.rgb, self.depth, black))
+            try:
+                self.rgb, self.depth = self.load_rgbd()
+                self.amodal, self.vis, self.occ = self.visualize_masks()
+            except FileNotFoundError:
+                pass
+            self.rgb = cv2.putText(self.rgb, "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.depth = cv2.putText(self.depth, "DEPTH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.amodal = cv2.putText(self.amodal, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.occ = cv2.putText(self.occ, "INVISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.is_updated = True
+        rgbd = np.hstack((self.rgb, self.depth, self.black))
         masks = np.hstack((self.amodal, self.vis, self.occ))
         self.frame = np.vstack((rgbd, masks))
 
         
     def load_rgbd(self):
-        rgb = cv2.imread(self.rgb_path)
-        depth = cv2.imread(self.depth_path, cv2.IMREAD_ANYDEPTH)
+        
+        rgb = read_image(self.rgb_path)
+        depth = read_image(self.depth_path)
         depth = depth.astype(np.float32)
         min_depth = np.unique(np.partition(depth.flatten(), 1))[1]
         depth[depth < min_depth] = min_depth
@@ -195,6 +205,42 @@ if __name__ == "__main__":
         k = cv2.waitKey(1) & 0xFF
         if k == ord('q') or k == 27:
             break
+        if k == ord('a'):
+            scene_id = gt_visualizer.scene_id
+            scene_id -= 1
+            if scene_id < 1:
+                scene_id = 1
+            gt_visualizer.on_scene_id(scene_id)
+        if k == ord('s'):
+            scene_id = gt_visualizer.scene_id
+            scene_id += 1
+            if scene_id > 1000:
+                scene_id = 1000
+            gt_visualizer.on_scene_id(scene_id)
+        if k == ord('d'):
+            try:
+                scene_id = int(input("scene_id를 입력하세요: \n"))
+            except:
+                pass
+            gt_visualizer.on_scene_id(scene_id)    
+        if k == ord('z'):
+            image_id = gt_visualizer.image_id
+            image_id -= 1
+            if image_id < 1:
+                image_id = 1
+            gt_visualizer.on_image_id(image_id)
+        if k == ord('x'):
+            image_id = gt_visualizer.image_id
+            image_id += 1
+            if image_id > 52:
+                image_id = 52
+            gt_visualizer.on_image_id(image_id)
+        if k == ord('c'):
+            try:
+                image_id = int(input("image_id를 입력하세요: \n"))
+            except:
+                pass
+            gt_visualizer.on_image_id(image_id)    
 
     gt_visualizer.stop_frame()
     cv2.destroyAllWindows()
