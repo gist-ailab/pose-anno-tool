@@ -1114,36 +1114,34 @@ class DexYCBSample(Dataset):
 
 class OurDataset(Dataset):
     _SERIALS = [
-        '000056922112', # master
+        '000390922112', # master
+        '000480922112',
+        '000056922112',
         '000210922112',
-        '000295922112',
-        '000355922112',
         '000363922112',
         '000375922112',
-        '000390922112',
-        '000480922112',
+        '000355922112',
+        '000364922112',
     ]
     _CAMERAS = [
-        "정면우측하단",
-        "후면우측중단",
-        "1인칭 시점",
-        "정면좌측상단",
-        "정면우측상단",
-        "정면중앙상단",
-        "후면좌측중단",
-        "정면좌측하단",
+        "하단-좌",
+        "단-좌",
+        "정하단-우",
+        "후하단-우",
+        "우상단",
+        "정상단",
+        "좌상단",
+        "후상단",
     ]
 
     def __init__(self, data_root):
-        self.H, self.W = 1440, 2560
-        
         # Total Data Statics
         self._data_dir = data_root
         self._calib_dir = os.path.join(self._data_dir, "calibration")
-        self._model_dir = os.path.join(self._data_dir, "models")
+        self._model_dir = os.path.join(self._data_dir, "models", 'object')
 
-        self._mano_shape_path = os.path.join(self._calib_dir, "{}", 'mano.json')
-        self._cam_calib_path = os.path.join(self._calib_dir, '{}', 'calib.json')
+        self._mano_shape_path = os.path.join(self._calib_dir, "mano-hand", '{}.json') # {}-subject-{:02d}.format(scan-date, id)
+        self._cam_calib_path = os.path.join(self._calib_dir, 'camera', '{}.json') # {}.format(calib-date)
 
         self._cameras = self._CAMERAS
         self._cam2serial = {cam: self._SERIALS[i] for i , cam in enumerate(self._cameras)}
@@ -1212,7 +1210,9 @@ class OurDataset(Dataset):
                     "intrinsic": K,
                     "extrinsics": extrinsic
                 }
-        
+            self.H = cam_calib[serial]["height"]
+            self.W = cam_calib[serial]["width"]
+            
         self._total_scene.sort()
         super().__init__()
 
@@ -2852,7 +2852,6 @@ class AppWindow:
     def _init_cam_name(self):
         self.logger.debug('_init_cam_name')
         self._cam_name_list = list(self.annotation_scene._cameras.keys())
-        self._cam_name_list.sort()
         for idx, (cam_button, _, _, _) in enumerate(self._view_error_layout_list):
             cam_button.text = self._cam_name_list[idx]
         self._diff_images = {cam_name: None for cam_name in self._cam_name_list}
