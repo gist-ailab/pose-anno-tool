@@ -88,16 +88,19 @@ class GTVisualizer():
         self.width, self.height = 1920, 1000
         self.frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         self.is_updated = True
-
-        aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요:  \n")
+        self.rgb_path = None
+        self.depth_path = None
+        # aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요:  \n")
+        aihub_root = "/home/seung/OccludedObjectDataset/aihub/원천데이터/다수물체가림/가상"
         self.aihub_root = aihub_root
-        self.scene_id = 1
+        self.scene_id = 0
         self.get_sub_dirs_from_scene_id()
-        self.image_id = 1
+        self.image_id = 0
 
         self.init_cv2()
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
+        self.black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
 
     
     def get_sub_dirs_from_scene_id(self):
@@ -112,6 +115,12 @@ class GTVisualizer():
                         return
         print("존재하지 않는 scene_id가 입력되었습니다.")
     
+    def get_filename_from_image_id(self):
+        if not os.path.exists(os.path.join(self.scene_path, "rgb")):
+            return None
+        for file_name in os.listdir(os.path.join(self.scene_path, "rgb")):
+            if int(file_name.split("_")[-1].split(".")[0]) == self.image_id:
+                return file_name
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data2 Order Visualizer')
@@ -124,38 +133,42 @@ class GTVisualizer():
         self.scene_id = val
         self.get_sub_dirs_from_scene_id()
         self.scene_path = os.path.join(self.aihub_root, self.sub_dir_1, self.sub_dir_2, "{0:06d}".format(self.scene_id))
-        self.is_updated = False
         self.on_image_id(self.image_id)
+        self.is_updated = False
         cv2.setTrackbarPos('scene_id','GIST AILAB Data2 Order Visualizer', self.scene_id)
 
     def on_image_id(self, val):
         self.image_id = val
-        self.rgb_path = os.path.join(self.scene_path, "rgb", "{0:06d}.png".format(self.image_id))
-        self.depth_path = os.path.join(self.scene_path, "depth", "{0:06d}.png".format(self.image_id))
-        self.gt_path = os.path.join(self.scene_path, "gt", "{0:06d}.json".format(self.image_id))
+        cv2.setTrackbarPos('image_id','GIST AILAB Data2 Order Visualizer', self.image_id)
+        file_name = self.get_filename_from_image_id()
+        if file_name is None:
+            return
+        self.rgb_path = os.path.join(self.scene_path, "rgb", file_name)
+        self.depth_path = os.path.join(self.scene_path, "depth", file_name)
+        if ".jpg" in self.depth_path:
+            self.depth_path = self.depth_path.replace(".jpg", ".png")
+        self.gt_path = os.path.join(self.scene_path, "gt", file_name.split(".")[0] + ".json")
         self.is_updated = False
         cv2.setTrackbarPos('image_id','GIST AILAB Data2 Order Visualizer', self.image_id)
 
     def update_vis(self):
-        if not self.is_updated:
-            try:
-                self.rgb, self.depth = self.load_rgbd()
-                self.vis = self.visualize_masks()
-                self.occ_graph, self.depth_graph = self.visualize_graphs()
-            except FileNotFoundError:
-                    pass
+        if not self.is_updated and self.rgb_path is not None:
+            self.rgb, self.depth = self.load_rgbd()
+            self.vis = self.visualize_masks()
+            self.occ_graph, self.depth_graph = self.visualize_graphs()
             self.rgb = cv2.putText(self.rgb, "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.depth = cv2.putText(self.depth, "DEPTH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.vis = cv2.putText(self.vis, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.occ_graph = cv2.putText(self.occ_graph, "OCC GRAPH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.depth_graph = cv2.putText(self.depth_graph, "DEPTH GRAPH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        rgbd = np.hstack((self.rgb, self.depth, self.vis))
-        graphs = np.hstack((self.occ_graph, self.depth_graph))
-        self.frame = np.vstack((rgbd, graphs))
+            rgbd = np.hstack((self.rgb, self.depth, self.vis))
+            graphs = np.hstack((self.occ_graph, self.depth_graph))
+            self.frame = np.vstack((rgbd, graphs))
 
         
     def load_rgbd(self):
         rgb = read_image(self.rgb_path)
+        self.size = list(rgb.shape[:2] )
         depth = read_image(self.depth_path)
         depth = depth.astype(np.float32)
         min_depth = np.unique(np.partition(depth.flatten(), 1))[1]
@@ -172,24 +185,23 @@ class GTVisualizer():
         
         self.gt = json.load(open(self.gt_path, "r"))
         self.annotations = self.gt["annotation"]
-        amodal_masks = []
         vis_masks = []
-        occ_masks = []
-        amodal_toplefts = []
         vis_toplefts = []
-        occ_toplefts = []
         for idx, anno in enumerate(self.annotations):
           
-            vis_mask = M.decode(anno["visible_mask"])
+            vis_mask = M.decode({'counts': anno["amodal_mask"], 'size': self.size})
             vis_mask = vis_mask.astype(np.uint8)
             vis_mask = cv2.resize(vis_mask, (self.width//3, self.height//3), interpolation=cv2.INTER_NEAREST)
             vis_mask = vis_mask.astype(bool)
             vis_masks.append(vis_mask)
 
-            x, y = np.where(vis_mask)
-            x1, y1 = x.min(), y.min()
-            x2, y2 = x.max(), y.max()
-            x, y = x1 + (x2 - x1) // 2, y1 + (y2 - y1) // 2
+            try:
+                x, y = np.where(vis_mask)
+                x1, y1 = x.min(), y.min()
+                x2, y2 = x.max(), y.max()
+                x, y = x1 + (x2 - x1) // 2, y1 + (y2 - y1) // 2
+            except:
+                x, y = 0, 0
             vis_toplefts.append((y, x))
 
 
@@ -199,7 +211,8 @@ class GTVisualizer():
 
         for i, (vis_mask, vis_topleft) in enumerate(zip(vis_masks, vis_toplefts)):
             vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
-            vis = cv2.putText(vis, string.ascii_uppercase[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            if vis_topleft[0] != 0 and vis_topleft[1] != 0:
+                vis = cv2.putText(vis, string.ascii_uppercase[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
         vis = cv2.resize(vis, (self.width//3, self.height//3), interpolation=cv2.INTER_NEAREST)
         return vis
 

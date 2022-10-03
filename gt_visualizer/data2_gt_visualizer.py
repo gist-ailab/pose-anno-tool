@@ -30,12 +30,12 @@ class GTVisualizer():
         self.rgb_path = None
         self.depth_path = None
 
-        aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요: \n")
-        # aihub_root = "/home/seung/OccludedObjectDataset/aihub/원천데이터/다수물체가림/실제"
+        # aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요: \n")
+        aihub_root = "/home/seung/OccludedObjectDataset/aihub/원천데이터/다수물체가림/가상"
         self.aihub_root = aihub_root
-        self.scene_id = 51
+        self.scene_id = 0
         self.get_sub_dirs_from_scene_id()
-        self.image_id = 1
+        self.image_id = 0
 
         self.init_cv2()
         self.on_scene_id(self.scene_id)
@@ -61,8 +61,6 @@ class GTVisualizer():
         for file_name in os.listdir(os.path.join(self.scene_path, "rgb")):
             if int(file_name.split("_")[-1].split(".")[0]) == self.image_id:
                 return file_name
-
-
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data2 GT Visualizer')
@@ -156,10 +154,13 @@ class GTVisualizer():
             vis_mask = vis_mask.astype(bool)
             vis_masks.append(vis_mask)
 
-            x, y = np.where(vis_mask)
-            x1, y1 = x.min(), y.min()
-            x2, y2 = x.max(), y.max()
-            x, y = x1 + (x2 - x1) // 2, y1 + (y2 - y1) // 2
+            try:
+                x, y = np.where(vis_mask)
+                x1, y1 = x.min(), y.min()
+                x2, y2 = x.max(), y.max()
+                x, y = x1 + (x2 - x1) // 2, y1 + (y2 - y1) // 2
+            except:
+                x, y = 0, 0
             vis_toplefts.append((y, x))
 
             occ_mask = M.decode({'counts': anno["invisible_mask"], 'size': self.size})
@@ -187,7 +188,8 @@ class GTVisualizer():
             vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
             occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
             amodal = cv2.putText(amodal, string.ascii_uppercase[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-            vis = cv2.putText(vis, string.ascii_uppercase[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            if vis_topleft[0] != 0 and vis_topleft[1] != 0:
+                vis = cv2.putText(vis, string.ascii_uppercase[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
             if occ_top_left[0] != 0 and occ_top_left[1] != 0:
                 occ = cv2.putText(occ, string.ascii_uppercase[i], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
