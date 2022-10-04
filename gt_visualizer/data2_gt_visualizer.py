@@ -6,6 +6,8 @@ from threading import Thread, Lock
 import json
 from pycocotools import mask as M
 import matplotlib
+from tkinter import Tk
+from tkinter import filedialog
 matplotlib.use('agg')
 
 
@@ -49,19 +51,9 @@ class GTVisualizer():
         self.scale_factor = 1
         self.angle = 15
         self.icx, self.icy = self.width/2, self.height/2
-        
-
-        # aihub_root = input("실제 / 가상 폴더의 경로를 입력해주세요: \n")
-        aihub_root = "/OccludedObjectDataset/aihub/원천데이터/다수물체가림/실제"
-        self.aihub_root = aihub_root
-        self.scene_id = 0
-        self.get_sub_dirs_from_scene_id()
-        self.image_id = 0
-
-        self.init_cv2()
-        self.on_scene_id(self.scene_id)
-        self.on_image_id(self.image_id)
+        self.data_type = None
         self.black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
+
 
 
     def get_sub_dirs_from_scene_id(self):
@@ -85,12 +77,16 @@ class GTVisualizer():
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data2 GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', 1, 1000, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', 1, 52, self.on_image_id)
+        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_image_id)
         cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
         cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
 
     def on_scene_id(self, val):
+        if val < self.min_scene_id:
+            val = self.min_scene_id
+        elif val > self.max_scene_id:
+            val = self.max_scene_id
         self.scene_id = val
         self.get_sub_dirs_from_scene_id()
         self.scene_path = os.path.join(self.aihub_root, self.sub_dir_1, self.sub_dir_2, "{0:06d}".format(self.scene_id))
@@ -99,6 +95,10 @@ class GTVisualizer():
         cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
 
     def on_image_id(self, val):
+        if val < self.min_image_id:
+            val = self.min_image_id
+        elif val > self.max_image_id:
+            val = self.max_image_id
         self.image_id = val
         cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
         file_name = self.get_filename_from_image_id()
@@ -112,6 +112,30 @@ class GTVisualizer():
         self.is_img_load = False
         cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
 
+    def on_key(self, key):
+
+        if key in [ord('q'), ord('w'), ord('e'), ord('a'), ord('s'), ord('d'), ord('z')]:
+            self.apply_affine_transform(key)
+        elif key == ord('o'):
+            self.open_file()
+        elif key == ord('r'):
+            self.scene_id -= 1
+            self.on_scene_id(self.scene_id)
+            self.is_img_load = False
+        elif key == ord('t'):
+            self.scene_id += 1
+            self.on_scene_id(self.scene_id)
+            self.is_img_load = False
+        elif key == ord('f'):
+            self.image_id -= 1
+            self.on_image_id(self.image_id)
+            self.is_img_load = False
+        elif key == ord('g'):
+            self.image_id += 1
+            self.on_image_id(self.image_id)
+            self.is_img_load = False
+        
+
 
     def affine_transform(self, img):
         ow, oh = self.width, self.height
@@ -119,8 +143,34 @@ class GTVisualizer():
         H = translate(+ocx, +ocy) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
         M = H[0:2]
         img = cv2.warpAffine(img, dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
-        self.is_zoomed = True
         return img
+
+    def apply_affine_transform(self, key):
+        if key == ord('q'):
+            self.scale_factor += 0.1
+        elif key == ord('e'):
+            self.scale_factor -= 0.1
+        elif key == ord('w'):
+            self.icy -= 10
+        elif key == ord('s'):
+            self.icy += 10
+        elif key == ord('a'):
+            self.icx -= 10
+        elif key == ord('d'):
+            self.icx += 10
+        elif key == ord('z'):
+            self.icx, self.icy = self.width/2, self.height/2
+            self.scale_factor = 1
+        if self.icx < 0:
+            self.icx = 0
+        if self.icy < 0:
+            self.icy = 0
+        if self.icx > self.width:
+            self.icx = self.width
+        if self.icy > self.height:
+            self.icy = self.height
+        self.is_updated = False
+
 
     def update_vis(self):
         if not self.is_img_load and self.rgb_path is not None:
@@ -131,7 +181,9 @@ class GTVisualizer():
             self.amodal = cv2.putText(self.amodal, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.occ = cv2.putText(self.occ, "INVISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            rgbd = np.hstack((self.rgb, self.depth, self.black))
+            black = cv2.putText(self.black.copy(), "Scene ID: {}".format(self.scene_id), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            black = cv2.putText(black, "Image ID: {}".format(self.image_id), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            rgbd = np.hstack((self.rgb, self.depth, black))
             masks = np.hstack((self.amodal, self.vis, self.occ))
             self.frame = np.vstack((rgbd, masks))
             self.frame_original = self.frame.copy()
@@ -178,8 +230,11 @@ class GTVisualizer():
             amodal_mask = amodal_mask.astype(bool)
             amodal_masks.append(amodal_mask)
 
-            x, y = np.where(amodal_mask)
-            x, y = x.min(), y.min()
+            try:
+                x, y = np.where(amodal_mask)
+                x, y = x.min(), y.min()
+            except:
+                x, y = 0, 0
             amodal_toplefts.append((y, x))
 
             vis_mask = M.decode({'counts': anno["visible_mask"], 'size': self.size})
@@ -191,7 +246,6 @@ class GTVisualizer():
             try:
                 x, y = np.where(vis_mask)
                 x, y = x.min(), y.min()
-
             except:
                 x, y = 0, 0
             vis_toplefts.append((y, x))
@@ -219,7 +273,8 @@ class GTVisualizer():
             amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
             vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
             occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
-            amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+            if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
+                amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
             if vis_topleft[0] != 0 and vis_topleft[1] != 0:
                 vis = cv2.putText(vis, obj_names[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
             if occ_top_left[0] != 0 and occ_top_left[1] != 0:
@@ -245,6 +300,51 @@ class GTVisualizer():
         self.update_vis()
         return np.uint8(self.frame)
 
+    def open_file(self):
+        Tk().withdraw()
+        file_path = filedialog.askopenfilename(title="Select A File", filetypes=(("image files", "*.png *.jpg"),("all files", "*.*")))
+        image_id = os.path.basename(file_path).split(".")[0].split("_")[-1]
+        sub_path, _ = os.path.split(file_path)
+        sub_path, _ = os.path.split(sub_path)
+        sub_path, scene_id = os.path.split(sub_path)
+        sub_path, sub_dir_2 = os.path.split(sub_path)
+        aihub_root, sub_dir_1 = os.path.split(sub_path)
+        print(sub_dir_1, sub_dir_2, scene_id, image_id, aihub_root)
+        if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
+            if os.path.basename(aihub_root) == "실제":
+                self.data_type = "data2_real"
+            elif os.path.basename(aihub_root) == "가상":
+                self.data_type = "data2_syn"
+            else:
+                print("폴더 구조를 확인하세요.")
+        else:
+            print("잘못된 경로가 입력되었습니다: {}".format(file_path))
+            self.open_file()
+            return
+        
+        self.sub_dir_1 = sub_dir_1
+        self.sub_dir_2 = sub_dir_2
+        self.aihub_root = aihub_root
+        self.scene_id = int(scene_id)
+        self.image_id = int(image_id)
+        if self.data_type == "data2_real":
+            self.max_scene_id = 1000
+            self.min_scene_id = 1
+            self.max_image_id = 52
+            self.min_image_id = 1
+        elif self.data_type == "data2_syn":
+            self.max_scene_id = 100
+            self.min_scene_id = 0
+            self.max_image_id = 999
+            self.min_image_id = 0
+        print(self.scene_id, self.image_id)
+        self.init_cv2()
+        self.on_scene_id(self.scene_id)
+        self.on_image_id(self.image_id)
+
+
+
+        
 
 
 
@@ -253,83 +353,16 @@ if __name__ == "__main__":
     
     gt_visualizer = GTVisualizer()
     gt_visualizer.start_frame()
+    gt_visualizer.open_file()
     while True:
         cv2.imshow("GIST AILAB Data2 GT Visualizer", gt_visualizer.get_frame())
         k = cv2.waitKey(1) & 0xFF
         if k == 27:
             break
-        if k == ord('r'):
-            scene_id = gt_visualizer.scene_id
-            scene_id -= 1
-            if scene_id < 1:
-                scene_id = 1
-            gt_visualizer.on_scene_id(scene_id)
-            gt_visualizer.is_img_loaded = False
-        if k == ord('t'):
-            scene_id = gt_visualizer.scene_id
-            scene_id += 1
-            if scene_id > 1000:
-                scene_id = 1000
-            gt_visualizer.on_scene_id(scene_id)
-            gt_visualizer.is_img_loaded = False
-        if k == ord('v'):
-            try:
-                scene_id = int(input("scene_id를 입력하세요: \n"))
-            except:
-                pass
-            gt_visualizer.on_scene_id(scene_id)    
-        if k == ord('f'):
-            image_id = gt_visualizer.image_id
-            image_id -= 1
-            if image_id < 1:
-                image_id = 1
-            gt_visualizer.on_image_id(image_id)
-            gt_visualizer.is_img_loaded = False
-        if k == ord('g'):
-            image_id = gt_visualizer.image_id
-            image_id += 1
-            if image_id > 52:
-                image_id = 52
-            gt_visualizer.on_image_id(image_id)
-            gt_visualizer.is_img_loaded = False
-        if k == ord('b'):
-            try:
-                image_id = int(input("image_id를 입력하세요: \n"))
-            except:
-                pass
-            gt_visualizer.on_image_id(image_id)    
-        
-        if k == ord('q'):
-            gt_visualizer.scale_factor += 0.1
-            gt_visualizer.is_updated = False
-        if k == ord('e'):
-            gt_visualizer.scale_factor -= 0.1
-            gt_visualizer.is_updated = False
-        if k == ord('w'):
-            gt_visualizer.icy -= 10
-            if gt_visualizer.icy < 0:
-                gt_visualizer.icy = 0
-            gt_visualizer.is_updated = False
-        if k == ord('s'):
-            gt_visualizer.icy += 10
-            if gt_visualizer.icy > gt_visualizer.height:
-                gt_visualizer.icy = gt_visualizer.height
-            gt_visualizer.is_updated = False
-        if k == ord('a'):
-            gt_visualizer.icx -= 10
-            if gt_visualizer.icx < 0:
-                gt_visualizer.icx = 0
-            gt_visualizer.is_updated = False
-        if k == ord('d'):
-            gt_visualizer.icx += 10
-            if gt_visualizer.icx > gt_visualizer.width:
-                gt_visualizer.icx = gt_visualizer.width
-            gt_visualizer.is_updated = False
-        if k == ord('z'):
-            gt_visualizer.icx = gt_visualizer.width//2
-            gt_visualizer.icy = gt_visualizer.height//2
-            gt_visualizer.scale_factor = 1
-            gt_visualizer.is_updated = False
+        else:
+            gt_visualizer.on_key(k)
+            
+
 
 
 

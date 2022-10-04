@@ -268,6 +268,9 @@ class GTVisualizer():
         self.update_vis()
         return np.uint8(self.frame)
 
+
+
+
 if __name__ == "__main__":
     
     gt_visualizer = GTVisualizer()
