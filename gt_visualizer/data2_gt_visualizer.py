@@ -56,15 +56,6 @@ class GTVisualizer():
 
 
 
-        # self.aihub_root = aihub_root
-        # self.scene_id = 0
-        # self.get_sub_dirs_from_scene_id()
-        # self.image_id = 0
-
-        # self.on_scene_id(self.scene_id)
-        # self.on_image_id(self.image_id)
-
-
     def get_sub_dirs_from_scene_id(self):
         
         for sub_dir_1 in os.listdir(self.aihub_root):
@@ -86,8 +77,8 @@ class GTVisualizer():
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data2 GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', self.min_scene_id, self.max_scene_id, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', self.min_scene_id, self.max_scene_id, self.on_image_id)
+        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_image_id)
         cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
         cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
 
@@ -190,7 +181,9 @@ class GTVisualizer():
             self.amodal = cv2.putText(self.amodal, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.occ = cv2.putText(self.occ, "INVISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            rgbd = np.hstack((self.rgb, self.depth, self.black))
+            black = cv2.putText(self.black.copy(), "Scene ID: {}".format(self.scene_id), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            black = cv2.putText(black, "Image ID: {}".format(self.image_id), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            rgbd = np.hstack((self.rgb, self.depth, black))
             masks = np.hstack((self.amodal, self.vis, self.occ))
             self.frame = np.vstack((rgbd, masks))
             self.frame_original = self.frame.copy()
