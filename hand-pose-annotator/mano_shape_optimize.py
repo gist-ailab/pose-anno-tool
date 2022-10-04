@@ -165,9 +165,14 @@ class HandModel:
     }
 
     def __init__(self, side, shape_param=None):
+        if torch.cuda.is_available():
+            self.device = "cuda:0"
+        else:
+            self.device = 'cpu:0'
+
         self.side = side
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
-                            use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang')
+                            use_pca=False, flat_hand_mean=True, joint_rot_mode='axisang').to(self.device)
         self.learning_rate = 1e-3
         self.joint_loss = torch.nn.MSELoss()
         if side=='right':
@@ -178,10 +183,13 @@ class HandModel:
             self._active_img = self.LEFT_JOINT_IMG
         self.init_joint_mask()
         
+        
+
         # self.point_loss = o3d.t.pipelines.registration.TransformationEstimationPointToPoint().compute_rmse
         if shape_param is None:
-            shape_param = torch.zeros(10)
+            shape_param = torch.zeros(10).to(self.device)
         self.reset(shape_param)
+        self.init_verts2points()
         
     def undo(self):
         if len(self.undo_stack) > 0:
@@ -214,22 +222,22 @@ class HandModel:
         if shape_param is None:
             pass
         else:
-            self.shape_param = torch.Tensor(shape_param).unsqueeze(0)
+            self.shape_param = torch.Tensor(shape_param).unsqueeze(0).to(self.device)
 
         #2. root translation
-        self.root_trans = torch.zeros(1, 3)
+        self.root_trans = torch.zeros(1, 3).to(self.device)
         
         #3. root, 15 joints
         if flat_hand:
-            self.joint_rot = [torch.zeros(1, 3) for _ in range(16)]
+            self.joint_rot = [torch.zeros(1, 3).to(self.device) for _ in range(16)]
         else:
-            self.joint_rot = [torch.zeros(1, 3)]
-            self.joint_rot += [torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*i:3*(i+1)]).unsqueeze(0) for i in range(15)]
+            self.joint_rot = [torch.zeros(1, 3).to(self.device)]
+            self.joint_rot += [torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*i:3*(i+1)]).unsqueeze(0).to(self.device) for i in range(15)]
             
         self.optimizer = None
-        self.icp_optimizer = torch.optim.SGD(self.joint_rot, lr=1e-2, momentum=0.9)
+        self.icp_optimizer = optim.Adam([self.root_trans, *self.joint_rot], lr=0.01)
         self.update_mano()
-        self.root_delta = self.joints.cpu().detach()[0, 0]
+        self.root_delta = self.joints.cpu().detach()[0, 0].to(self.device)
         self.reset_target()
         
         self.optimize_state = LabelingMode.STATIC
@@ -310,14 +318,14 @@ class HandModel:
     def reset_pose(self, flat_hand=True):
         if self.optimize_state==LabelingMode.OPTIMIZE:
             if self.optimize_target=='root':
-                self.joint_rot[0] = torch.zeros(1, 3)
+                self.joint_rot[0] = torch.zeros(1, 3).to(self.device)
                 self.joint_rot[0].requires_grad = True
             else:
                 for target_idx in [self._ORDER_OF_PARAM[self.optimize_target]*3+i+1 for i in range(3)]:
                     if flat_hand:
-                        self.joint_rot[target_idx] = torch.zeros(1, 3)
+                        self.joint_rot[target_idx] = torch.zeros(1, 3).to(self.device)
                     else:
-                        self.joint_rot[target_idx] = torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*target_idx-3:3*target_idx]).unsqueeze(0)
+                        self.joint_rot[target_idx] = torch.Tensor(self.mano_layer.smpl_data['hands_mean'][3*target_idx-3:3*target_idx]).unsqueeze(0).to(self.device)
                     self.joint_rot[target_idx].requires_grad = True
             self.optimizer = optim.Adam(self.joint_rot, lr=self.learning_rate)
             self.update_mano()
@@ -326,34 +334,34 @@ class HandModel:
             self.shape_param.requires_grad = True
         else:
             target_idx = self._get_control_joint_param_idx()
-            self.joint_rot[target_idx] = torch.zeros(1, 3)
+            self.joint_rot[target_idx] = torch.zeros(1, 3).to(self.device)
             self.update_mano()    
     
     def reset_shape(self):
-        self.shape_param = torch.zeros(1, 10)
+        self.shape_param = torch.zeros(1, 10).to(self.device)
         self.update_mano()
 
     def get_control_rotation(self):
         target_idx = self._get_control_joint_param_idx()
-        return self.joint_rot[target_idx].detach()[0, :]
+        return self.joint_rot[target_idx].cpu().detach()[0, :]
     def set_control_rotation(self, rot_mat):
         assert (self.optimize_state==LabelingMode.STATIC or self.optimize_target=='root'), "error on set_control_rotation"
         target_idx = self._get_control_joint_param_idx()
         if self.optimize_state==LabelingMode.OPTIMIZE and self.optimize_target=='root':
-            self.joint_rot[0] = torch.Tensor(rot_mat).unsqueeze(0)
+            self.joint_rot[0] = torch.Tensor(rot_mat).unsqueeze(0).to(self.device)
             self.joint_rot[0].requires_grad = True
             self.update_mano()
             self.reset_target()
         else:    
-            self.joint_rot[target_idx] = torch.Tensor(rot_mat).unsqueeze(0)
+            self.joint_rot[target_idx] = torch.Tensor(rot_mat).unsqueeze(0).to(self.device)
             self.update_mano()
     
     def get_control_position(self):
         target_idx = self._get_control_joint_idx()
         if self.optimize_state==LabelingMode.STATIC:
-            return self.joints.detach()[0, target_idx]
+            return self.joints.cpu().detach()[0, target_idx]
         else:
-            return self.targets.detach()[0, target_idx]
+            return self.targets.cpu().detach()[0, target_idx]
     def set_control_position(self, xyz):
         assert (self.optimize_state==LabelingMode.OPTIMIZE or self.optimize_target=='root'), "error on set_control_position"
         if self.contorl_joint is None:
@@ -371,7 +379,7 @@ class HandModel:
     def get_root_position(self):
         return self.root_trans[0, :] + self.root_delta
     def set_root_position(self, xyz):
-        self.root_trans = torch.Tensor(xyz).unsqueeze(0) - self.root_delta
+        self.root_trans = torch.Tensor(xyz).unsqueeze(0).to(self.device) - self.root_delta
         self.update_mano()
     
     def get_optimize_state(self):
@@ -390,10 +398,11 @@ class HandModel:
                 param.requires_grad = False
             self.optimizer = None
         elif self.optimize_state==LabelingMode.OPTIMIZE_SHAPE:
+            self.root_trans.requires_grad = True
             for param in self.joint_rot:
-                param.requires_grad = False
+                param.requires_grad = True
             self.shape_param.requires_grad = True
-            self.optimizer = optim.Adam([self.shape_param], lr=self.learning_rate)
+            self.optimizer = optim.Adam([self.root_trans, *self.joint_rot, self.shape_param], lr=0.001)
         else:
             raise NotImplementedError
 
@@ -426,7 +435,7 @@ class HandModel:
             'shape_param': np.array(self.shape_param.cpu().detach()[0, :]),
             'pose_param': np.array(pose_param.cpu().detach()[0, :]), # 48, 3
             'root_trans': np.array(self.root_trans.cpu().detach()[0, :]),
-            'root_delta': np.array(self.root_delta),
+            'root_delta': np.array(self.root_delta.cpu().detach()),
             
             'joints': np.array(self.joints.cpu().detach()[0, :]),
             'verts': np.array(self.verts.cpu().detach()[0, :]),
@@ -434,17 +443,17 @@ class HandModel:
         }
     def set_state(self, state, only_pose=False):
         if only_pose:
-            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
+            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0).to(self.device) # 1, 48
             self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
-            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
+            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0).to(self.device)
             self.update_mano()
         else:
-            self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0)
+            self.shape_param = torch.Tensor(state['shape_param']).unsqueeze(0).to(self.device)
             assert state['pose_param'].size==48
-            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0) # 1, 48
+            pose_param = torch.Tensor(state['pose_param']).unsqueeze(0).to(self.device) # 1, 48
             self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(16)]
-            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0)
-            self.root_delta = torch.Tensor(state['root_delta'])
+            self.root_trans = torch.Tensor(state['root_trans']).unsqueeze(0).to(self.device)
+            self.root_delta = torch.Tensor(state['root_delta']).to(self.device)
         
             self.update_mano()
             
@@ -500,47 +509,39 @@ class HandModel:
             return False
     
     def optimize_to_points(self, target_points):
-        previous_grad = []
-        for idx, rot_param in enumerate(self.joint_rot):
-            previous_grad.append(rot_param.requires_grad)
-            if idx in [0, 1, 4, 7, 10, 13]:
-                rot_param.requires_grad = True
-            else:
-                rot_param.requires_grad = False
-        
-        for rot_param in self.joint_rot:
-            rot_param.grad = None
-        
-        self.update_mano()
-        loss = self._p2p_loss(target_points)
-        loss.backward()
-
-        print("loss: ", loss)
-        
-        with torch.no_grad():
-            # grad descent
-            for idx, rot_param in enumerate(self.joint_rot):
-                if idx in [0, 1, 4, 7, 10, 13]:
-                    rot_param -= torch.clip(rot_param.grad, -0.01, 0.01)
-                else:
-                    continue
-            # zero grad
-            for rot_param in self.joint_rot:
-                rot_param.grad = None
-
-            for idx, rot_param in enumerate(self.joint_rot):
-                rot_param.requires_grad = previous_grad[idx]
+        # previous_grad = []
+        # for idx, rot_param in enumerate(self.joint_rot):
+        #     previous_grad.append(rot_param.requires_grad)
+        #     rot_param.requires_grad = True
+        icp_optimizer = optim.Adam(self.joint_rot, lr=0.001)
+        for _ in range(10):
+            icp_optimizer.zero_grad()
             self.update_mano()
+            loss = self._p2p_loss(target_points)
+            loss.backward()
+            print("loss: ", loss)
+            icp_optimizer.step()
+        
+        # for idx, rot_param in enumerate(self.joint_rot):
+        #     rot_param.requires_grad = previous_grad[idx]
+        self.update_mano()
     
     def optimize_shape(self, target_points):
         self.shape_param.requires_grad = True
-        self.shape_param.grad = None
+        
+        # self.shape_param.grad = None
+        self.optimizer.zero_grad()
+
         self.update_mano()
         loss = self._p2p_loss(target_points)
+        print(loss)
         loss.backward()
+        self.optimizer.step()
+
         with torch.no_grad():
-            self.shape_param -= torch.clip(0.1*self.shape_param.grad, -0.01, 0.01)
-            print("loss: ", loss)
+        #     self.shape_param -= torch.clip(0.1*self.shape_param.grad, -0.01, 0.01)
+        #     print("loss: ", loss)
+        
             self.update_mano()
 
     def get_target(self):
@@ -554,12 +555,12 @@ class HandModel:
     def _mse_loss(self):
         assert self.optimize_state==LabelingMode.OPTIMIZE
         target_idx = self.optimize_idx[self.optimize_target]
-        return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
+        return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx].to(self.device))
     
     def _p2p_loss(self, target_points):
         p1 = self._sampling_points_from_mesh()
         # print(p1)
-        p2 = torch.Tensor(target_points)
+        p2 = torch.Tensor(target_points).to(self.device)
         dist = Utils.distance_matrix(p1, p2)
         # print(dist)
         min_dist, _ = torch.min(dist, dim=1)
@@ -570,21 +571,7 @@ class HandModel:
     
     def _sampling_points_from_mesh(self):
         verts = self.verts[0]
-        faces = self.faces
-        max_vert = len(verts)
-
-        verts2points = torch.zeros((faces.shape[0]*4, max_vert))
-        # center
-        for i, idx in enumerate(faces):
-            verts2points[i*4, idx] = 1/3
-        # random N points
-        for i, idx in enumerate(faces):
-            for j in range(3):
-                weight = torch.rand(3)
-                weight /= torch.sum(weight)
-                verts2points[i*4 + j + 1, idx] = weight
-
-        face_verts = torch.matmul(verts2points, verts)
+        face_verts = torch.matmul(self.verts2points, verts)
         points = torch.concat((verts, face_verts), dim=0)
         return points
 
@@ -601,7 +588,7 @@ class HandModel:
         return {
             "mesh": self._get_mesh(),
             "joint": self._get_joints(),
-            "link": self._get_links()
+            "link": self._get_links(),
         }
     def _get_mesh(self):
         verts = self.verts.cpu().detach()[0, :]
@@ -615,9 +602,9 @@ class HandModel:
         return tri_mesh
     def _get_joints(self, idx=None):
         if idx is None:
-            joints = self.joints.detach()[0, :]
+            joints = self.joints.cpu().detach()[0, :]
         else:
-            joints = self.joints.detach()[0, idx]
+            joints = self.joints.cpu().detach()[0, idx]
         joints = o3d.utility.Vector3dVector(joints)
         pcd = o3d.geometry.PointCloud(points=joints)
         return pcd
@@ -628,11 +615,18 @@ class HandModel:
         lineset = o3d.geometry.LineSet(lines=lines, points=joints)
         
         return lineset
-
+    def _get_optim_points(self):
+        p1 = self._sampling_points_from_mesh()
+        p1 = p1.cpu().detach()
+        p1 = o3d.utility.Vector3dVector(p1)
+        pcd = o3d.geometry.PointCloud(points=p1)
+        return pcd
+        
     def get_target_geometry(self):
         return {
             "joint": self._get_target_joints(),
             "link": self._get_target_links(),
+            "optim_points": self._get_optim_points()
         }
     def _get_target_joints(self, idx=None):
         if idx is None:
@@ -686,7 +680,22 @@ class HandModel:
             self.joint_mask['nactive'][idx] = temp
             total_mask[xs:xe, ys:ye] = [255, 255, 255]
         self.total_mask = total_mask
-        
+    def init_verts2points(self):
+        max_vert = self.verts.shape[1]
+        faces = self.faces
+        n = 5
+        verts2points = torch.zeros((faces.shape[0]*(n+1), max_vert)).to(self.device)
+        # center
+        for i, idx in enumerate(faces):
+            verts2points[i*(n+1), idx] = 1/3
+        # random N points
+        for i, idx in enumerate(faces):
+            for j in range(n):
+                weight = torch.rand(3).to(self.device)
+                weight /= torch.sum(weight)
+                verts2points[i*(n+1) + j + 1, idx] = weight
+        self.verts2points = verts2points
+
     def get_joint_mask(self):
         mask = self.total_mask.copy()
         mask[self.joint_mask['active'][self.contorl_joint]] = [255, 0, 0]
@@ -729,6 +738,7 @@ class Scene:
         self._label_path = file_path.replace('.ply', '.npz')
         self._pcd = self._load_point_cloud(file_path)
         self._pcd.scale(0.001, [0, 0, 0])
+        self._pcd = self._pcd.voxel_down_sample(0.003)
         self._label = None
 
 
@@ -760,14 +770,10 @@ class Scene:
             json_label = {}
         json_label.setdefault('hand_mask_info', {})
         for side, hand_model in self._hands.items():
-            json_label['hand_mask_info'][side] ={
-                "hand_type": str(side),
-                "hand_position": hand_model.get_hand_pose(),
-                "hand_shape": hand_model.get_hand_shape()
-            }
+            json_label[str(side)] = hand_model.get_hand_shape()
         with open(json_path, 'w') as f:
             json.dump(json_label, f, sort_keys=True, indent=4)
-    
+
     def save_label(self):
         # get current label
         label = {}
@@ -799,7 +805,6 @@ class Scene:
             for hand_model in self._hands.values():
                 hand_model.reset()
             return False
-
     
 class Settings:
     SHADER_UNLIT = "defaultUnlit"
@@ -2424,6 +2429,10 @@ class AppWindow:
                             target_geo['joint'], self.settings.target_joint_material)
             self._add_geometry(self._target_link_name, 
                             target_geo['link'], self.settings.target_link_material)
+            # self._add_geometry("test_points", 
+            #                 target_geo['optim_points'], self.settings.target_joint_material)
+
+
             active_geo = self._active_hand.get_active_geometry()
             self._add_geometry(self._active_joint_name, 
                             active_geo['joint'], self.settings.active_target_joint_material)
@@ -2509,7 +2518,7 @@ class AppWindow:
             self._on_error("활성화된 손 근처에 포인트가 부족합니다. 손을 더 맞춰주세요")
             return
         # downsampling
-        target_pcd = target_pcd.voxel_down_sample(0.005)
+        # target_pcd = target_pcd.voxel_down_sample(0.003)
         target_points = np.asarray(target_pcd.points)
         self._active_hand.optimize_shape(target_points)
         self._update_target_hand()
