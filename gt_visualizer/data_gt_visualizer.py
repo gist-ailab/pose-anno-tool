@@ -41,6 +41,10 @@ class GTVisualizer():
        
         self.stopped = True
         self.width, self.height = 1920, 720
+        self.max_scene_id = 1000
+        self.min_scene_id = 1
+        self.max_image_id = 1000
+        self.min_image_id = 1
         self.frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         self.sub_dir_1 = ''
         self.sub_dir_2 = ''
@@ -76,11 +80,11 @@ class GTVisualizer():
                 return file_name
 
     def init_cv2(self):
-        cv2.namedWindow('GIST AILAB Data2 GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_image_id)
-        cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.namedWindow('GIST AILAB Data GT Visualizer')
+        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_image_id)
+        cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
 
     def on_scene_id(self, val):
         if val < self.min_scene_id:
@@ -92,7 +96,7 @@ class GTVisualizer():
         self.scene_path = os.path.join(self.aihub_root, self.sub_dir_1, self.sub_dir_2, "{0:06d}".format(self.scene_id))
         self.on_image_id(self.image_id)
         self.is_img_load = False
-        cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
+        cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
 
     def on_image_id(self, val):
         if val < self.min_image_id:
@@ -100,7 +104,7 @@ class GTVisualizer():
         elif val > self.max_image_id:
             val = self.max_image_id
         self.image_id = val
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
         file_name = self.get_filename_from_image_id()
         if file_name is None:
             return
@@ -110,7 +114,7 @@ class GTVisualizer():
             self.depth_path = self.depth_path.replace(".jpg", ".png")
         self.gt_path = os.path.join(self.scene_path, "gt", file_name.split(".")[0] + ".json")
         self.is_img_load = False
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
 
     def on_key(self, key):
 
@@ -176,9 +180,9 @@ class GTVisualizer():
         if not self.is_img_load and self.rgb_path is not None:
             self.rgb, self.depth = self.load_rgbd()
             self.amodal, self.vis, self.occ = self.visualize_masks()
-            self.rgb = cv2.putText(self.rgb, "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            self.depth = cv2.putText(self.depth, "DEPTH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            self.amodal = cv2.putText(self.amodal, "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.rgb = cv2.putText(self.rgb.copy(), "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.depth = cv2.putText(self.depth.copy(), "DEPTH", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            self.amodal = cv2.putText(self.amodal.copy(), "AMODAL MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.vis = cv2.putText(self.vis, "VISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             self.occ = cv2.putText(self.occ, "INVISIBLE MASK", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             black = cv2.putText(self.black.copy(), "Scene ID: {}".format(self.scene_id), (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
@@ -207,8 +211,10 @@ class GTVisualizer():
         depth = depth * 255
         depth = depth.astype(np.uint8)
         depth = cv2.applyColorMap(depth, cv2.COLORMAP_JET)
-        rgb = cv2.resize(rgb, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
-        depth = cv2.resize(depth, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
+        rgb = cv2.resize(rgb, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)[:,:,:3]
+        depth = cv2.resize(depth, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)[:,:,:3]
+        rgb = np.uint8(rgb)
+        depth = np.uint8(depth)
         return rgb, depth
 
 
@@ -261,7 +267,10 @@ class GTVisualizer():
             except:
                 x, y = 0, 0
             occ_toplefts.append((y, x))
-            obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
+            if "data2" in self.data_type:
+                obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
+            else:
+                obj_names.append("{}".format(anno["object_id"]))
 
         # draw amodal and visible masks on rgb
         amodal = self.rgb.copy()
@@ -269,16 +278,36 @@ class GTVisualizer():
         occ = self.rgb.copy()
         cmap = matplotlib.cm.get_cmap('gist_rainbow')
 
-        for i, (amodal_mask, vis_mask, amodal_topleft, vis_topleft, occ_mask, occ_top_left) in enumerate(zip(amodal_masks, vis_masks, amodal_toplefts, vis_toplefts, occ_masks, occ_toplefts)):
-            amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
-            vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
-            occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
+        if "data2" in self.data_type:
+            for i, (amodal_mask, vis_mask, amodal_topleft, vis_topleft, occ_mask, occ_top_left) in enumerate(zip(amodal_masks, vis_masks, amodal_toplefts, vis_toplefts, occ_masks, occ_toplefts)):
+                amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
+                vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
+                occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
+                if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
+                    amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+                if vis_topleft[0] != 0 and vis_topleft[1] != 0:
+                    vis = cv2.putText(vis, obj_names[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+                if occ_top_left[0] != 0 and occ_top_left[1] != 0:
+                    occ = cv2.putText(occ, obj_names[i], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+        elif "data3-1" in self.data_type and len(amodal_masks) > 0:
+            amodal_mask = amodal_masks[0]
+            vis_mask = vis_masks[0]
+            occ_mask = occ_masks[0]
+            amodal_topleft = amodal_toplefts[0]
+            vis_topleft = vis_toplefts[0]
+            occ_top_left = occ_toplefts[0]
+            amodal[amodal_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
+            vis[vis_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
+            occ[occ_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
+            amodal = np.uint8(amodal)[:, :, :3]
+            vis = np.uint8(vis)[:, :, :3]
+            occ = np.uint8(occ)[:, :, :3]
             if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
-                amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+                amodal = cv2.putText(amodal, obj_names[0], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
             if vis_topleft[0] != 0 and vis_topleft[1] != 0:
-                vis = cv2.putText(vis, obj_names[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+                vis = cv2.putText(vis, obj_names[0], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
             if occ_top_left[0] != 0 and occ_top_left[1] != 0:
-                occ = cv2.putText(occ, obj_names[i], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
+                occ = cv2.putText(occ, obj_names[0], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
 
         amodal = cv2.resize(amodal, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
         vis = cv2.resize(vis, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
@@ -309,7 +338,6 @@ class GTVisualizer():
         sub_path, scene_id = os.path.split(sub_path)
         sub_path, sub_dir_2 = os.path.split(sub_path)
         aihub_root, sub_dir_1 = os.path.split(sub_path)
-        print(sub_dir_1, sub_dir_2, scene_id, image_id, aihub_root)
         if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
             if os.path.basename(aihub_root) == "실제":
                 self.data_type = "data2_real"
@@ -317,9 +345,15 @@ class GTVisualizer():
                 self.data_type = "data2_syn"
             else:
                 print("폴더 구조를 확인하세요.")
+        elif sub_dir_1 in ["UR5", "Panda"]:
+            if os.path.basename(aihub_root) == "실제":
+                self.data_type = "data3-1_real"
+            elif os.path.basename(aihub_root) == "가상":
+                self.data_type = "data3-1_syn"
+            else:
+                print("폴더 구조를 확인하세요.")  
         else:
             print("잘못된 경로가 입력되었습니다: {}".format(file_path))
-            self.open_file()
             return
         
         self.sub_dir_1 = sub_dir_1
@@ -337,15 +371,20 @@ class GTVisualizer():
             self.min_scene_id = 0
             self.max_image_id = 999
             self.min_image_id = 0
-        print(self.scene_id, self.image_id)
+        elif self.data_type == "data3-1_real":
+            self.max_scene_id = 1000
+            self.min_scene_id = 1
+            self.max_image_id = 999
+            self.min_image_id = 1
+        elif self.data_type == "data3-1_syn":
+            self.max_scene_id = 100
+            self.min_scene_id = 1
+            self.max_image_id = 150
+            self.min_image_id = 0
+        
         self.init_cv2()
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
-
-
-
-        
-
 
 
 
@@ -355,7 +394,7 @@ if __name__ == "__main__":
     gt_visualizer.start_frame()
     gt_visualizer.open_file()
     while True:
-        cv2.imshow("GIST AILAB Data2 GT Visualizer", gt_visualizer.get_frame())
+        cv2.imshow("GIST AILAB Data GT Visualizer", gt_visualizer.get_frame())
         k = cv2.waitKey(1) & 0xFF
         if k == 27:
             break
