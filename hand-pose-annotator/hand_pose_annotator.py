@@ -1255,6 +1255,20 @@ def load_dataset_from_file(file_path):
 class Scene:
     
     class Frame:
+        
+        class SingleView:
+            def __init__(self, rgb, depth, pcd, label_dir, frame_id):
+                self.rgb = rgb
+                self.depth = depth
+                self.pcd = pcd
+                self.label_dir = label_dir
+                os.makedirs(self.label_dir, exist_ok=True)
+
+                self.frame_id = frame_id
+
+                self.hand_label = os.path.join(self.label_dir, "hands_{:06d}.npz".format(self.frame_id))
+                self.obj_label = os.path.join(self.label_dir, "objs_{:06d}.npz".format(self.frame_id))
+
         def __init__(self, scene_dir, frame_id, hands, objs, cams, load_pcd):
             self.scene_dir = scene_dir
             
@@ -1265,48 +1279,63 @@ class Scene:
             self.cameras = cams
             
             self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", "{:06d}.png".format(self.id)) 
-            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(self.id)) 
+            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(self.id))
             self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(self.id))
-            self.points = {}
+
+            self._load_pcd_fn = load_pcd
+
+            self.single_views = {}
             for cam_name, cam in cams.items():
-                self.points[cam_name] = load_pcd(self.pcd_format.format(cam.folder))
-            self.scene_pcd = o3d.geometry.PointCloud()
-            for pcd in self.points.values():
-                self.scene_pcd += pcd
-            
-        def get_rgb(self, cam_name):
+                label_dir = os.path.join(self.scene_dir, cam.folder, 'labels')
+                self.single_views[cam_name] = self.SingleView(rgb=self._load_rgb(cam_name),
+                                                              depth=self._load_depth(cam_name),
+                                                              pcd=self._load_pcd(cam_name),
+                                                              label_dir=label_dir,
+                                                              frame_id=self.id)
+            self.scene_pcd = self.get_pcd(list(self.cameras.keys()))
+            self.active_cam = 'merge' # merge
+
+        def _load_rgb(self, cam_name):
             folder = self.cameras[cam_name].folder
             rgb_path = self.rgb_format.format(folder)
-            rgb_img = cv2.imread(rgb_path)
-            
-            return rgb_img
-        
-        def get_depth(self, cam_name):
+            return cv2.imread(rgb_path)
+        def _load_depth(self, cam_name):
             folder = self.cameras[cam_name].folder
             depth_path = self.depth_format.format(folder)
             depth_img = cv2.imread(depth_path, -1)
             depth_img = np.float32(depth_img) # mm
             return depth_img
+        def _load_pcd(self, cam_name):
+            folder = self.cameras[cam_name].folder
+            pcd_path = self.pcd_format.format(folder)
+            return self._load_pcd_fn(pcd_path)
+        
+        def get_rgb(self, cam_name):
+            return self.single_views[cam_name].rgb
+        
+        def get_depth(self, cam_name):
+            return self.single_views[cam_name].depth
             
         def get_pcd(self, cam_list):
             """get target points by cam list
-
             Args:
                 cam_list (list): list of cam_name
-
             Returns:
                 pcd
             """
             pcd = o3d.geometry.PointCloud()
-            points = []
-            colors = []
             for cam_name in cam_list:
-                points.append(np.asarray(self.points[cam_name].points))
-                colors.append(np.asarray(self.points[cam_name].colors))
-            pcd.points = o3d.utility.Vector3dVector(np.concatenate(points, axis=0))
-            pcd.colors = o3d.utility.Vector3dVector(np.concatenate(colors, axis=0))
+                pcd += self.single_views[cam_name].pcd
             return pcd
-            
+
+        @property
+        def hand_label_npz(self):
+            return self.single_views[self.active_cam].hand_label
+        @property
+        def obj_label_npz(self):
+            return self.single_views[self.active_cam].obj_label
+        
+
     def __init__(self, scene_dir, hands, objects, cameras, frame_list, current_frame, load_pcd):
         self._scene_dir = scene_dir
         self._label_dir = os.path.join(scene_dir, 'labels')
@@ -1375,6 +1404,8 @@ class Scene:
         for obj_id, obj in self._objects.items():
             obj_label[str(obj_id)] = obj.transform
         np.savez(self._obj_label_path, **obj_label)
+        if self.current_frame.active_cam!="merge":
+            np.savez(self.current_frame.obj_label_npz, **obj_label)
         self._obj_label = obj_label
         # get current hand label
         label = {}
@@ -1383,8 +1414,10 @@ class Scene:
             for k, v in h_state.items():
                 label['{}_{}'.format(side, k)] = v
         np.savez(self._hand_label_path, **label)
-        self._label = label
+        if self.current_frame.active_cam!="merge":
+            np.savez(self.current_frame.hand_label_npz, **obj_label)
 
+        self._label = label
 
     def load_label(self):
         # object label
@@ -1465,6 +1498,28 @@ class Scene:
                 hand_model.reset()
             return False
     
+    def _load_hand_label(self, npz_file):
+        try:
+            label = dict(np.load(npz_file))
+            hand_states = {}
+            for k, v in label.items():
+                side = k.split('_')[0]
+                hand_states.setdefault(side, {})
+                param = k.replace(side + "_", "")
+                hand_states[side][param] = v
+            for side, state in hand_states.items():
+                self._hands[side].set_state(state)
+            return True
+        except:
+            return False
+    def _load_obj_label(self, npz_file):
+        try:
+            obj_label = dict(np.load(npz_file))
+            for obj_id, label in obj_label.items():
+                self._objects[int(obj_id)].load_label(label)
+            return True
+        except:
+            return False
     def load_previous_label(self):
         if (self._previous_label is None) or (self._obj_previous_label is None):
             return False
@@ -2104,7 +2159,7 @@ class AppWindow:
             self._show_objects.checked = not show
             return
         self.settings.show_pcd = show
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _on_show_coord_frame(self, show):
         self.logger.debug('_on_show_coord_frame')
         self.settings.show_coord_frame = show
@@ -2237,7 +2292,7 @@ class AppWindow:
                 self._on_error("손이 없습니다.")
                 self._down_sample_pcd.checked = False
                 return
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     # labeling stage edit
     def _init_stageedit_layout(self):
         self.logger.debug('_init_stageedit_layout')
@@ -2425,7 +2480,7 @@ class AppWindow:
         self._update_valid_error()
         self._update_joint_mask()
         if self._down_sample_pcd.checked:
-            self._init_pcd_layer()
+            self._update_pcd_layer()
 
     # convert finger
     def _convert_to_root(self):
@@ -2542,9 +2597,10 @@ class AppWindow:
             for s, hand_model in hands.items():
                 hand_model.set_root_position(pcd.get_center())
         self._update_progress_str()
-        self._on_change_camera_merge()
+        self._init_pcd_layer()
         self._init_obj_layer()
         self._init_hand_layer()
+        self._on_change_camera_merge()
         self._update_valid_error()
     def _update_progress_str(self):
         self.logger.debug('_update_progress_str')
@@ -2795,6 +2851,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 0
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_1(self):
@@ -2802,6 +2859,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 1
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_2(self):
@@ -2809,6 +2867,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 2
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_3(self):
@@ -2816,6 +2875,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 3
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_4(self):
@@ -2823,6 +2883,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 4
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_5(self):
@@ -2830,6 +2891,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 5
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_6(self):
@@ -2837,6 +2899,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 6
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_7(self):
@@ -2844,6 +2907,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 7
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_merge(self):
@@ -2851,22 +2915,32 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = -1
+        self._frame.active_cam="merge"
         for but, _, _, bbox in self._view_error_layout_list:
             bbox.checked = True
+        self._update_pcd_layer()
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _on_change_camera(self):
         self.logger.debug('_on_change_camera')
+        self._convert_label()
         self._reset_image_viewer()
         self._update_image_viewer()
         self._update_diff_viewer()
-        self._init_pcd_layer()
         self._on_active_camera_viewpoint()
+    def _convert_label(self):
+        if self._frame.active_cam=="merge":
+            pass
+        else:
+            self.annotation_scene._load_hand_label(self._frame.hand_label_npz)
+            self.annotation_scene._load_obj_label(self._frame.obj_label_npz)
+            self._update_hand_layer()
+            self._update_object_layer()
     def _on_change_bbox(self, visible):
         self.logger.debug('_on_change_bbox')
         if not self._check_annotation_scene():
             return
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _get_activate_cam(self):
         self.logger.debug('_get_activate_cam')
         cam_list = []
@@ -2905,7 +2979,7 @@ class AppWindow:
                 bbox.checked = True
             else:
                 bbox.checked = False
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _on_icp(self):
         self.logger.debug('_on_icp')
         if not self._check_annotation_scene():
@@ -3365,12 +3439,20 @@ class AppWindow:
     def _init_pcd_layer(self):
         self.logger.debug('_init_pcd_layer')
         if self.settings.show_pcd:
+            self._pcd = self._frame.scene_pcd
+            self.bounds = self._pcd.get_axis_aligned_bounding_box()
+            self._add_geometry(self._scene_name, self._pcd, self.settings.scene_material)
+        else:
+            self._remove_geometry(self._scene_name)
+    def _update_pcd_layer(self):
+        self.logger.debug('_update_pcd_layer')
+        if self.settings.show_pcd:
             cam_name_list = []
             for cam_name in self._get_activate_cam():
                 cam_name_list.append(cam_name)
             if cam_name_list == []:
                 self._remove_geometry(self._scene_name)
-                return    
+                return
             self._pcd = self._frame.get_pcd(cam_name_list)
             self.bounds = self._pcd.get_axis_aligned_bounding_box()
             if self._down_sample_pcd.checked:
@@ -3843,7 +3925,7 @@ class AppWindow:
                     self._update_diff_viewer()
         
         if self._down_sample_pcd.checked and self._move_root:
-            self._init_pcd_layer()
+            self._update_pcd_layer()
             self._move_root = False
 
         self._init_view_control()
