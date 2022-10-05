@@ -80,11 +80,11 @@ class GTVisualizer():
                 return file_name
 
     def init_cv2(self):
-        cv2.namedWindow('GIST AILAB Data2 GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data2 GT Visualizer', 0, 1000, self.on_image_id)
-        cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.namedWindow('GIST AILAB Data GT Visualizer')
+        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_image_id)
+        cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
 
     def on_scene_id(self, val):
         if val < self.min_scene_id:
@@ -96,7 +96,7 @@ class GTVisualizer():
         self.scene_path = os.path.join(self.aihub_root, self.sub_dir_1, self.sub_dir_2, "{0:06d}".format(self.scene_id))
         self.on_image_id(self.image_id)
         self.is_img_load = False
-        cv2.setTrackbarPos('scene_id','GIST AILAB Data2 GT Visualizer', self.scene_id)
+        cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
 
     def on_image_id(self, val):
         if val < self.min_image_id:
@@ -104,7 +104,7 @@ class GTVisualizer():
         elif val > self.max_image_id:
             val = self.max_image_id
         self.image_id = val
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
         file_name = self.get_filename_from_image_id()
         if file_name is None:
             return
@@ -114,7 +114,7 @@ class GTVisualizer():
             self.depth_path = self.depth_path.replace(".jpg", ".png")
         self.gt_path = os.path.join(self.scene_path, "gt", file_name.split(".")[0] + ".json")
         self.is_img_load = False
-        cv2.setTrackbarPos('image_id','GIST AILAB Data2 GT Visualizer', self.image_id)
+        cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
 
     def on_key(self, key):
 
@@ -338,7 +338,6 @@ class GTVisualizer():
         sub_path, scene_id = os.path.split(sub_path)
         sub_path, sub_dir_2 = os.path.split(sub_path)
         aihub_root, sub_dir_1 = os.path.split(sub_path)
-        print(sub_dir_1, sub_dir_2, scene_id, image_id, aihub_root)
         if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
             if os.path.basename(aihub_root) == "실제":
                 self.data_type = "data2_real"
@@ -355,7 +354,6 @@ class GTVisualizer():
                 print("폴더 구조를 확인하세요.")  
         else:
             print("잘못된 경로가 입력되었습니다: {}".format(file_path))
-            self.open_file()
             return
         
         self.sub_dir_1 = sub_dir_1
@@ -384,15 +382,9 @@ class GTVisualizer():
             self.max_image_id = 150
             self.min_image_id = 0
         
-        print(self.scene_id, self.image_id)
         self.init_cv2()
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
-
-
-
-        
-
 
 
 
@@ -402,7 +394,7 @@ if __name__ == "__main__":
     gt_visualizer.start_frame()
     gt_visualizer.open_file()
     while True:
-        cv2.imshow("GIST AILAB Data2 GT Visualizer", gt_visualizer.get_frame())
+        cv2.imshow("GIST AILAB Data GT Visualizer", gt_visualizer.get_frame())
         k = cv2.waitKey(1) & 0xFF
         if k == 27:
             break
