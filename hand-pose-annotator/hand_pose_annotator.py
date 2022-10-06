@@ -820,27 +820,39 @@ class SceneObject:
     def __init__(self, obj_id, model_path):
         self.id = obj_id
         self.model_path = model_path
-        self.transform = np.eye(4)
+        self.obj_geo = self._load_point_cloud()
+        self.rot = np.eye(3) # related to world
+        self.pos = np.ones(3) # related to world
     
     def reset(self):
-        self.transform = np.eye(4)
-        # self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
-        self.obj_geo = o3d.io.read_point_cloud(self.model_path)
-        self.obj_geo.scale(0.001, [0, 0, 0])
-        self.obj_geo.transform(self.transform)
+        R = self.H[:3, :3]
+        T = self.H[:3, 3]
+        
+        R_inv = np.linalg.inv(R)
+        T_inv = -T
+        
+        H_inv = np.eye(4)
+        
+        
+        
+    def _load_point_cloud(self):
+        pcd = o3d.io.read_point_cloud(self.model_path)
+        pcd.scale(0.001, [0, 0, 0])
+        return pcd
     
     def load_label(self, label):
-        self.transform = label
-        # self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
-        self.obj_geo = o3d.io.read_point_cloud(self.model_path)
-        self.obj_geo.scale(0.001, [0, 0, 0])
+        self.reset()
+        
         self.obj_geo.transform(self.transform)
+
+
         
     def get_geometry(self):
         return self.obj_geo
+    
     def get_transform(self):
         return self.transform
-    def set_transform(self, H):
+    def transform(self, H):
         self.obj_geo.transform(H)
         self.transform = np.matmul(H, self.transform)
 
@@ -3285,7 +3297,7 @@ class AppWindow:
         for label in self.hand_coord_labels:
             self._scene.remove_3d_label(label)
         self.hand_coord_labels = []
-    def _add_obj_frame(self, size=0.05, origin=[0, 0, 0]):
+    def _add_obj_frame(self, size=0.1, origin=[0, 0, 0]):
         if not self._check_annotation_scene():
             return
         self._remove_obj_frame()
