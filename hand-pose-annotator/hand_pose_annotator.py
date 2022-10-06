@@ -28,6 +28,8 @@ import shutil
 import copy
 from scipy.spatial.transform import Rotation as Rot
 
+import psutil
+
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
@@ -125,17 +127,37 @@ class Logger:
 
         self.logger.setLevel(logging.DEBUG)
 
+        self.last_msg = "="*50
         self.logger.info("="*50)
         self.logger.info("Start Logging")
+        
+        self.last_check_memory = time.time()
+        self.check_memory_inteval = 30
 
     def handle_exit(self):
         self.logger.info("End Logging")
         self.logger.info("="*50)
 
     def info(self, msg):
+        if self.last_msg == msg:
+            return
+        self.last_msg = msg
         self.logger.info(msg)
     def debug(self, msg):
+        if self.last_msg == msg:
+            return
+        self.last_msg = msg
         self.logger.debug(msg)
+    
+    def memory_usage(self):
+        if (time.time()-self.last_check_memory) < self.check_memory_inteval:
+            return
+        self.last_check_memory = time.time()
+        p = psutil.Process()
+        rss = p.memory_info().rss / 2 ** 20 # Bytes to MB
+        msg = f"memory usage: {rss: 10.5f} MB"
+        self.logger.info(msg)
+        
 
 class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
@@ -1917,7 +1939,6 @@ class AppWindow:
         if self.bounds is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
-        self.logger.info("_on_initial_viewpoint")
         self._log.text = "\t 처음 시점으로 이동합니다."
         self.window.set_needs_layout()
         self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
@@ -1930,7 +1951,6 @@ class AppWindow:
         if self.bounds is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
-        self.logger.info("_on_active_viewpoint")
         self._log.text = "\t 조작중인 객체 시점으로 이동합니다."
         self.window.set_needs_layout()
         center = np.array([0, 0, 0])
@@ -1944,7 +1964,6 @@ class AppWindow:
         self._scene.look_at(eye_on, center, up)
         self._init_view_control()
     def _on_active_camera_viewpoint(self):
-        self.logger.debug('_on_active_camera_viewpoint')
         if self._camera_idx==-1:
             self._on_initial_viewpoint()
             return
@@ -1993,6 +2012,8 @@ class AppWindow:
         filedlg.add_filter(".pcd", "포인트 클라우드")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
+        if os.environ.get("USERNAME")=='ailab':
+            filedlg.set_path('/home/ailab/catkin_ws/src/gail-camera-manager/data/data4-source')
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2326,7 +2347,7 @@ class AppWindow:
         self.logger.debug('_on_object_mode')
         self._convert_mode(LabelingMode.OBJECT)
     def _convert_mode(self, labeling_mode):
-        self.logger.debug('_convert_mode')
+        self.logger.debug('_convert_mode_{}'.format(labeling_mode))
         if not self._check_annotation_scene():
             return
         self._labeling_mode = labeling_mode
@@ -2760,7 +2781,6 @@ class AppWindow:
         self._validation_panel.add_child(joint_mask_layout)
 
     def _update_joint_mask(self):
-        self.logger.debug('_update_joint_mask')
         img = self._active_hand.get_joint_mask()
         # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = o3d.geometry.Image(img)
@@ -2922,7 +2942,6 @@ class AppWindow:
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _on_change_camera(self):
-        self.logger.debug('_on_change_camera')
         self._convert_label()
         self._reset_image_viewer()
         self._update_image_viewer()
@@ -3220,65 +3239,51 @@ class AppWindow:
     #region ----- Open3DScene 
     #----- geometry
     def _check_geometry(self, name):
-        self.logger.debug('_check_geometry')
         return self._scene.scene.has_geometry(name)
     
     def _remove_geometry(self, name):
-        self.logger.debug('_remove_geometry')
         if self._check_geometry(name):
             self._scene.scene.remove_geometry(name)
     
     def _add_geometry(self, name, geo, mat):
-        self.logger.debug('_add_geometry')
         if self._check_geometry(name):
             self._remove_geometry(name)
         self._scene.scene.add_geometry(name, geo, mat,
                                        add_downsampled_copy_for_fast_rendering=True)
     
     def _clear_geometry(self):
-        self.logger.debug('_clear_geometry')
         self._scene.scene.clear_geometry()
 
     def _set_geometry_transform(self, name, transform):
-        self.logger.debug('_set_geometry_transform')
         self._scene.scene.set_geometry_transform(name, transform)
     
     def _get_geometry_transform(self, name):
-        self.logger.debug('_get_geometry_transform')
         return self._scene.scene.get_geometry_transform(name)
  
     #----- 
     def _set_background_color(self, color):
-        self.logger.debug('_set_background_color')
         self._scene.scene.set_background(color)
     
     def _set_geometry_visible(self, name, is_visible):
-        self.logger.debug('_set_geometry_visible')
         self._scene.scene.show_geometry(name, is_visible)
     
     def _check_geometry_visible(self, name):
-        self.logger.debug('_check_geometry_visible')
         return self._scene.scene.geometry_is_visible(name)
     
     def _set_axes_visible(self, is_visible):
-        self.logger.debug('_set_axes_visible')
         self._scene.scene.show_axes(is_visible)
     
     def _set_ground_plane_visible(self, is_visible):
-        self.logger.debug('_set_ground_plane_visible')
         self._scene.scene.show_ground_plane(is_visible)
     
     def _set_skybox_visible(self, is_visible):
-        self.logger.debug('_set_skybox_visible')
         self._scene.scene.show_skybox(is_visible)
         
     def _set_geometry_material(self, name, mat):
-        self.logger.debug('_set_geometry_material')
         self._scene.scene.modify_geometry_material(name, mat)
     
     #endregion
     def _add_hand_frame(self, size=0.05, origin=[0, 0, 0]):
-        self.logger.debug('_add_hand_frame')
         if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
         self._remove_hand_frame()
@@ -3296,13 +3301,11 @@ class AppWindow:
         self.hand_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
         self._add_geometry("hand_frame", coord_frame, self.settings.coord_material)
     def _remove_hand_frame(self):
-        self.logger.debug('_remove_hand_frame')
         self._remove_geometry("hand_frame")
         for label in self.hand_coord_labels:
             self._scene.remove_3d_label(label)
         self.hand_coord_labels = []
     def _add_obj_frame(self, size=0.05, origin=[0, 0, 0]):
-        self.logger.debug('_add_obj_frame')
         if not self._check_annotation_scene():
             return
         self._remove_obj_frame()
@@ -3318,7 +3321,6 @@ class AppWindow:
         self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
         self._add_geometry("obj_frame", coord_frame, self.settings.coord_material)
     def _remove_obj_frame(self):
-        self.logger.debug('_remove_obj_frame')
         self._remove_geometry("obj_frame")
         for label in self.obj_coord_labels:
             self._scene.remove_3d_label(label)
@@ -3361,9 +3363,22 @@ class AppWindow:
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             return gui.Widget.EventCallbackResult.CONSUMED
         
+        if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                gui.KeyModifier.SHIFT) and event.is_button_down(gui.MouseButton.RIGHT):
+            ctrl_idx = self._active_hand.control_idx + 1
+            self._active_hand.set_control_joint(ctrl_idx)
+            self._update_target_hand()
+            self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+        if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                gui.KeyModifier.CTRL) and event.is_button_down(gui.MouseButton.RIGHT):
+            ctrl_idx = self._active_hand.control_idx - 1
+            self._active_hand.set_control_joint(ctrl_idx)
+            self._update_target_hand()
+            self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+        
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
-        self.logger.debug('move')
+        self.logger.debug('move_{}'.format(self._active_type))
         if self._active_type=='hand':
 
             self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
@@ -3412,7 +3427,6 @@ class AppWindow:
             self._update_object_layer()
     # move hand
     def _move_hand_translation(self, xyz):
-        self.logger.debug('_move_hand_translation')
         self._active_hand.set_control_position(xyz)
         if self._active_hand.get_optimize_target()=='root':
             self._active_hand.save_undo(forced=True)
@@ -3422,7 +3436,6 @@ class AppWindow:
             self._guide_changed = True
         self._update_hand_layer()
     def _move_hand_rotation(self, xyz):
-        self.logger.debug('_move_hand_rotation')
         self._active_hand.set_control_rotation(xyz)
         self._active_hand.save_undo()
         self._annotation_changed = True
@@ -3491,12 +3504,10 @@ class AppWindow:
                 self._add_geometry(obj_name, geo, self.settings.obj_material)
                 self._object_names.append(obj_name)
     def _toggle_obj_visible(self):
-        self.logger.debug('_toggle_obj_visible')
         show = self._show_objects.checked
         self._show_objects.checked = not show
         self._on_show_object(not show)
     def _update_object_layer(self):
-        self.logger.debug('_update_object_layer')
         if self.settings.show_objects:
             for obj_id, obj in self._objects.items():
                 obj_name = "obj_{}".format(obj_id)
@@ -3563,7 +3574,6 @@ class AppWindow:
             self._update_target_hand()
             self._update_joint_mask()
     def _update_target_hand(self):
-        self.logger.debug('_update_target_hand')
         if self._labeling_mode==LabelingMode.OPTIMIZE:
             target_geo = self._active_hand.get_target_geometry()
             self._add_geometry(self._target_joint_name, 
@@ -3588,7 +3598,6 @@ class AppWindow:
                             active_geo['control'], self.settings.control_target_joint_material)
             self.control_joint_geo = active_geo['control']
     def _update_activate_hand(self):
-        self.logger.debug('_update_activate_hand')
         if self.settings.show_hand:
             hand_geo = self._active_hand.get_geometry()
             side = self._active_hand.side
@@ -3659,13 +3668,13 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.IGNORED
 
         # mode change
-        if event.key == gui.KeyName.F1:
+        if event.key == gui.KeyName.F1 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.STATIC)
             return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F2:
+        elif event.key == gui.KeyName.F2 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.OPTIMIZE)
             return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F3:
+        elif event.key == gui.KeyName.F3 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.OBJECT)
             return gui.Widget.EventCallbackResult.CONSUMED
 
@@ -3830,7 +3839,7 @@ class AppWindow:
                 self._active_hand.set_optimize_target('little')
             else:
                 is_converted_finger = False
-
+            
             is_convert_joint = True
             if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
                 ctrl_idx = self._active_hand.control_idx + 1
@@ -3840,8 +3849,9 @@ class AppWindow:
                 self._active_hand.set_control_joint(ctrl_idx)
             else:
                 is_convert_joint = False
-
+            
             if is_converted_finger or is_convert_joint:
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
                 self._update_target_hand()
                 self._update_joint_mask()
                 return gui.Widget.EventCallbackResult.CONSUMED
@@ -3915,6 +3925,7 @@ class AppWindow:
         
         if self._auto_save.checked and self.annotation_scene is not None:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value and self._annotation_changed:
+                self.logger.debug('auto saving')
                 self._annotation_changed = False
                 self.annotation_scene.save_label()
                 self._last_saved = time.time()
@@ -3927,7 +3938,7 @@ class AppWindow:
         if self._down_sample_pcd.checked and self._move_root:
             self._update_pcd_layer()
             self._move_root = False
-
+        self.logger.memory_usage()
         self._init_view_control()
 
 def main(logger):
