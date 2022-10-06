@@ -2920,7 +2920,6 @@ class AppWindow:
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _on_change_camera(self):
-        self._convert_label()
         self._reset_image_viewer()
         self._update_image_viewer()
         self._update_diff_viewer()
