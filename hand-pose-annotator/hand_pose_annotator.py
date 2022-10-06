@@ -1277,19 +1277,12 @@ def load_dataset_from_file(file_path):
 class Scene:
     
     class Frame:
-        
         class SingleView:
-            def __init__(self, rgb, depth, pcd, label_dir, frame_id):
+            def __init__(self, rgb, depth, pcd, frame_id):
                 self.rgb = rgb
                 self.depth = depth
                 self.pcd = pcd
-                self.label_dir = label_dir
-                os.makedirs(self.label_dir, exist_ok=True)
-
                 self.frame_id = frame_id
-
-                self.hand_label = os.path.join(self.label_dir, "hands_{:06d}.npz".format(self.frame_id))
-                self.obj_label = os.path.join(self.label_dir, "objs_{:06d}.npz".format(self.frame_id))
 
         def __init__(self, scene_dir, frame_id, hands, objs, cams, load_pcd):
             self.scene_dir = scene_dir
@@ -1308,11 +1301,9 @@ class Scene:
 
             self.single_views = {}
             for cam_name, cam in cams.items():
-                label_dir = os.path.join(self.scene_dir, cam.folder, 'labels')
                 self.single_views[cam_name] = self.SingleView(rgb=self._load_rgb(cam_name),
                                                               depth=self._load_depth(cam_name),
                                                               pcd=self._load_pcd(cam_name),
-                                                              label_dir=label_dir,
                                                               frame_id=self.id)
             self.scene_pcd = self.get_pcd(list(self.cameras.keys()))
             self.active_cam = 'merge' # merge
@@ -1349,14 +1340,6 @@ class Scene:
             for cam_name in cam_list:
                 pcd += self.single_views[cam_name].pcd
             return pcd
-
-        @property
-        def hand_label_npz(self):
-            return self.single_views[self.active_cam].hand_label
-        @property
-        def obj_label_npz(self):
-            return self.single_views[self.active_cam].obj_label
-        
 
     def __init__(self, scene_dir, hands, objects, cameras, frame_list, current_frame, load_pcd):
         self._scene_dir = scene_dir
@@ -1418,7 +1401,7 @@ class Scene:
             self.frame_id = self._frame_list[frame_idx]
             return True
     def get_progress(self):
-        return "현재 진행률: {} [{}/{}]".format(self.frame_id, self._frame_idx+1, self.total_frame+1)
+        return "현재 진행률: {} [{}/{}]".format(self.frame_id, self._frame_idx+1, self.total_frame)
     
     def save_label(self):
         # object label
@@ -1426,8 +1409,6 @@ class Scene:
         for obj_id, obj in self._objects.items():
             obj_label[str(obj_id)] = obj.transform
         np.savez(self._obj_label_path, **obj_label)
-        if self.current_frame.active_cam!="merge":
-            np.savez(self.current_frame.obj_label_npz, **obj_label)
         self._obj_label = obj_label
         # get current hand label
         label = {}
@@ -1436,9 +1417,6 @@ class Scene:
             for k, v in h_state.items():
                 label['{}_{}'.format(side, k)] = v
         np.savez(self._hand_label_path, **label)
-        if self.current_frame.active_cam!="merge":
-            np.savez(self.current_frame.hand_label_npz, **obj_label)
-
         self._label = label
 
     def load_label(self):
@@ -2947,14 +2925,6 @@ class AppWindow:
         self._update_image_viewer()
         self._update_diff_viewer()
         self._on_active_camera_viewpoint()
-    def _convert_label(self):
-        if self._frame.active_cam=="merge":
-            pass
-        else:
-            self.annotation_scene._load_hand_label(self._frame.hand_label_npz)
-            self.annotation_scene._load_obj_label(self._frame.obj_label_npz)
-            self._update_hand_layer()
-            self._update_object_layer()
     def _on_change_bbox(self, visible):
         self.logger.debug('_on_change_bbox')
         if not self._check_annotation_scene():
@@ -3084,7 +3054,8 @@ class AppWindow:
                 rgb_rendered = np.array(rgb_rendered)
                 # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rgb_rendered.png'), rgb_rendered)
 
-                
+                # object mask
+                object_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]<2, rgb_rendered[:, :, 2]<2))
 
                 # only hand mask
                 right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]>10, rgb_rendered[:, :, 2]>2))
@@ -3108,15 +3079,17 @@ class AppWindow:
                 diff_vis = np.zeros_like(rgb_captured)
                 diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
                 diff_vis[left_hand_mask] = [0, 255, 0] # BGR
+                diff_vis[object_mask] = [0, 180, 180]
 
                 hand_mask = np.bitwise_or(right_hand_mask, left_hand_mask)
+                hand_object_mask = np.bitwise_or(object_mask, hand_mask)
 
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
                 depth_diff_abs = np.abs(np.copy(depth_diff))
                 inlier_mask = depth_diff_abs < 50
 
-                high_error_mask = np.bitwise_and(hand_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
+                high_error_mask = np.bitwise_and(hand_object_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
                 diff_vis[high_error_mask] = [0, 0, 255]
 
                 # right_hand
@@ -3148,6 +3121,8 @@ class AppWindow:
         count = [0, 0]
         max_v = [-np.inf, -np.inf]
         max_idx = [None, None]
+        min_v = [np.inf, np.inf]
+        min_idx = [None, None]
         for idx, diff in enumerate(self._depth_diff_list):
             for s_idx, dif in enumerate(diff):
                 if dif==-1:
@@ -3155,16 +3130,22 @@ class AppWindow:
                 if dif > max_v[s_idx]:
                     max_v[s_idx] = dif
                     max_idx[s_idx] = idx
+                if dif < min_v[s_idx]:
+                    min_v[s_idx] = dif
+                    min_idx[s_idx] = idx
                 total_mean[s_idx] += dif
                 count[s_idx] += 1
         if self._active_hand.side=='right':
-            max_idx = max_idx[0]
+            target_idx = 0 
         else:
-            max_idx = max_idx[1]
+            target_idx = 1
         for idx, error_layout in enumerate(self._view_error_layout_list):
-            if idx==max_idx:
-                error_layout[1].text_color = gui.Color(1, 0, 0)
-                error_layout[2].text_color = gui.Color(1, 0, 0)
+            if idx==max_idx[target_idx]:
+                error_layout[target_idx+1].text_color = gui.Color(1, 0, 0)
+                error_layout[2-target_idx].text_color = gui.Color(1, 1, 1)
+            elif idx==min_idx[target_idx]:
+                error_layout[target_idx+1].text_color = gui.Color(0, 1, 0)
+                error_layout[2-target_idx].text_color = gui.Color(1, 1, 1)
             else:
                 error_layout[1].text_color = gui.Color(1, 1, 1)
                 error_layout[2].text_color = gui.Color(1, 1, 1)
@@ -3874,7 +3855,7 @@ class AppWindow:
         # Translation
         if event.type!=gui.KeyEvent.UP:
             if not self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root'):
+                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
                 if event.key == gui.KeyName.D:
                     self.move( self.dist, 0, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.A:
@@ -3889,7 +3870,7 @@ class AppWindow:
                     self.move( 0, 0, self.dist, 0, 0, 0)
             # Rot - keystrokes are not in same order as translation to make movement more human intuitive
             elif self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
+                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
                 if event.key == gui.KeyName.E:
                     self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
                 elif event.key == gui.KeyName.Q:
