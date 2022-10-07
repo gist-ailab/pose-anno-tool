@@ -821,40 +821,30 @@ class SceneObject:
         self.id = obj_id
         self.model_path = model_path
         self.obj_geo = self._load_point_cloud()
-        self.rot = np.eye(3) # related to world
-        self.pos = np.ones(3) # related to world
-    
+        self.H = np.eye(4)
+
     def reset(self):
-        R = self.H[:3, :3]
-        T = self.H[:3, 3]
-        
-        R_inv = np.linalg.inv(R)
-        T_inv = -T
-        
-        H_inv = np.eye(4)
-        
-        
-        
+        self.obj_geo.clear()
+        self.obj_geo = self._load_point_cloud()
+        self.H = np.eye(4)
+
     def _load_point_cloud(self):
         pcd = o3d.io.read_point_cloud(self.model_path)
         pcd.scale(0.001, [0, 0, 0])
+        pcd.translate(-pcd.get_center())
         return pcd
     
-    def load_label(self, label):
+    def set_transform(self, H):
         self.reset()
-        
-        self.obj_geo.transform(self.transform)
-
-
+        self.transform(H)
+    def get_transform(self):
+        return self.H
+    def transform(self, H):
+        self.obj_geo.transform(H)
+        self.H = np.matmul(H, self.H)
         
     def get_geometry(self):
         return self.obj_geo
-    
-    def get_transform(self):
-        return self.transform
-    def transform(self, H):
-        self.obj_geo.transform(H)
-        self.transform = np.matmul(H, self.transform)
 
 class Dataset:
     def __init__(self):
@@ -1419,7 +1409,7 @@ class Scene:
         # object label
         obj_label = {}
         for obj_id, obj in self._objects.items():
-            obj_label[str(obj_id)] = obj.transform
+            obj_label[str(obj_id)] = obj.get_transform()
         np.savez(self._obj_label_path, **obj_label)
         self._obj_label = obj_label
         # get current hand label
@@ -1439,12 +1429,12 @@ class Scene:
             self._obj_label = dict(np.load(self._obj_label_path))
             
             for obj_id, label in self._obj_label.items():
-                self._objects[int(obj_id)].load_label(label)
+                self._objects[int(obj_id)].set_transform(label)
         except:
             print("Fail to load object Label -> Load previous Label")
             try:
                 for obj_id, label in self._obj_previous_label.items():
-                    self._objects[int(obj_id)].load_label(label)
+                    self._objects[int(obj_id)].set_transform(label)
             except:
                 print("Fail to load previous Label -> Reset Label")
                 for obj in self._objects.values():
@@ -1828,7 +1818,6 @@ class AppWindow:
         
         # 3D Annotation tool options
         w.add_child(self._scene)
-        
         w.add_child(self._settings_panel)
         w.add_child(self._log_panel)
         w.add_child(self._images_panel)
@@ -1948,7 +1937,7 @@ class AppWindow:
         if self._active_type=='hand':
             eye_on = self._active_hand.get_control_position()
         else:
-            eye_on = self._active_object.transform[:3, 3]
+            eye_on = self._active_object.get_transform()[:3, 3]
         center = eye_on - 0.4* eye_on/np.linalg.norm(eye_on)
         up = np.array([0, -1, 0])
         self._scene.look_at(eye_on, center, up)
@@ -3302,15 +3291,16 @@ class AppWindow:
             return
         self._remove_obj_frame()
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
-        transform = self._active_object.transform
+        
+        transform = np.eye(4)
+        transform[:3, 3] = self._active_object.get_transform()[:3, 3]
         coord_frame.transform(transform)
 
         self.obj_coord_labels = []
         size = size * 0.8
-        transform[:3, :3] = np.eye(3)
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([size, 0, 0, 1]))[:3], "W, S"))
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, size, 0, 1]))[:3], "A, D"))
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([size, 0, 0]), "W, S"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([0, size, 0]), "A, D"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([0, 0, size]), "Q, E"))
         self._add_geometry("obj_frame", coord_frame, self.settings.coord_material)
     def _remove_obj_frame(self):
         self._remove_geometry("obj_frame")
@@ -3355,19 +3345,22 @@ class AppWindow:
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             return gui.Widget.EventCallbackResult.CONSUMED
         
-        if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
-                gui.KeyModifier.SHIFT) and event.is_button_down(gui.MouseButton.RIGHT):
-            ctrl_idx = self._active_hand.control_idx + 1
-            self._active_hand.set_control_joint(ctrl_idx)
-            self._update_target_hand()
-            self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
-        if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
-                gui.KeyModifier.CTRL) and event.is_button_down(gui.MouseButton.RIGHT):
-            ctrl_idx = self._active_hand.control_idx - 1
-            self._active_hand.set_control_joint(ctrl_idx)
-            self._update_target_hand()
-            self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
-        
+        if not self._labeling_mode==LabelingMode.OBJECT:
+            if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                    gui.KeyModifier.SHIFT) and event.is_button_down(gui.MouseButton.RIGHT):
+                ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+                self._update_target_hand()
+                self._update_joint_mask()
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+            if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                    gui.KeyModifier.CTRL) and event.is_button_down(gui.MouseButton.RIGHT):
+                ctrl_idx = self._active_hand.control_idx - 1
+                self._active_hand.set_control_joint(ctrl_idx)
+                self._update_target_hand()
+                self._update_joint_mask()
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+            
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
         self.logger.debug('move_{}'.format(self._active_type))
@@ -3393,7 +3386,6 @@ class AppWindow:
                 r = Rot.from_matrix(np.matmul(current_rot_mat, rot_mat))
                 xyz = r.as_rotvec()
 
-
                 self._move_hand_rotation(xyz)
         else:
             self._log.text = "물체 라벨 이동 중입니다."
@@ -3409,12 +3401,12 @@ class AppWindow:
                 
             else: # rotation
                 center = self._active_object.obj_geo.get_center()
-                rot_mat_obj_center = self._active_object.obj_geo.get_rotation_matrix_from_xyz((rx, ry, rz))
+                rot_mat_obj_center = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
                 T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
                 R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
                 T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
                 h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
-            self._active_object.set_transform(h_transform)
+            self._active_object.transform(h_transform)
             self._annotation_changed = True
             self._update_object_layer()
     # move hand
@@ -3433,11 +3425,10 @@ class AppWindow:
         self._annotation_changed = True
         self._update_hand_layer()
     def _move_object_translation(self, xyz):
-        current_H = self._active_object.transform
-        delta_xyz = xyz - current_H[:3, 3]
+        delta_xyz = xyz - self._active_object.get_transform()[:3, 3]
         h_transform = np.eye(4)
         h_transform[:3, 3] = delta_xyz
-        self._active_object.set_transform(h_transform)
+        self._active_object.transform(h_transform)
         self._annotation_changed = True
         self._update_object_layer()
 
@@ -3626,7 +3617,6 @@ class AppWindow:
         self._show_hands.checked = not show
         self._on_show_hand(not show)
     def _on_optimize(self):
-        self.logger.debug('_on_optimize')
         self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
