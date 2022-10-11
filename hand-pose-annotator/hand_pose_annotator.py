@@ -28,6 +28,8 @@ import shutil
 import copy
 from scipy.spatial.transform import Rotation as Rot
 
+import psutil
+
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
@@ -125,17 +127,37 @@ class Logger:
 
         self.logger.setLevel(logging.DEBUG)
 
+        self.last_msg = "="*50
         self.logger.info("="*50)
         self.logger.info("Start Logging")
+        
+        self.last_check_memory = time.time()
+        self.check_memory_inteval = 30
 
     def handle_exit(self):
         self.logger.info("End Logging")
         self.logger.info("="*50)
 
     def info(self, msg):
+        if self.last_msg == msg:
+            return
+        self.last_msg = msg
         self.logger.info(msg)
     def debug(self, msg):
+        if self.last_msg == msg:
+            return
+        self.last_msg = msg
         self.logger.debug(msg)
+    
+    def memory_usage(self):
+        if (time.time()-self.last_check_memory) < self.check_memory_inteval:
+            return
+        self.last_check_memory = time.time()
+        p = psutil.Process()
+        rss = p.memory_info().rss / 2 ** 20 # Bytes to MB
+        msg = f"memory usage: {rss: 10.5f} MB"
+        self.logger.info(msg)
+        
 
 class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
@@ -798,29 +820,45 @@ class SceneObject:
     def __init__(self, obj_id, model_path):
         self.id = obj_id
         self.model_path = model_path
-        self.transform = np.eye(4)
-    
+        self.obj_geo = self._load_point_cloud()
+        self.obj_mesh = self._load_mesh()
+        self.H = np.eye(4)
+
     def reset(self):
-        self.transform = np.eye(4)
-        # self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
-        self.obj_geo = o3d.io.read_point_cloud(self.model_path)
-        self.obj_geo.scale(0.001, [0, 0, 0])
-        self.obj_geo.transform(self.transform)
+        self.obj_geo.clear()
+        self.obj_mesh.clear()
+        self.obj_geo = self._load_point_cloud()
+        self.obj_mesh = self._load_mesh()
+        self.H = np.eye(4)
+
+    def _load_point_cloud(self):
+        pcd = o3d.io.read_point_cloud(self.model_path)
+        pcd.scale(0.001, [0, 0, 0])
+        pcd.translate(-pcd.get_center())
+        return pcd
     
-    def load_label(self, label):
-        self.transform = label
-        # self.obj_geo = o3d.io.read_triangle_mesh(self.model_path, True)
-        self.obj_geo = o3d.io.read_point_cloud(self.model_path)
-        self.obj_geo.scale(0.001, [0, 0, 0])
-        self.obj_geo.transform(self.transform)
+    def _load_mesh(self):
+        mesh = o3d.io.read_triangle_mesh(self.model_path)
+        mesh.scale(0.001, [0, 0, 0])
+        mesh.translate(-mesh.get_center())
+        return mesh
+    
+    
+    def set_transform(self, H):
+        self.reset()
+        self.transform(H)
+    def get_transform(self):
+        return self.H
+    def transform(self, H):
+        self.obj_geo.transform(H)
+        self.obj_mesh.transform(H)
+        self.H = np.matmul(H, self.H)
         
     def get_geometry(self):
         return self.obj_geo
-    def get_transform(self):
-        return self.transform
-    def set_transform(self, H):
-        self.obj_geo.transform(H)
-        self.transform = np.matmul(H, self.transform)
+    
+    def get_mesh(self):
+        return self.obj_mesh
 
 class Dataset:
     def __init__(self):
@@ -1255,6 +1293,13 @@ def load_dataset_from_file(file_path):
 class Scene:
     
     class Frame:
+        class SingleView:
+            def __init__(self, rgb, depth, pcd, frame_id):
+                self.rgb = rgb
+                self.depth = depth
+                self.pcd = pcd
+                self.frame_id = frame_id
+
         def __init__(self, scene_dir, frame_id, hands, objs, cams, load_pcd):
             self.scene_dir = scene_dir
             
@@ -1265,48 +1310,53 @@ class Scene:
             self.cameras = cams
             
             self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", "{:06d}.png".format(self.id)) 
-            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(self.id)) 
+            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(self.id))
             self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(self.id))
-            self.points = {}
+
+            self._load_pcd_fn = load_pcd
+
+            self.single_views = {}
             for cam_name, cam in cams.items():
-                self.points[cam_name] = load_pcd(self.pcd_format.format(cam.folder))
-            self.scene_pcd = o3d.geometry.PointCloud()
-            for pcd in self.points.values():
-                self.scene_pcd += pcd
-            
-        def get_rgb(self, cam_name):
+                self.single_views[cam_name] = self.SingleView(rgb=self._load_rgb(cam_name),
+                                                              depth=self._load_depth(cam_name),
+                                                              pcd=self._load_pcd(cam_name),
+                                                              frame_id=self.id)
+            self.scene_pcd = self.get_pcd(list(self.cameras.keys()))
+            self.active_cam = 'merge' # merge
+
+        def _load_rgb(self, cam_name):
             folder = self.cameras[cam_name].folder
             rgb_path = self.rgb_format.format(folder)
-            rgb_img = cv2.imread(rgb_path)
-            
-            return rgb_img
-        
-        def get_depth(self, cam_name):
+            return cv2.imread(rgb_path)
+        def _load_depth(self, cam_name):
             folder = self.cameras[cam_name].folder
             depth_path = self.depth_format.format(folder)
             depth_img = cv2.imread(depth_path, -1)
             depth_img = np.float32(depth_img) # mm
             return depth_img
+        def _load_pcd(self, cam_name):
+            folder = self.cameras[cam_name].folder
+            pcd_path = self.pcd_format.format(folder)
+            return self._load_pcd_fn(pcd_path)
+        
+        def get_rgb(self, cam_name):
+            return self.single_views[cam_name].rgb
+        
+        def get_depth(self, cam_name):
+            return self.single_views[cam_name].depth
             
         def get_pcd(self, cam_list):
             """get target points by cam list
-
             Args:
                 cam_list (list): list of cam_name
-
             Returns:
                 pcd
             """
             pcd = o3d.geometry.PointCloud()
-            points = []
-            colors = []
             for cam_name in cam_list:
-                points.append(np.asarray(self.points[cam_name].points))
-                colors.append(np.asarray(self.points[cam_name].colors))
-            pcd.points = o3d.utility.Vector3dVector(np.concatenate(points, axis=0))
-            pcd.colors = o3d.utility.Vector3dVector(np.concatenate(colors, axis=0))
+                pcd += self.single_views[cam_name].pcd
             return pcd
-            
+
     def __init__(self, scene_dir, hands, objects, cameras, frame_list, current_frame, load_pcd):
         self._scene_dir = scene_dir
         self._label_dir = os.path.join(scene_dir, 'labels')
@@ -1367,13 +1417,13 @@ class Scene:
             self.frame_id = self._frame_list[frame_idx]
             return True
     def get_progress(self):
-        return "현재 진행률: {} [{}/{}]".format(self.frame_id, self._frame_idx+1, self.total_frame+1)
+        return "현재 진행률: {} [{}/{}]".format(self.frame_id, self._frame_idx+1, self.total_frame)
     
     def save_label(self):
         # object label
         obj_label = {}
         for obj_id, obj in self._objects.items():
-            obj_label[str(obj_id)] = obj.transform
+            obj_label[str(obj_id)] = obj.get_transform()
         np.savez(self._obj_label_path, **obj_label)
         self._obj_label = obj_label
         # get current hand label
@@ -1385,7 +1435,6 @@ class Scene:
         np.savez(self._hand_label_path, **label)
         self._label = label
 
-
     def load_label(self):
         # object label
         if self._obj_label is not None:
@@ -1394,12 +1443,12 @@ class Scene:
             self._obj_label = dict(np.load(self._obj_label_path))
             
             for obj_id, label in self._obj_label.items():
-                self._objects[int(obj_id)].load_label(label)
+                self._objects[int(obj_id)].set_transform(label)
         except:
             print("Fail to load object Label -> Load previous Label")
             try:
                 for obj_id, label in self._obj_previous_label.items():
-                    self._objects[int(obj_id)].load_label(label)
+                    self._objects[int(obj_id)].set_transform(label)
             except:
                 print("Fail to load previous Label -> Reset Label")
                 for obj in self._objects.values():
@@ -1465,6 +1514,28 @@ class Scene:
                 hand_model.reset()
             return False
     
+    def _load_hand_label(self, npz_file):
+        try:
+            label = dict(np.load(npz_file))
+            hand_states = {}
+            for k, v in label.items():
+                side = k.split('_')[0]
+                hand_states.setdefault(side, {})
+                param = k.replace(side + "_", "")
+                hand_states[side][param] = v
+            for side, state in hand_states.items():
+                self._hands[side].set_state(state)
+            return True
+        except:
+            return False
+    def _load_obj_label(self, npz_file):
+        try:
+            obj_label = dict(np.load(npz_file))
+            for obj_id, label in obj_label.items():
+                self._objects[int(obj_id)].load_label(label)
+            return True
+        except:
+            return False
     def load_previous_label(self):
         if (self._previous_label is None) or (self._obj_previous_label is None):
             return False
@@ -1622,7 +1693,7 @@ class HeadlessRenderer:
     def add_objects(self, objects, color=[1, 0, 0]):
         for obj_id, obj in objects.items():
             obj_name = "obj_{}".format(obj_id)
-            geo = obj.get_geometry()
+            geo = obj.get_mesh()
             geo = copy.deepcopy(geo)
             geo.paint_uniform_color(color)
             self.render.scene.add_geometry(obj_name, geo, self.obj_mtl)
@@ -1761,7 +1832,6 @@ class AppWindow:
         
         # 3D Annotation tool options
         w.add_child(self._scene)
-        
         w.add_child(self._settings_panel)
         w.add_child(self._log_panel)
         w.add_child(self._images_panel)
@@ -1862,7 +1932,6 @@ class AppWindow:
         if self.bounds is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
-        self.logger.info("_on_initial_viewpoint")
         self._log.text = "\t 처음 시점으로 이동합니다."
         self.window.set_needs_layout()
         self._scene.setup_camera(60, self.bounds, self.bounds.get_center())
@@ -1875,7 +1944,6 @@ class AppWindow:
         if self.bounds is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
-        self.logger.info("_on_active_viewpoint")
         self._log.text = "\t 조작중인 객체 시점으로 이동합니다."
         self.window.set_needs_layout()
         center = np.array([0, 0, 0])
@@ -1883,13 +1951,12 @@ class AppWindow:
         if self._active_type=='hand':
             eye_on = self._active_hand.get_control_position()
         else:
-            eye_on = self._active_object.transform[:3, 3]
+            eye_on = self._active_object.get_transform()[:3, 3]
         center = eye_on - 0.4* eye_on/np.linalg.norm(eye_on)
         up = np.array([0, -1, 0])
         self._scene.look_at(eye_on, center, up)
         self._init_view_control()
     def _on_active_camera_viewpoint(self):
-        self.logger.debug('_on_active_camera_viewpoint')
         if self._camera_idx==-1:
             self._on_initial_viewpoint()
             return
@@ -1938,6 +2005,8 @@ class AppWindow:
         filedlg.add_filter(".pcd", "포인트 클라우드")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
+        if os.environ.get("USERNAME")=='ailab':
+            filedlg.set_path('/home/ailab/catkin_ws/src/gail-camera-manager/data/data4-source')
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2104,7 +2173,7 @@ class AppWindow:
             self._show_objects.checked = not show
             return
         self.settings.show_pcd = show
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _on_show_coord_frame(self, show):
         self.logger.debug('_on_show_coord_frame')
         self.settings.show_coord_frame = show
@@ -2237,7 +2306,7 @@ class AppWindow:
                 self._on_error("손이 없습니다.")
                 self._down_sample_pcd.checked = False
                 return
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     # labeling stage edit
     def _init_stageedit_layout(self):
         self.logger.debug('_init_stageedit_layout')
@@ -2271,7 +2340,7 @@ class AppWindow:
         self.logger.debug('_on_object_mode')
         self._convert_mode(LabelingMode.OBJECT)
     def _convert_mode(self, labeling_mode):
-        self.logger.debug('_convert_mode')
+        self.logger.debug('_convert_mode_{}'.format(labeling_mode))
         if not self._check_annotation_scene():
             return
         self._labeling_mode = labeling_mode
@@ -2425,7 +2494,7 @@ class AppWindow:
         self._update_valid_error()
         self._update_joint_mask()
         if self._down_sample_pcd.checked:
-            self._init_pcd_layer()
+            self._update_pcd_layer()
 
     # convert finger
     def _convert_to_root(self):
@@ -2542,9 +2611,10 @@ class AppWindow:
             for s, hand_model in hands.items():
                 hand_model.set_root_position(pcd.get_center())
         self._update_progress_str()
-        self._on_change_camera_merge()
+        self._init_pcd_layer()
         self._init_obj_layer()
         self._init_hand_layer()
+        self._on_change_camera_merge()
         self._update_valid_error()
     def _update_progress_str(self):
         self.logger.debug('_update_progress_str')
@@ -2704,7 +2774,6 @@ class AppWindow:
         self._validation_panel.add_child(joint_mask_layout)
 
     def _update_joint_mask(self):
-        self.logger.debug('_update_joint_mask')
         img = self._active_hand.get_joint_mask()
         # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = o3d.geometry.Image(img)
@@ -2776,6 +2845,8 @@ class AppWindow:
         v.add_child(right_error_txt)
         left_error_txt = gui.Label("준비 안됨")
         v.add_child(left_error_txt)
+        obj_error_txt = gui.Label("준비 안됨")
+        v.add_child(obj_error_txt)
         h.add_child(v)
         
         button = gui.Button("에러 업데이트")
@@ -2784,7 +2855,7 @@ class AppWindow:
         h.add_child(button)
 
         
-        self._total_error_txt = (right_error_txt, left_error_txt)
+        self._total_error_txt = (right_error_txt, left_error_txt, obj_error_txt)
         show_error_layout.add_child(h)
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
         show_error_layout.add_child(self._activate_cam_txt)
@@ -2795,6 +2866,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 0
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_1(self):
@@ -2802,6 +2874,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 1
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_2(self):
@@ -2809,6 +2882,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 2
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_3(self):
@@ -2816,6 +2890,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 3
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_4(self):
@@ -2823,6 +2898,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 4
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_5(self):
@@ -2830,6 +2906,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 5
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_6(self):
@@ -2837,6 +2914,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 6
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_7(self):
@@ -2844,6 +2922,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 7
+        self._frame.active_cam=self._view_error_layout_list[self._camera_idx][0].text
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_error_layout_list[self._camera_idx][0].text)
     def _on_change_camera_merge(self):
@@ -2851,22 +2930,22 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = -1
+        self._frame.active_cam="merge"
         for but, _, _, bbox in self._view_error_layout_list:
             bbox.checked = True
+        self._update_pcd_layer()
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _on_change_camera(self):
-        self.logger.debug('_on_change_camera')
         self._reset_image_viewer()
         self._update_image_viewer()
         self._update_diff_viewer()
-        self._init_pcd_layer()
         self._on_active_camera_viewpoint()
     def _on_change_bbox(self, visible):
         self.logger.debug('_on_change_bbox')
         if not self._check_annotation_scene():
             return
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _get_activate_cam(self):
         self.logger.debug('_get_activate_cam')
         cam_list = []
@@ -2905,7 +2984,7 @@ class AppWindow:
                 bbox.checked = True
             else:
                 bbox.checked = False
-        self._init_pcd_layer()
+        self._update_pcd_layer()
     def _on_icp(self):
         self.logger.debug('_on_icp')
         if not self._check_annotation_scene():
@@ -2991,7 +3070,8 @@ class AppWindow:
                 rgb_rendered = np.array(rgb_rendered)
                 # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rgb_rendered.png'), rgb_rendered)
 
-                
+                # object mask
+                object_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]<2, rgb_rendered[:, :, 2]<2))
 
                 # only hand mask
                 right_hand_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]>10, rgb_rendered[:, :, 2]>2))
@@ -3016,16 +3096,27 @@ class AppWindow:
                 diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
                 diff_vis[left_hand_mask] = [0, 255, 0] # BGR
 
+                diff_vis[object_mask] = [0, 180, 180]
+
                 hand_mask = np.bitwise_or(right_hand_mask, left_hand_mask)
+                hand_object_mask = np.bitwise_or(object_mask, hand_mask)
 
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
                 depth_diff_abs = np.abs(np.copy(depth_diff))
-                inlier_mask = depth_diff_abs < 50
+                inlier_mask = depth_diff_abs < 500
 
-                high_error_mask = np.bitwise_and(hand_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
+                high_error_mask = np.bitwise_and(hand_object_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
                 diff_vis[high_error_mask] = [0, 0, 255]
 
+                # object
+                object_valid_mask = valid_mask * object_mask * inlier_mask
+                if np.sum(object_valid_mask) > 0:
+                    
+                    depth_diff_mean = np.sum(depth_diff_abs[object_valid_mask]) / np.sum(object_valid_mask)
+                else:
+                    depth_diff_mean = -1
+                obj_diff_mean = copy.deepcopy(depth_diff_mean)
                 # right_hand
                 r_valid_mask = valid_mask * right_hand_mask * inlier_mask
                 if np.sum(r_valid_mask) > 0:
@@ -3055,6 +3146,8 @@ class AppWindow:
         count = [0, 0]
         max_v = [-np.inf, -np.inf]
         max_idx = [None, None]
+        min_v = [np.inf, np.inf]
+        min_idx = [None, None]
         for idx, diff in enumerate(self._depth_diff_list):
             for s_idx, dif in enumerate(diff):
                 if dif==-1:
@@ -3062,16 +3155,22 @@ class AppWindow:
                 if dif > max_v[s_idx]:
                     max_v[s_idx] = dif
                     max_idx[s_idx] = idx
+                if dif < min_v[s_idx]:
+                    min_v[s_idx] = dif
+                    min_idx[s_idx] = idx
                 total_mean[s_idx] += dif
                 count[s_idx] += 1
         if self._active_hand.side=='right':
-            max_idx = max_idx[0]
+            target_idx = 0 
         else:
-            max_idx = max_idx[1]
+            target_idx = 1
         for idx, error_layout in enumerate(self._view_error_layout_list):
-            if idx==max_idx:
-                error_layout[1].text_color = gui.Color(1, 0, 0)
-                error_layout[2].text_color = gui.Color(1, 0, 0)
+            if idx==max_idx[target_idx]:
+                error_layout[target_idx+1].text_color = gui.Color(1, 0, 0)
+                error_layout[2-target_idx].text_color = gui.Color(1, 1, 1)
+            elif idx==min_idx[target_idx]:
+                error_layout[target_idx+1].text_color = gui.Color(0, 1, 0)
+                error_layout[2-target_idx].text_color = gui.Color(1, 1, 1)
             else:
                 error_layout[1].text_color = gui.Color(1, 1, 1)
                 error_layout[2].text_color = gui.Color(1, 1, 1)
@@ -3085,6 +3184,7 @@ class AppWindow:
             total_mean[1] = -1
         self._total_error_txt[0].text = "오른손: {:.2f}".format(total_mean[0])
         self._total_error_txt[1].text = "왼손: {:.2f}".format(total_mean[1])
+        self._total_error_txt[2].text = "물체: {:.2f}".format(obj_diff_mean)
         
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
@@ -3146,65 +3246,51 @@ class AppWindow:
     #region ----- Open3DScene 
     #----- geometry
     def _check_geometry(self, name):
-        self.logger.debug('_check_geometry')
         return self._scene.scene.has_geometry(name)
     
     def _remove_geometry(self, name):
-        self.logger.debug('_remove_geometry')
         if self._check_geometry(name):
             self._scene.scene.remove_geometry(name)
     
     def _add_geometry(self, name, geo, mat):
-        self.logger.debug('_add_geometry')
         if self._check_geometry(name):
             self._remove_geometry(name)
         self._scene.scene.add_geometry(name, geo, mat,
                                        add_downsampled_copy_for_fast_rendering=True)
     
     def _clear_geometry(self):
-        self.logger.debug('_clear_geometry')
         self._scene.scene.clear_geometry()
 
     def _set_geometry_transform(self, name, transform):
-        self.logger.debug('_set_geometry_transform')
         self._scene.scene.set_geometry_transform(name, transform)
     
     def _get_geometry_transform(self, name):
-        self.logger.debug('_get_geometry_transform')
         return self._scene.scene.get_geometry_transform(name)
  
     #----- 
     def _set_background_color(self, color):
-        self.logger.debug('_set_background_color')
         self._scene.scene.set_background(color)
     
     def _set_geometry_visible(self, name, is_visible):
-        self.logger.debug('_set_geometry_visible')
         self._scene.scene.show_geometry(name, is_visible)
     
     def _check_geometry_visible(self, name):
-        self.logger.debug('_check_geometry_visible')
         return self._scene.scene.geometry_is_visible(name)
     
     def _set_axes_visible(self, is_visible):
-        self.logger.debug('_set_axes_visible')
         self._scene.scene.show_axes(is_visible)
     
     def _set_ground_plane_visible(self, is_visible):
-        self.logger.debug('_set_ground_plane_visible')
         self._scene.scene.show_ground_plane(is_visible)
     
     def _set_skybox_visible(self, is_visible):
-        self.logger.debug('_set_skybox_visible')
         self._scene.scene.show_skybox(is_visible)
         
     def _set_geometry_material(self, name, mat):
-        self.logger.debug('_set_geometry_material')
         self._scene.scene.modify_geometry_material(name, mat)
     
     #endregion
     def _add_hand_frame(self, size=0.05, origin=[0, 0, 0]):
-        self.logger.debug('_add_hand_frame')
         if self._active_hand is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_hand_frame)")
         self._remove_hand_frame()
@@ -3222,29 +3308,27 @@ class AppWindow:
         self.hand_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
         self._add_geometry("hand_frame", coord_frame, self.settings.coord_material)
     def _remove_hand_frame(self):
-        self.logger.debug('_remove_hand_frame')
         self._remove_geometry("hand_frame")
         for label in self.hand_coord_labels:
             self._scene.remove_3d_label(label)
         self.hand_coord_labels = []
-    def _add_obj_frame(self, size=0.05, origin=[0, 0, 0]):
-        self.logger.debug('_add_obj_frame')
+    def _add_obj_frame(self, size=0.1, origin=[0, 0, 0]):
         if not self._check_annotation_scene():
             return
         self._remove_obj_frame()
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
-        transform = self._active_object.transform
+        
+        transform = np.eye(4)
+        transform[:3, 3] = self._active_object.get_transform()[:3, 3]
         coord_frame.transform(transform)
 
         self.obj_coord_labels = []
         size = size * 0.8
-        transform[:3, :3] = np.eye(3)
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([size, 0, 0, 1]))[:3], "W, S"))
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, size, 0, 1]))[:3], "A, D"))
-        self.obj_coord_labels.append(self._scene.add_3d_label(np.matmul(transform, np.array([0, 0, size, 1]))[:3], "Q, E"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([size, 0, 0]), "W, S"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([0, size, 0]), "A, D"))
+        self.obj_coord_labels.append(self._scene.add_3d_label(transform[:3, 3] + np.array([0, 0, size]), "Q, E"))
         self._add_geometry("obj_frame", coord_frame, self.settings.coord_material)
     def _remove_obj_frame(self):
-        self.logger.debug('_remove_obj_frame')
         self._remove_geometry("obj_frame")
         for label in self.obj_coord_labels:
             self._scene.remove_3d_label(label)
@@ -3287,9 +3371,25 @@ class AppWindow:
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             return gui.Widget.EventCallbackResult.CONSUMED
         
+        if not self._labeling_mode==LabelingMode.OBJECT:
+            if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                    gui.KeyModifier.SHIFT) and event.is_button_down(gui.MouseButton.RIGHT):
+                ctrl_idx = self._active_hand.control_idx + 1
+                self._active_hand.set_control_joint(ctrl_idx)
+                self._update_target_hand()
+                self._update_joint_mask()
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+            if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
+                    gui.KeyModifier.CTRL) and event.is_button_down(gui.MouseButton.RIGHT):
+                ctrl_idx = self._active_hand.control_idx - 1
+                self._active_hand.set_control_joint(ctrl_idx)
+                self._update_target_hand()
+                self._update_joint_mask()
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
+            
         return gui.Widget.EventCallbackResult.IGNORED
     def move(self, x, y, z, rx, ry, rz):
-        self.logger.debug('move')
+        self.logger.debug('move_{}'.format(self._active_type))
         if self._active_type=='hand':
 
             self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
@@ -3312,7 +3412,6 @@ class AppWindow:
                 r = Rot.from_matrix(np.matmul(current_rot_mat, rot_mat))
                 xyz = r.as_rotvec()
 
-
                 self._move_hand_rotation(xyz)
         else:
             self._log.text = "물체 라벨 이동 중입니다."
@@ -3328,17 +3427,16 @@ class AppWindow:
                 
             else: # rotation
                 center = self._active_object.obj_geo.get_center()
-                rot_mat_obj_center = self._active_object.obj_geo.get_rotation_matrix_from_xyz((rx, ry, rz))
+                rot_mat_obj_center = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
                 T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
                 R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
                 T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
                 h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
-            self._active_object.set_transform(h_transform)
+            self._active_object.transform(h_transform)
             self._annotation_changed = True
             self._update_object_layer()
     # move hand
     def _move_hand_translation(self, xyz):
-        self.logger.debug('_move_hand_translation')
         self._active_hand.set_control_position(xyz)
         if self._active_hand.get_optimize_target()=='root':
             self._active_hand.save_undo(forced=True)
@@ -3348,29 +3446,35 @@ class AppWindow:
             self._guide_changed = True
         self._update_hand_layer()
     def _move_hand_rotation(self, xyz):
-        self.logger.debug('_move_hand_rotation')
         self._active_hand.set_control_rotation(xyz)
         self._active_hand.save_undo()
         self._annotation_changed = True
         self._update_hand_layer()
     def _move_object_translation(self, xyz):
-        current_H = self._active_object.transform
-        delta_xyz = xyz - current_H[:3, 3]
+        delta_xyz = xyz - self._active_object.get_transform()[:3, 3]
         h_transform = np.eye(4)
         h_transform[:3, 3] = delta_xyz
-        self._active_object.set_transform(h_transform)
+        self._active_object.transform(h_transform)
         self._annotation_changed = True
         self._update_object_layer()
 
     def _init_pcd_layer(self):
         self.logger.debug('_init_pcd_layer')
         if self.settings.show_pcd:
+            self._pcd = self._frame.scene_pcd
+            self.bounds = self._pcd.get_axis_aligned_bounding_box()
+            self._add_geometry(self._scene_name, self._pcd, self.settings.scene_material)
+        else:
+            self._remove_geometry(self._scene_name)
+    def _update_pcd_layer(self):
+        self.logger.debug('_update_pcd_layer')
+        if self.settings.show_pcd:
             cam_name_list = []
             for cam_name in self._get_activate_cam():
                 cam_name_list.append(cam_name)
             if cam_name_list == []:
                 self._remove_geometry(self._scene_name)
-                return    
+                return
             self._pcd = self._frame.get_pcd(cam_name_list)
             self.bounds = self._pcd.get_axis_aligned_bounding_box()
             if self._down_sample_pcd.checked:
@@ -3409,12 +3513,10 @@ class AppWindow:
                 self._add_geometry(obj_name, geo, self.settings.obj_material)
                 self._object_names.append(obj_name)
     def _toggle_obj_visible(self):
-        self.logger.debug('_toggle_obj_visible')
         show = self._show_objects.checked
         self._show_objects.checked = not show
         self._on_show_object(not show)
     def _update_object_layer(self):
-        self.logger.debug('_update_object_layer')
         if self.settings.show_objects:
             for obj_id, obj in self._objects.items():
                 obj_name = "obj_{}".format(obj_id)
@@ -3481,7 +3583,6 @@ class AppWindow:
             self._update_target_hand()
             self._update_joint_mask()
     def _update_target_hand(self):
-        self.logger.debug('_update_target_hand')
         if self._labeling_mode==LabelingMode.OPTIMIZE:
             target_geo = self._active_hand.get_target_geometry()
             self._add_geometry(self._target_joint_name, 
@@ -3506,7 +3607,6 @@ class AppWindow:
                             active_geo['control'], self.settings.control_target_joint_material)
             self.control_joint_geo = active_geo['control']
     def _update_activate_hand(self):
-        self.logger.debug('_update_activate_hand')
         if self.settings.show_hand:
             hand_geo = self._active_hand.get_geometry()
             side = self._active_hand.side
@@ -3543,7 +3643,6 @@ class AppWindow:
         self._show_hands.checked = not show
         self._on_show_hand(not show)
     def _on_optimize(self):
-        self.logger.debug('_on_optimize')
         self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
@@ -3577,13 +3676,13 @@ class AppWindow:
             return gui.Widget.EventCallbackResult.IGNORED
 
         # mode change
-        if event.key == gui.KeyName.F1:
+        if event.key == gui.KeyName.F1 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.STATIC)
             return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F2:
+        elif event.key == gui.KeyName.F2 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.OPTIMIZE)
             return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F3:
+        elif event.key == gui.KeyName.F3 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.OBJECT)
             return gui.Widget.EventCallbackResult.CONSUMED
 
@@ -3748,7 +3847,7 @@ class AppWindow:
                 self._active_hand.set_optimize_target('little')
             else:
                 is_converted_finger = False
-
+            
             is_convert_joint = True
             if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
                 ctrl_idx = self._active_hand.control_idx + 1
@@ -3758,8 +3857,9 @@ class AppWindow:
                 self._active_hand.set_control_joint(ctrl_idx)
             else:
                 is_convert_joint = False
-
+            
             if is_converted_finger or is_convert_joint:
+                self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
                 self._update_target_hand()
                 self._update_joint_mask()
                 return gui.Widget.EventCallbackResult.CONSUMED
@@ -3782,7 +3882,7 @@ class AppWindow:
         # Translation
         if event.type!=gui.KeyEvent.UP:
             if not self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root'):
+                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
                 if event.key == gui.KeyName.D:
                     self.move( self.dist, 0, 0, 0, 0, 0)
                 elif event.key == gui.KeyName.A:
@@ -3797,7 +3897,7 @@ class AppWindow:
                     self.move( 0, 0, self.dist, 0, 0, 0)
             # Rot - keystrokes are not in same order as translation to make movement more human intuitive
             elif self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
+                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
                 if event.key == gui.KeyName.E:
                     self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
                 elif event.key == gui.KeyName.Q:
@@ -3833,6 +3933,7 @@ class AppWindow:
         
         if self._auto_save.checked and self.annotation_scene is not None:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value and self._annotation_changed:
+                self.logger.debug('auto saving')
                 self._annotation_changed = False
                 self.annotation_scene.save_label()
                 self._last_saved = time.time()
@@ -3843,9 +3944,9 @@ class AppWindow:
                     self._update_diff_viewer()
         
         if self._down_sample_pcd.checked and self._move_root:
-            self._init_pcd_layer()
+            self._update_pcd_layer()
             self._move_root = False
-
+        self.logger.memory_usage()
         self._init_view_control()
 
 def main(logger):
