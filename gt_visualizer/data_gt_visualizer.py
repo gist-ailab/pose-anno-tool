@@ -41,11 +41,13 @@ class GTVisualizer():
        
         self.stopped = True
         self.width, self.height = 1920, 720
+        self.H = None
         self.max_scene_id = 1000
         self.min_scene_id = 1
         self.max_image_id = 1000
         self.min_image_id = 1
         self.frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        self.grid_img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         self.sub_dir_1 = ''
         self.sub_dir_2 = ''
         self.is_img_load = True
@@ -85,6 +87,38 @@ class GTVisualizer():
         cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_image_id)
         cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
         cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
+        cv2.setMouseCallback('GIST AILAB Data GT Visualizer', self.on_mouse)
+
+    def on_mouse(self, event, x, y, flags, param):
+        if event == cv2.EVENT_MOUSEWHEEL:
+            if flags > 0:
+                self.scale_factor += 0.1
+            else:
+                self.scale_factor -= 0.1
+            self.is_updated = False
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            # if self.icx == self.width/2 and self.icy == self.height/2 and self.scale_factor == 1:
+            if self.H is not None:
+                H_inv = cv2.invertAffineTransform(self.H[0:2])
+                x, y = H_inv @ np.array([x, y, 1])
+                x, y = int(x), int(y)
+            # draw rectangular grid on rgb image centered at (x, y)
+            grid_size = 9
+            # draw horizontal lines
+            min_x = x - grid_size//2
+            max_x = x + grid_size//2
+            min_y = y - grid_size//2
+            max_y = y + grid_size//2
+            for i in range(grid_size):
+                if i % 2 == 0:
+                    cv2.line(self.grid_img, (min_x, min_y+i), (max_x, min_y+i), (0, 255, 0), 1)
+                    cv2.line(self.grid_img, (min_x+i, min_y), (min_x+i, max_y), (0, 255, 0), 1)
+            # overlay grid image on self.frame
+            self.frame = cv2.addWeighted(self.frame_original.copy(), 1.0, self.grid_img, 1.0, 0)
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.frame = self.frame_original.copy()
+            self.grid_img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
 
     def on_scene_id(self, val):
         if val < self.min_scene_id:
@@ -145,8 +179,9 @@ class GTVisualizer():
         ow, oh = self.width, self.height
         (ocx, ocy) = ((ow-1)/2, (oh-1)/2) 
         H = translate(+ocx, +ocy) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
+        self.H = H
         M = H[0:2]
-        img = cv2.warpAffine(img, dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+        img = cv2.warpAffine(img, M, (ow, oh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
         return img
 
     def apply_affine_transform(self, key):
@@ -191,13 +226,15 @@ class GTVisualizer():
             masks = np.hstack((self.amodal, self.vis, self.occ))
             self.frame = np.vstack((rgbd, masks))
             self.frame_original = self.frame.copy()
+            self.frame = cv2.addWeighted(self.frame, 1.0, self.grid_img, 1.0, 0)
             self.is_img_load = True
 
         if not self.is_updated and self.rgb_path is not None:
-            self.frame = self.affine_transform(self.frame_original)
+            self.frame = cv2.addWeighted(self.frame_original.copy(), 1.0, self.grid_img, 1.0, 0)
+            self.frame = self.affine_transform(self.frame)
             self.is_updated = True
-        
 
+        
         
     def load_rgbd(self):
 
