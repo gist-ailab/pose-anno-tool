@@ -1166,7 +1166,7 @@ class OurDataset(Dataset):
         '000363922112',
         '000375922112',
         '000355922112',
-        '000364922112',
+        '000364922112', # ego_centric
     ]
     _CAMERAS = [
         "좌하단",
@@ -2007,6 +2007,9 @@ class AppWindow:
         filedlg.set_on_done(self._on_filedlg_done)
         if os.environ.get("USERNAME")=='ailab':
             filedlg.set_path('/home/ailab/catkin_ws/src/gail-camera-manager/data/data4-source')
+        elif os.environ.get("USERNAME")=='raeyo':
+            filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
+        
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2023,14 +2026,15 @@ class AppWindow:
             # if already initialized
             if self.dataset is None:
                 self.dataset = load_dataset_from_file(file_path)
+                self.H, self.W = self.dataset.H, self.dataset.W
+                self.hl_renderer = HeadlessRenderer(self.W, self.H)
             else:
                 if self.dataset.check_same_data(file_path):
                     pass
                 else:
                     del self.dataset
+                    
                     self.dataset = load_dataset_from_file(file_path)
-            self.H, self.W = self.dataset.H, self.dataset.W
-            self.hl_renderer = HeadlessRenderer(self.W, self.H)
             if self.annotation_scene is None:
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
             else:
@@ -3133,7 +3137,7 @@ class AppWindow:
                     depth_diff_mean = -1
                 l_diff_mean = copy.deepcopy(depth_diff_mean)
                 
-                self._depth_diff_list.append([r_diff_mean, l_diff_mean])
+                self._depth_diff_list.append([r_diff_mean, l_diff_mean, obj_diff_mean])
                 error_layout[1].text = "오른손: {:.2f}".format(r_diff_mean)
                 error_layout[2].text = "왼손: {:.2f}".format(l_diff_mean)
                 
@@ -3142,12 +3146,12 @@ class AppWindow:
                 self._diff_images[cam_name] = diff_vis
             
         self.logger.debug('\tupdate error')
-        total_mean = [0, 0]
-        count = [0, 0]
-        max_v = [-np.inf, -np.inf]
-        max_idx = [None, None]
-        min_v = [np.inf, np.inf]
-        min_idx = [None, None]
+        total_mean = [0, 0, 0]
+        count = [0, 0, 0]
+        max_v = [-np.inf, -np.inf, -np.inf]
+        max_idx = [None, None, None]
+        min_v = [np.inf, np.inf, np.inf]
+        min_idx = [None, None, None]
         for idx, diff in enumerate(self._depth_diff_list):
             for s_idx, dif in enumerate(diff):
                 if dif==-1:
@@ -3182,9 +3186,13 @@ class AppWindow:
             total_mean[1] /= count[1]
         except:
             total_mean[1] = -1
+        try:
+            total_mean[2] /= count[2]
+        except:
+            total_mean[2] = -1
         self._total_error_txt[0].text = "오른손: {:.2f}".format(total_mean[0])
         self._total_error_txt[1].text = "왼손: {:.2f}".format(total_mean[1])
-        self._total_error_txt[2].text = "물체: {:.2f}".format(obj_diff_mean)
+        self._total_error_txt[2].text = "물체: {:.2f}".format(total_mean[2])
         
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
@@ -3253,8 +3261,7 @@ class AppWindow:
             self._scene.scene.remove_geometry(name)
     
     def _add_geometry(self, name, geo, mat):
-        if self._check_geometry(name):
-            self._remove_geometry(name)
+        self._remove_geometry(name)
         self._scene.scene.add_geometry(name, geo, mat,
                                        add_downsampled_copy_for_fast_rendering=True)
     
