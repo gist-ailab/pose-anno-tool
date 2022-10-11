@@ -821,11 +821,14 @@ class SceneObject:
         self.id = obj_id
         self.model_path = model_path
         self.obj_geo = self._load_point_cloud()
+        self.obj_mesh = self._load_mesh()
         self.H = np.eye(4)
 
     def reset(self):
         self.obj_geo.clear()
+        self.obj_mesh.clear()
         self.obj_geo = self._load_point_cloud()
+        self.obj_mesh = self._load_mesh()
         self.H = np.eye(4)
 
     def _load_point_cloud(self):
@@ -834,6 +837,13 @@ class SceneObject:
         pcd.translate(-pcd.get_center())
         return pcd
     
+    def _load_mesh(self):
+        mesh = o3d.io.read_triangle_mesh(self.model_path)
+        mesh.scale(0.001, [0, 0, 0])
+        mesh.translate(-mesh.get_center())
+        return mesh
+    
+    
     def set_transform(self, H):
         self.reset()
         self.transform(H)
@@ -841,10 +851,14 @@ class SceneObject:
         return self.H
     def transform(self, H):
         self.obj_geo.transform(H)
+        self.obj_mesh.transform(H)
         self.H = np.matmul(H, self.H)
         
     def get_geometry(self):
         return self.obj_geo
+    
+    def get_mesh(self):
+        return self.obj_mesh
 
 class Dataset:
     def __init__(self):
@@ -1679,7 +1693,7 @@ class HeadlessRenderer:
     def add_objects(self, objects, color=[1, 0, 0]):
         for obj_id, obj in objects.items():
             obj_name = "obj_{}".format(obj_id)
-            geo = obj.get_geometry()
+            geo = obj.get_mesh()
             geo = copy.deepcopy(geo)
             geo.paint_uniform_color(color)
             self.render.scene.add_geometry(obj_name, geo, self.obj_mtl)
@@ -2831,6 +2845,8 @@ class AppWindow:
         v.add_child(right_error_txt)
         left_error_txt = gui.Label("준비 안됨")
         v.add_child(left_error_txt)
+        obj_error_txt = gui.Label("준비 안됨")
+        v.add_child(obj_error_txt)
         h.add_child(v)
         
         button = gui.Button("에러 업데이트")
@@ -2839,7 +2855,7 @@ class AppWindow:
         h.add_child(button)
 
         
-        self._total_error_txt = (right_error_txt, left_error_txt)
+        self._total_error_txt = (right_error_txt, left_error_txt, obj_error_txt)
         show_error_layout.add_child(h)
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
         show_error_layout.add_child(self._activate_cam_txt)
@@ -3079,6 +3095,7 @@ class AppWindow:
                 diff_vis = np.zeros_like(rgb_captured)
                 diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
                 diff_vis[left_hand_mask] = [0, 255, 0] # BGR
+
                 diff_vis[object_mask] = [0, 180, 180]
 
                 hand_mask = np.bitwise_or(right_hand_mask, left_hand_mask)
@@ -3087,11 +3104,19 @@ class AppWindow:
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
                 depth_diff_abs = np.abs(np.copy(depth_diff))
-                inlier_mask = depth_diff_abs < 50
+                inlier_mask = depth_diff_abs < 500
 
                 high_error_mask = np.bitwise_and(hand_object_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
                 diff_vis[high_error_mask] = [0, 0, 255]
 
+                # object
+                object_valid_mask = valid_mask * object_mask * inlier_mask
+                if np.sum(object_valid_mask) > 0:
+                    
+                    depth_diff_mean = np.sum(depth_diff_abs[object_valid_mask]) / np.sum(object_valid_mask)
+                else:
+                    depth_diff_mean = -1
+                obj_diff_mean = copy.deepcopy(depth_diff_mean)
                 # right_hand
                 r_valid_mask = valid_mask * right_hand_mask * inlier_mask
                 if np.sum(r_valid_mask) > 0:
@@ -3159,6 +3184,7 @@ class AppWindow:
             total_mean[1] = -1
         self._total_error_txt[0].text = "오른손: {:.2f}".format(total_mean[0])
         self._total_error_txt[1].text = "왼손: {:.2f}".format(total_mean[1])
+        self._total_error_txt[2].text = "물체: {:.2f}".format(obj_diff_mean)
         
         # clear geometry
         self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
