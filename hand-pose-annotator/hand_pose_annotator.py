@@ -1839,7 +1839,7 @@ class AppWindow:
         
         # ---- annotation tool settings ----
         self._initialize_background()
-        self._on_scene_point_size(5) # set default size to 1
+        self._on_scene_point_size(1) # set default size to 1
         # self._on_point_transparency(0)
         # self._on_object_transparency(0.5)
         self._on_hand_transparency(0.2)
