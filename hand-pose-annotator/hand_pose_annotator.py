@@ -3357,7 +3357,7 @@ class AppWindow:
                 y = event.y - self._scene.frame.y
                 # Note that np.asarray() reverses the axes.
                 depth_area = np.asarray(depth_image)[y-10:y+10, x-10:x+10]
-                if depth_area.min == 1.0: # clicked on nothing (i.e. the far plane)
+                if depth_area.min() == 1.0: # clicked on nothing (i.e. the far plane)
                     pass
                 
                 else:
