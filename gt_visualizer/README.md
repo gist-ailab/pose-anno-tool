@@ -1,5 +1,5 @@
 
 
 pyinstaller data_gt_visualizer.py
-pyinstaller data2_order_visualizer.py
+pyinstaller data_order_visualizer.py
 
