@@ -1473,31 +1473,30 @@ class Scene:
             print("Fail to load previous Label -> Try to load AI label")
         
         # second ai label
-        for cam_name, cam in self._cameras.items():
-            try:
-                ai_label_path = os.path.join(self._scene_dir, cam.folder, "hand_mocap", "{:06d}.json".format(self.frame_id))
-                all_pred_path = os.path.join(self._scene_dir, cam.folder, "hand_mocap", "{:06d}_prediction_result.pkl".format(self.frame_id))
-                ai_label = Utils.load_json_to_dic(ai_label_path)
-                all_pred = Utils.load_pickle(all_pred_path)['pred_output_list'][0]
-                extr = cam.extrinsics
-                R = extr[:3, :3]
-                R_inv = np.linalg.inv(R)
-                for side, val in ai_label.items():
-                    mano_pose = np.array(val['mano_pose']).reshape(-1)
-                    pred_info = all_pred['{}_hand'.format(side)]
-                    # wrist_pos = np.array(val['wrist_pos'])/1000
-                    wrist_pos = pred_info['pred_joints_smpl'][0]*pred_info['pred_camera'][0]
-                    wrist_ori = np.array(val['wrist_ori'])
-                    wrist_ori = np.array([wrist_ori[1], wrist_ori[2], wrist_ori[0]]) # 5, 4
-                    # wrist_ori = np.matmul(R, wrist_ori)
-                    mano_pose = np.concatenate((wrist_ori, mano_pose))
-                    self._hands[side].set_joint_pose(mano_pose)
-                    self._hands[side].set_root_position(wrist_pos)
-                print("Success to Load AI Label")
-                break
-            except:
-                continue
-        print("Fail to load AI Label")
+        # for cam_name, cam in self._cameras.items():
+        try:
+            ai_label_path = os.path.join(self._scene_dir, "hand_mocap", "{:06d}.json".format(self.frame_id))
+            # all_pred_path = os.path.join(self._scene_dir, cam.folder, "hand_mocap", "{:06d}_prediction_result.pkl".format(self.frame_id))
+            ai_label = Utils.load_json_to_dic(ai_label_path)
+            # all_pred = Utils.load_pickle(all_pred_path)['pred_output_list'][0]
+            # extr = cam.extrinsics
+            # R = extr[:3, :3]
+            # R_inv = np.linalg.inv(R)
+            for side, val in ai_label.items():
+                mano_pose = np.array(val['mano_pose']).reshape(-1)
+                # pred_info = all_pred['{}_hand'.format(side)]
+                wrist_pos = np.array(val['wrist_pos'])/1000
+                # wrist_pos = pred_info['pred_joints_smpl'][0]*pred_info['pred_camera'][0]
+                wrist_ori = np.array(val['wrist_ori'])
+                # wrist_ori = np.array([wrist_ori[1], wrist_ori[2], wrist_ori[0]]) # 5, 4
+                # wrist_ori = np.matmul(R, wrist_ori)
+                mano_pose = np.concatenate((wrist_ori, mano_pose))
+                # self._hands[side].set_joint_pose(mano_pose)
+                self._hands[side].set_root_position(wrist_pos)
+            print("Success to Load AI Label")
+            return True
+        except:
+            print("Fail to load AI Label")
         hand_states = {}
         if self._previous_label is not None:
             self._label = self._previous_label.copy()
