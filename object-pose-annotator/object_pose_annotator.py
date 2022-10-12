@@ -17,6 +17,7 @@ import numpy as np
 import os
 import sys
 import copy
+import matplotlib
 
 from pathlib import Path
 from os.path import basename, dirname
@@ -403,13 +404,9 @@ class AppWindow:
         # ----
         self._images_panel = gui.CollapsableVert("이미지 보기", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
-        self._rgb_proxy = gui.WidgetProxy()
-        self._rgb_proxy.set_widget(gui.ImageWidget())
-        self._images_panel.add_child(self._rgb_proxy)
-        self._images_panel.set_is_open(False)
-        self._diff_proxy = gui.WidgetProxy()
-        self._diff_proxy.set_widget(gui.ImageWidget())
-        self._images_panel.add_child(self._diff_proxy)
+        self._vis_img_proxy = gui.WidgetProxy()
+        self._vis_img_proxy.set_widget(gui.ImageWidget())
+        self._images_panel.add_child(self._vis_img_proxy)
         self._images_panel.set_is_open(False)
 
 
@@ -433,8 +430,7 @@ class AppWindow:
         object_select_layout.add_child(gui.Label("물체 아이디: obj_"))
         self._meshes_available = gui.NumberEdit(gui.NumberEdit.INT)
         self._meshes_available.int_value = 1
-        self._meshes_available.set_limits(1, 83)
-        # self._meshes_available.set_on_value_changed(self._on_source_id_edit)
+        self._meshes_available.set_limits(1, 200)
         object_select_layout.add_child(self._meshes_available)
         annotation_objects.add_child(object_select_layout)
 
@@ -765,13 +761,11 @@ class AppWindow:
         scene_camera_info = copy.deepcopy(self.scene_camera_info)
         se3_base_to_source[:3, :3] = np.array(scene_camera_info[str(int(self.source_image_num))]["cam_R_w2c"]).reshape(3, 3)
         se3_base_to_source[:3, 3] = np.array(scene_camera_info[str(int(self.source_image_num))]["cam_t_w2c"])
-        se3_base_to_source[:3, 3] = se3_base_to_source[:3, 3]  # !TODO: fix this at camera_info
 
 
         se3_base_to_target = np.eye(4)
         se3_base_to_target[:3, :3] = np.array(scene_camera_info[str(int(self.target_image_num))]["cam_R_w2c"]).reshape(3, 3)
         se3_base_to_target[:3, 3] = np.array(scene_camera_info[str(int(self.target_image_num))]["cam_t_w2c"])
-        se3_base_to_target[:3, 3] = se3_base_to_target[:3, 3]   # !TODO: fix this at camera_info
 
         se3_target_to_source = np.matmul(np.linalg.inv(se3_base_to_target), se3_base_to_source)
 
@@ -1065,11 +1059,11 @@ class AppWindow:
             (ocx, ocy) = ((ow-1)/2, (oh-1)/2) # put there in output (it's the exact center)
             H = translate(+ocx, +ocy) @ rotate(degrees=0) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
             M = H[0:2]
-            out = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
-            ratio = 640 / self.W
-            _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
-            _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
-            self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
+            
+            rgb_img = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            diff_img = cv2.warpAffine(self.diff_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            mask_img = cv2.warpAffine(self.mask_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            self._update_vis_img(rgb_img, diff_img, mask_img)
             return gui.Widget.EventCallbackResult.HANDLED
 
         # if no active_mesh selected print error
@@ -1357,20 +1351,21 @@ class AppWindow:
         depth_captured = np.float32(depth_captured) / self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"]
         valid_depth_mask = np.array(depth_captured > 200, dtype=bool)
 
-        rgb_vis = cv2.imread(self.rgb_path)
-        diff_vis = np.zeros_like(rgb_vis)
+        rgb_img = cv2.imread(self.rgb_path)
+        diff_vis = np.zeros_like(rgb_img)
         ########################################
         # calculate depth difference with mask #
         # depth_diff = depth_cap - depth_ren   #
         ########################################
         texts = []
-        bboxes = []
         is_oks = []
         self.H, self.W, _ = diff_vis.shape
         self.icx, self.icy = self.W / 2, self.H / 2
         self.scale_factor = 1
-        ratio = 640 / self.W
         self.depth_diff_means = {}
+        amodal_masks = []
+        bboxes = []
+        cmap = matplotlib.cm.get_cmap('gist_rainbow')
         for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
             cnd_r = obj_mask[:, :, 0] != 0
             cnd_g = obj_mask[:, :, 1] == 0
@@ -1379,18 +1374,19 @@ class AppWindow:
 
             cnd_bg = np.zeros((self.H+2, self.W+2), dtype=np.uint8)
             newVal, loDiff, upDiff = 1, 1, 0
-            cv2.floodFill(cnd_obj.copy().astype(np.uint8), cnd_bg, 
+            cnd_obj = cv2.floodFill(cnd_obj.copy().astype(np.uint8), cnd_bg, 
                                     (0,0), newVal, loDiff, upDiff)
 
             cnd_bg = cnd_bg[1:self.H+1, 1:self.W+1].astype(bool)
             cnd_obj = 1 - cnd_bg.copy() 
             valid_mask = cnd_obj.astype(bool)
+            amodal_mask = valid_mask.copy()
             valid_mask = valid_mask * copy.deepcopy(valid_depth_mask)
             # get only object depth of captured depth
             depth_captured_obj = depth_captured.copy()
             depth_captured_obj[cnd_bg] = 0
 
-            # get only object depthcd  of rendered depth
+            # get only object depth of rendered depth
             depth_rendered_obj = depth_rendered.copy()
             depth_rendered_obj[cnd_bg] = 0
 
@@ -1420,30 +1416,40 @@ class AppWindow:
             except:
                 self._on_error("물체 {}가 카메라 밖에 있거나 포인트 클라우드와 너무 멀리 떨어져 있습니다.".format(obj_name))
                 continue
-            texts.append("{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2])))
+            text = "{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2]))
+            texts.append(text)
             ys, xs = valid_mask.nonzero()
-            bb_min = [int(ratio*xs.min()), int(ratio*ys.min())]
-            bb_max = [int(ratio*xs.max()), int(ratio*ys.max())]
-            bboxes.append([bb_min[0], bb_min[1], bb_max[0] - bb_min[0], bb_max[1] - bb_min[1]])
+            bbox = [np.min(xs), np.min(ys), np.max(xs), np.max(ys)]
+
             self.depth_diff_means[obj_name] = abs(depth_diff_mean)
             ok_delta = self.ok_delta
             ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
             obj_id = int(obj_name.split("_")[1])
             if obj_id in obj_id_to_thresh_factor.keys():
                 ok_delta *= obj_id_to_thresh_factor[obj_id]
-            is_oks.append(abs(depth_diff_mean) <= ok_delta)
+            is_ok = abs(depth_diff_mean) < ok_delta
+
+            color = (0, 255, 0) if is_ok else (0, 0, 255)
+            cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+
+            is_oks.append(is_ok)
+            amodal_masks.append(amodal_mask)
+            bboxes.append(bbox)
         
-        diff_vis = cv2.resize(diff_vis.copy(), (640, int(self.H*ratio)))
-        for text, bbox, is_ok in zip(texts, bboxes, is_oks):
-            color = (0,255,0) if is_ok else (0,0,255)
-            cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[0] + bbox[2], bbox[1] + bbox[3]), color, 1)
-            cv2.putText(diff_vis, text, (bbox[0], bbox[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        rgb_vis = cv2.resize(rgb_vis.copy(), (640, int(self.H*ratio)))
-        diff_vis = cv2.addWeighted(rgb_vis, 0.8, diff_vis, 1.0, 0)
-        diff_vis = o3d.geometry.Image(cv2.cvtColor(diff_vis, cv2.COLOR_BGR2RGB))
-        self._diff_proxy.set_widget(gui.ImageWidget(diff_vis))
-        self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
-        self.window.set_needs_layout()   
+
+        # draw amodal masks
+        mask_img = rgb_img.copy()
+        for i, (amodal_mask, bbox, text) in enumerate(zip(amodal_masks, bboxes, texts)):
+            diff_vis = cv2.putText(diff_vis, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 1.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 4)
+            mask_img[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 0.6 * 255 + mask_img[amodal_mask] * 0.4
+            mask_img = cv2.putText(mask_img, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 1.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 4)
+
+        diff_img = cv2.addWeighted(rgb_img, 0.8, diff_vis, 1.0, 0)
+        self.diff_img = diff_img.copy()
+
+        self.mask_img = mask_img
+
+        self._update_vis_img(rgb_img, diff_img, mask_img)
 
     def _on_error(self, err_msg):
         dlg = gui.Dialog("Error")
@@ -1644,6 +1650,21 @@ class AppWindow:
 
         return pcd
 
+    def _update_vis_img(self, rgb_img, diff_img, mask_img):
+        
+        width = 512
+        ratio = width / self.W
+        rgb_img = cv2.resize(rgb_img, (width, int(self.H*ratio)))
+        diff_img = cv2.resize(diff_img, (width, int(self.H*ratio)))
+        mask_img = cv2.resize(mask_img, (width, int(self.H*ratio)))
+        
+        vis_img = np.vstack([rgb_img, diff_img, mask_img])
+        _vis_img = o3d.geometry.Image(cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB))
+        self._vis_img_proxy.set_widget(gui.ImageWidget(_vis_img))
+        self._log.text = "\t라벨링 검증용 이미지를 업데이트 했습니다."
+        self.window.set_needs_layout()   
+
+
     def scene_load(self, scenes_path, scene_num, image_num):
 
         self._annotation_changed = False
@@ -1697,10 +1718,10 @@ class AppWindow:
         depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img) / depth_scale / 1000
         self.H, self.W, _ = self.rgb_img.shape
-        ratio = 640 / self.W
-        _rgb_img = cv2.resize(self.rgb_img.copy(), (640, int(self.H*ratio)))
-        _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
-        self._rgb_proxy.set_widget(gui.ImageWidget(_rgb_img))
+        rgb_img = self.rgb_img.copy()
+        diff_img = np.zeros_like(rgb_img)
+        mask_img = np.zeros_like(rgb_img)
+        self._update_vis_img(rgb_img, diff_img, mask_img)
 
         geometry = o3d.io.read_point_cloud(self.pcd_path)
         if geometry is not None:
