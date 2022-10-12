@@ -41,7 +41,7 @@ class GTVisualizer():
        
         self.stopped = True
         self.width, self.height = 1920, 720
-        self.H = None
+        self.M = None
         self.max_scene_id = 1000
         self.min_scene_id = 1
         self.max_image_id = 1000
@@ -55,7 +55,8 @@ class GTVisualizer():
         self.rgb_path = None
         self.depth_path = None
         self.scale_factor = 1
-        self.angle = 15
+        self.rbtn_down = False
+
         self.icx, self.icy = self.width/2, self.height/2
         self.data_type = None
         self.black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
@@ -98,8 +99,8 @@ class GTVisualizer():
             self.is_updated = False
         elif event == cv2.EVENT_LBUTTONDOWN:
             # if self.icx == self.width/2 and self.icy == self.height/2 and self.scale_factor == 1:
-            if self.H is not None:
-                H_inv = cv2.invertAffineTransform(self.H[0:2])
+            if self.M is not None:
+                H_inv = cv2.invertAffineTransform(self.M)
                 x, y = H_inv @ np.array([x, y, 1])
                 x, y = int(x), int(y)
             # draw rectangular grid on rgb image centered at (x, y)
@@ -114,11 +115,27 @@ class GTVisualizer():
                     cv2.line(self.grid_img, (min_x, min_y+i), (max_x, min_y+i), (0, 255, 0), 1)
                     cv2.line(self.grid_img, (min_x+i, min_y), (min_x+i, max_y), (0, 255, 0), 1)
             # overlay grid image on self.frame
-            self.frame = cv2.addWeighted(self.frame_original.copy(), 1.0, self.grid_img, 1.0, 0)
+            self.is_updated = False
         elif event == cv2.EVENT_RBUTTONDOWN:
-            self.frame = self.frame_original.copy()
-            self.grid_img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-
+            if self.M is not None:
+                H_inv = cv2.invertAffineTransform(self.M)
+                x, y = H_inv @ np.array([x, y, 1])
+                x, y = int(x), int(y)
+            self.rbtn_down = True
+            self.prev_x = x
+            self.prev_y = y
+        elif event == cv2.EVENT_RBUTTONUP and self.rbtn_down:
+            if self.M is not None:
+                H_inv = cv2.invertAffineTransform(self.M)
+                x, y = H_inv @ np.array([x, y, 1])
+                x, y = int(x), int(y)
+            self.rbtn_down = False
+            # move image
+            self.icx += x - self.prev_x
+            self.icy += y - self.prev_y
+            self.is_updated = False
+        
+        
 
     def on_scene_id(self, val):
         if val < self.min_scene_id:
@@ -172,17 +189,19 @@ class GTVisualizer():
             self.image_id += 1
             self.on_image_id(self.image_id)
             self.is_img_load = False
+        elif key == ord('x'):
+            self.grid_img = np.zeros((self.height, self.width, 3), np.uint8)
+            self.is_updated = False
         
-
 
     def affine_transform(self, img):
         ow, oh = self.width, self.height
         (ocx, ocy) = ((ow-1)/2, (oh-1)/2) 
         H = translate(+ocx, +ocy) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
-        self.H = H
-        M = H[0:2]
-        img = cv2.warpAffine(img, M, (ow, oh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+        self.M = H[0:2]
+        img = cv2.warpAffine(img, self.M, (ow, oh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
         return img
+
 
     def apply_affine_transform(self, key):
         if key == ord('q'):
