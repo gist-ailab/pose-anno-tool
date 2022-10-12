@@ -1170,12 +1170,12 @@ class OurDataset(Dataset):
     ]
     _CAMERAS = [
         "좌하단",
-        "좌중단",
-        "우중단",
+        "정하단",
+        "정중단",
         "우하단",
-        "우상단",
+        "우중단",
         "정상단",
-        "좌상단",
+        "좌중단",
         "후상단",
     ]
 
@@ -1839,7 +1839,7 @@ class AppWindow:
         
         # ---- annotation tool settings ----
         self._initialize_background()
-        self._on_scene_point_size(5) # set default size to 1
+        self._on_scene_point_size(1) # set default size to 1
         # self._on_point_transparency(0)
         # self._on_object_transparency(0.5)
         self._on_hand_transparency(0.2)
@@ -3357,7 +3357,7 @@ class AppWindow:
                 y = event.y - self._scene.frame.y
                 # Note that np.asarray() reverses the axes.
                 depth_area = np.asarray(depth_image)[y-10:y+10, x-10:x+10]
-                if depth_area.min == 1.0: # clicked on nothing (i.e. the far plane)
+                if depth_area.min() == 1.0: # clicked on nothing (i.e. the far plane)
                     pass
                 
                 else:
