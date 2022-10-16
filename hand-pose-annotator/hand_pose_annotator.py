@@ -158,12 +158,11 @@ class Logger:
         msg = f"memory usage: {rss: 10.5f} MB"
         self.logger.info(msg)
         
-
 class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
     OPTIMIZE    = "F2. 가이드 기반 라벨링"
     OBJECT      = "F3. 물체 라벨링"
-
+    
 class HandModel:
     # JOINT IMG () # 180, 340
     LEFT_JOINT_IMG = {0: [91, 166], 1: [66, 148], 2: [46, 131], 3: [33, 113], 17: [125, 110], 13: [112, 99], 18: [136, 96], 5: [73, 94], 4: [14, 89], 9: [93, 88], 19: [144, 83], 14: [116, 76], 20: [153, 69], 6: [72, 67], 10: [98, 63], 15: [123, 56], 7: [71, 49], 11: [101, 44],  16: [129, 38], 8: [68, 30], 12:[105, 25]}
@@ -1007,156 +1006,6 @@ class Dataset:
             print("[WARNING] Failed to read points")
         return pcd
 
-class DexYCBSample(Dataset):
-    """Dex-YCB"""
-    _SUBJECTS = [
-        '20200709-subject-01',
-        '20200813-subject-02',
-        '20200820-subject-03',
-        '20200903-subject-04',
-        '20200908-subject-05',
-    ]
-    _SERIALS = [
-        '836212060125',
-        '839512060362',
-        '840412060917',
-        '841412060263',
-        '932122060857',
-        '932122060861',
-        '932122061900',
-        '932122062010',
-    ]
-    def __init__(self, data_root):
-        self.H, self.W = 480, 640
-        
-        # Total Data Statics
-        self._data_dir = data_root
-        self._calib_dir = os.path.join(self._data_dir, "calibration")
-        self._model_dir = os.path.join(self._data_dir, "models")
-
-        self._mano_shape_path = os.path.join(self._calib_dir, "mano_{}", 'mano.yml')
-
-        self._camera_num = 8
-        self._cameras = ["camera_{}".format(i) for i in range(1, 1+self._camera_num)]
-        self._cam2serial = {cam: self._SERIALS[i] for i , cam in enumerate(self._cameras)}
-        self._intrinsic_path = os.path.join(self._calib_dir, "intrinsics", "{}_640x480.yml")
-        self._extrinsic_path = os.path.join(self._calib_dir, "extrinsics_{}", "extrinsics.yml")
-        self._master_cam = self._cameras[3]
-
-        self._obj_path = os.path.join(self._model_dir, "obj_{:06d}.ply")
-        
-        self._total_scene = [] # list of scene, idx -> sc_name
-        self._scene_path = {} # sc_name: scene dir
-        self._scene_hand = {} # sc_name: scene hand info
-        self._scene_object = {} # sc_name: scene object info
-        self._scene_camera = {} # sc_name: scene camera info
-        self._scene_frame = {} # sc_name: scene points(merged)
-        
-        for sc_dir in [os.path.join(self._data_dir, p) for p in os.listdir(self._data_dir)]:
-            sc_name = os.path.basename(sc_dir)
-            if sc_name in ['calibration', 'models']:
-                continue
-            meta_file = os.path.join(sc_dir, "meta.yml")
-            if not os.path.isfile(meta_file):
-                continue
-            with open(meta_file, 'r') as f:
-                meta = yaml.load(f, Loader=yaml.FullLoader)
-
-            
-            # points
-            pcd_dir = os.path.join(sc_dir, self._master_cam, "pcd")
-            if not os.path.isdir(pcd_dir):
-                continue
-            
-            frame_list = [int(os.path.splitext(p)[0]) for p in os.listdir(pcd_dir)]
-            frame_list.sort()
-            self._scene_frame[sc_name] = frame_list
-            
-            # scene list
-            self._total_scene.append(sc_name)
-            
-            # scene dir
-            self._scene_path[sc_name] = sc_dir
-            
-            # hand
-            shape = Utils.load_yaml_to_dic(self._mano_shape_path.format(meta['mano_calib'][0]))['betas']
-            self._scene_hand[sc_name] = {
-                "right": shape,
-                "left": shape,
-            }
-            
-            # objects
-            self._scene_object[sc_name] = {
-                obj_id : self._obj_path.format(obj_id) for obj_id in meta['ycb_ids']
-            }
-
-            # camera 
-            extrinsics = self.get_extrinsic_from_yml(self._extrinsic_path.format(meta['extrinsics']))
-            self._scene_camera[sc_name] = {}
-            for cam in self._cameras:
-                serial = self._cam2serial[cam]
-                K = self.get_intrinsic_from_yml(self._intrinsic_path.format(serial))
-                extr = np.array(extrinsics[serial], dtype=np.float32).reshape(3, 4)
-                R = extr[:, :3]
-                t = extr[:, 3]
-                R_inv = np.linalg.inv(R)
-                t_inv = np.dot(R, -t)
-                extrinsic = np.eye(4)
-                extrinsic[:3, :3] = R
-                extrinsic[:3, 3] = t
-                self._scene_camera[sc_name][cam] = {
-                    "intrinsic": K,
-                    "extrinsics": extrinsic
-                }
-        
-        self._total_scene.sort()
-        super().__init__()
-
-    def get_scene(self, sc_name, frame_id):
-        # scene meta
-        sc_path = self._scene_path[sc_name]
-        sc_hand_shapes = self._scene_hand[sc_name] 
-        sc_objects = self._scene_object[sc_name] 
-        sc_cam_info = self._scene_camera[sc_name] 
-        sc_frame_list = self._scene_frame[sc_name] 
-        
-        # hand
-        for side, hand_model in self.hand_models.items():
-            hand_model.reset(sc_hand_shapes[side])
-        
-        # object
-        objects = {}
-        for obj_id, model_path in sc_objects.items():
-            objects[obj_id] = SceneObject(obj_id, model_path)
-
-        # camera
-        cameras = {}
-        for cam, cam_info in sc_cam_info.items():
-            cameras[cam] = Camera(cam, self._cam2serial[cam], cam_info['intrinsic'], cam_info['extrinsics'], cam)
-        
-        self.current_scene_idx = self._total_scene.index(sc_name)
-        self.current_scene_file = sc_name
-        self.current_frame_file = frame_id
-            
-        return Scene(scene_dir=sc_path, 
-                     hands=self.hand_models, 
-                     objects=objects,
-                     cameras=cameras,
-                     frame_list=sc_frame_list,
-                     current_frame=frame_id,
-                     load_pcd=self.load_point_cloud)
-        
-    @staticmethod
-    def get_intrinsic_from_yml(intrinsic_yml):
-        x = Utils.load_yaml_to_dic(intrinsic_yml)['color']
-        return np.array([[x['fx'], 0.0, x['ppx']], 
-                            [0.0, x['fy'], x['ppy']], 
-                            [0.0, 0.0, 1.0]], dtype=np.float32)
-    @staticmethod
-    def get_extrinsic_from_yml(extrinsic_yml):
-        x = Utils.load_yaml_to_dic(extrinsic_yml)['extrinsics']
-        return x
-
 class OurDataset(Dataset):
     _SERIALS = [
         '000390922112', # master
@@ -1283,13 +1132,8 @@ def load_dataset_from_file(file_path):
     scene_dir = os.path.dirname(camera_dir)
     dataset_dir = os.path.dirname(scene_dir)
     
-    if os.path.basename(dataset_dir)=='data4-source':
-        return OurDataset(dataset_dir)
-    elif os.path.basename(dataset_dir)=='dex-ycb-source':
-        return DexYCBSample(dataset_dir)
-    else:
-        raise NotImplementedError
-
+    return OurDataset(dataset_dir)
+    
 class Scene:
     
     class Frame:
@@ -3141,7 +2985,7 @@ class AppWindow:
                 error_layout[2].text = "왼손: {:.2f}".format(l_diff_mean)
                 
                 # diff_vis[depth_rendered > 0] = [255, 0, 0]
-                diff_vis = cv2.addWeighted(rgb_captured, 0.8, diff_vis, 1.0, 0)
+                diff_vis = cv2.addWeighted(rgb_captured, 0.8, diff_vis, 0.3, 0)
                 self._diff_images[cam_name] = diff_vis
             
         self.logger.debug('\tupdate error')
@@ -3433,6 +3277,7 @@ class AppWindow:
                 
             else: # rotation
                 center = self._active_object.obj_geo.get_center()
+                # rot_mat_obj_center = self._active_object.get_transform()[:3, :3]
                 rot_mat_obj_center = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
                 T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
                 R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
@@ -3964,7 +3809,6 @@ def main(logger):
 
     w = AppWindow(1920, 1080, logger)
     gui.Application.instance.run()
-
 
 if __name__ == "__main__":
     logger = Logger('hand-pose-annotator')

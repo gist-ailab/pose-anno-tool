@@ -195,11 +195,11 @@ def get_verts_to_points_tensor(meshes,
     # Use the barycentric coords to get a point on each sampled face.
     
     
-    verts_to_points[list(range(50000)), faces[sample_face_idxs[0]][:, 0]] = w0[0]
-    verts_to_points[list(range(50000)), faces[sample_face_idxs[0]][:, 1]] = w1[0]
-    verts_to_points[list(range(50000)), faces[sample_face_idxs[0]][:, 2]] = w2[0]
+    verts_to_points[list(range(num_samples)), faces[sample_face_idxs[0]][:, 0]] = w0[0]
+    verts_to_points[list(range(num_samples)), faces[sample_face_idxs[0]][:, 1]] = w1[0]
+    verts_to_points[list(range(num_samples)), faces[sample_face_idxs[0]][:, 2]] = w2[0]
 
-    return verts_to_points
+    return verts_to_points, sample_face_idxs[0]
 
 
 
