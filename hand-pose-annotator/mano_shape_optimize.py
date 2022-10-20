@@ -15,6 +15,11 @@ import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
 
+from pytorch3d.ops import sample_points_from_meshes
+from pytorch3d.loss import chamfer_distance, point_mesh_face_distance
+from pytorch3d.structures import Meshes, Pointclouds
+
+
 import numpy as np
 import cv2
 import pickle
@@ -528,21 +533,18 @@ class HandModel:
     
     def optimize_shape(self, target_points):
         self.shape_param.requires_grad = True
-        
-        # self.shape_param.grad = None
         self.optimizer.zero_grad()
-
         self.update_mano()
-        loss = self._p2p_loss(target_points)
-        print(loss)
+        loss = self._mesh_to_points_loss(target_points)
+        print("{}".format(loss))
         loss.backward()
         self.optimizer.step()
 
-        with torch.no_grad():
-        #     self.shape_param -= torch.clip(0.1*self.shape_param.grad, -0.01, 0.01)
-        #     print("loss: ", loss)
+        # with torch.no_grad():
+        # #     self.shape_param -= torch.clip(0.1*self.shape_param.grad, -0.01, 0.01)
+        # #     print("loss: ", loss)
         
-            self.update_mano()
+            # self.update_mano()
 
     def get_target(self):
         return self.targets.cpu().detach()[0, :]
@@ -556,6 +558,11 @@ class HandModel:
         assert self.optimize_state==LabelingMode.OPTIMIZE
         target_idx = self.optimize_idx[self.optimize_target]
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx].to(self.device))
+    
+    def _mesh_to_points_loss(self, target_points):
+        target_points = Pointclouds(torch.Tensor(target_points).unsqueeze(0)).to(self.device)
+        meshes = self.get_py3d_mesh().to(self.device)
+        return point_mesh_face_distance(meshes, target_points)
     
     def _p2p_loss(self, target_points):
         p1 = self._sampling_points_from_mesh()
@@ -621,7 +628,12 @@ class HandModel:
         p1 = o3d.utility.Vector3dVector(p1)
         pcd = o3d.geometry.PointCloud(points=p1)
         return pcd
-        
+    
+    def get_py3d_mesh(self):
+        verts = self.verts
+        faces = self.faces.unsqueeze(0)
+        return Meshes(verts=verts, faces=faces)
+
     def get_target_geometry(self):
         return {
             "joint": self._get_target_joints(),
@@ -683,7 +695,7 @@ class HandModel:
     def init_verts2points(self):
         max_vert = self.verts.shape[1]
         faces = self.faces
-        n = 5
+        n = 8
         verts2points = torch.zeros((faces.shape[0]*(n+1), max_vert)).to(self.device)
         # center
         for i, idx in enumerate(faces):
@@ -738,7 +750,7 @@ class Scene:
         self._label_path = file_path.replace('.ply', '.npz')
         self._pcd = self._load_point_cloud(file_path)
         self._pcd.scale(0.001, [0, 0, 0])
-        self._pcd = self._pcd.voxel_down_sample(0.003)
+        # self._pcd = self._pcd.voxel_down_sample(0.003)
         self._label = None
 
 
@@ -1799,7 +1811,7 @@ class AppWindow:
             return
         
         self.annotation_scene.save_json()
-        # self.annotation_scene.save_label()
+        self.annotation_scene.save_label()
         self._update_valid_error()
         self._update_diff_viewer()
         self._last_saved = time.time()
@@ -2518,7 +2530,7 @@ class AppWindow:
             self._on_error("활성화된 손 근처에 포인트가 부족합니다. 손을 더 맞춰주세요")
             return
         # downsampling
-        # target_pcd = target_pcd.voxel_down_sample(0.003)
+        target_pcd = target_pcd.voxel_down_sample(0.003)
         target_points = np.asarray(target_pcd.points)
         self._active_hand.optimize_shape(target_points)
         self._update_target_hand()
