@@ -11,8 +11,8 @@
 - [ ] Visualize Intersection Area
 ```
 # install requirements
-$ conda create -n pose-anno python=3.7
-$ conda activate pose-anno
+$ conda create -n pose-anno-3d python=3.7
+$ conda activate pose-anno-3d
 $ pip install numpy open3d PyYAML opencv-python==4.5.3.56 Cython
 
 # install torch - cpu

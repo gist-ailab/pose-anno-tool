@@ -771,14 +771,14 @@ class AppWindow:
         #     "right": PCAHandModel(side='right'),
         #     "left": PCAHandModel(side='left')
         # }
-        self.hand_models = {
-            "right": HandModel(side='right'),
-            "left": HandModel(side='left')
-        }
         # self.hand_models = {
-        #     "right": BetaHandModel(side='right'),
-        #     "left": BetaHandModel(side='left')
+        #     "right": HandModel(side='right'),
+        #     "left": HandModel(side='left')
         # }
+        self.hand_models = {
+            "right": BetaHandModel(side='right'),
+            "left": BetaHandModel(side='left')
+        }
         
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
@@ -800,7 +800,7 @@ class AppWindow:
         self._init_viewctrl_layout()
         self._init_handedit_layout()
         self._init_stageedit_layout()
-        # self._init_parameter_edit_layout()
+        self._init_parameter_edit_layout()
 
         # 3D Annotation tool options
         w.add_child(self._scene)
