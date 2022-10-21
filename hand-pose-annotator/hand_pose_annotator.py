@@ -1247,7 +1247,7 @@ class OurDataset(Dataset):
                 extr = self.get_extrinsic_from_dic(cam_calib[serial])
                 extrinsic = np.eye(4)
                 R = extr[:3, :3]
-                t = extr[:3, 3] / 1e3
+                t = extr[:3, 3] / 1e3 # convert to meter
                 extrinsic[:3, :3] = R
                 extrinsic[:3, 3] = t
                 self._scene_camera[sc_name][cam] = {
@@ -1480,14 +1480,14 @@ class Scene:
             for side, hand_model in self._hands.items():
                 val = ai_label[side]
                 mano_pose = np.array(val['mano_pose']).reshape(-1)
-                # pred_info = all_pred['{}_hand'.format(side)]
-                wrist_pos = np.array(val['wrist_pos'])/1000
-                # wrist_pos = pred_info['pred_joints_smpl'][0]*pred_info['pred_camera'][0]
+                wrist_pos = np.array(val['wrist_pos'])
                 wrist_ori = np.array(val['wrist_ori'])
-                # wrist_ori = np.array([wrist_ori[1], wrist_ori[2], wrist_ori[0]]) # 5, 4
-                # wrist_ori = np.matmul(R, wrist_ori)
                 mano_pose = np.concatenate((wrist_ori, mano_pose))
-                # self._hands[side].set_joint_pose(mano_pose)
+                
+                hand_model.set_state(
+                    {'pose_param': mano_pose,
+                     'root_trans': wrist_pos})
+                
                 hand_model.set_root_position(wrist_pos)
             print("Success to Load AI Label")
             return True
