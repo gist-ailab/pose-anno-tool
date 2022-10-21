@@ -11,6 +11,7 @@ import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 import logging
 import atexit
+import matplotlib as mpl
 
 import torch
 from manopth.manolayer import ManoLayer
@@ -2048,7 +2049,7 @@ class AppWindow:
         filedlg.set_on_done(self._on_filedlg_done)
         #TODO:
         if os.name=='nt' and os.getlogin()=='GIST':
-            filedlg.set_path('D:\OccludedObjectDataset\data4\data4-source')
+            filedlg.set_path('D:\OccludedObjectDataset\data4')
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -3142,7 +3143,11 @@ class AppWindow:
             self._diff_proxy.set_widget(gui.ImageWidget())
             return
         current_cam = self._cam_name_list[self._camera_idx]
-        diff_img = self._generate_valid_image(current_cam, only_transparency)
+        try:
+            diff_img = self._generate_valid_image(current_cam, only_transparency)
+        except:
+            self._on_error('이미지 생성 실패')
+            return
         self.diff_img = diff_img
         if diff_img is not None:
             self._diff_proxy.set_widget(gui.ImageWidget(self._img_wrapper(diff_img)))
@@ -3225,11 +3230,9 @@ class AppWindow:
 
                 # calculate diff
                 depth_diff = depth_captured - depth_rendered
+                depth_diff = np.clip(depth_diff, -300, 300)
                 depth_diff_abs = np.abs(np.copy(depth_diff))
-                inlier_mask = depth_diff_abs < 500
-
-                high_error_mask = np.bitwise_and(hand_object_mask, np.bitwise_and(inlier_mask, depth_diff_abs > 10))
-                diff_vis[high_error_mask] = [0, 0, 255]
+                inlier_mask = depth_diff_abs < 300 # consider only 300mm under error
 
                 # object
                 object_valid_mask = valid_mask * object_mask * inlier_mask
@@ -3266,7 +3269,7 @@ class AppWindow:
                     "right_hand_mask": right_hand_mask,
                     "left_hand_mask": left_hand_mask,
                     "object_mask": object_mask,
-                    "high_error_mask": high_error_mask,
+                    "depth_diff": depth_diff,
                 }
 
         self.logger.debug('\tupdate error')
@@ -3322,35 +3325,52 @@ class AppWindow:
         self.window.set_needs_layout()
         self.logger.debug('End _update_valid_error')
     def _generate_valid_image(self, cam_name, only_transparency):
+        def color_map(mask_type):
+            if mask_type == 'right_hand':
+                c = mpl.colormaps['Set1'](0)[:3][::-1]
+            elif mask_type == 'left_hand':
+                c = mpl.colormaps['Set1'](1)[:3][::-1]
+            elif mask_type == 'object':
+                c = mpl.colormaps['Set1'](2)[:3][::-1]
+            else:
+                c = [0, 0, 0]
+            return np.uint8(np.array(c) * 255)
+                
         mode = self._mask_mode.selected_text
         cam_mask_dict = self._diff_images[cam_name]
         rgb_captured = cam_mask_dict['rgb_captured']
         right_hand_mask = cam_mask_dict['right_hand_mask']
         left_hand_mask = cam_mask_dict['left_hand_mask']
         object_mask = cam_mask_dict['object_mask']
-        high_error_mask = cam_mask_dict['high_error_mask']
+        depth_diff = cam_mask_dict['depth_diff'].copy()
+        abs_depth_diff = np.abs(depth_diff)
+        
         if not only_transparency or (self._cur_diff_mask is None):
             diff_vis = np.zeros_like(rgb_captured)
+            high_error_mask = np.bitwise_and(abs_depth_diff>5, abs_depth_diff<300) # 5 ~ 300 mm error
             if mode == MaskMode.RGB_ALL or mode == MaskMode.MASK_ALL:
-                diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
-                diff_vis[left_hand_mask] = [0, 255, 0] # BGR
-                diff_vis[object_mask] = [0, 180, 180]
-                diff_vis[high_error_mask] = [0, 0, 255]
+                diff_vis[right_hand_mask] = color_map('right_hand')
+                diff_vis[left_hand_mask] = color_map('left_hand')
+                diff_vis[object_mask] = color_map('object')
             elif mode == MaskMode.RGB_RIGHT or mode == MaskMode.MASK_RIGHT:
-                diff_vis[right_hand_mask] = [255, 0, 0] #BGR 
-                high_error_mask = np.bitwise_and(right_hand_mask, high_error_mask)
-                diff_vis[high_error_mask] = [0, 0, 255]
+                diff_vis[right_hand_mask] = color_map('right_hand')
+                high_error_mask = np.bitwise_and(high_error_mask, right_hand_mask)
             elif mode == MaskMode.RGB_LEFT or mode == MaskMode.MASK_LEFT:
-                diff_vis[left_hand_mask] = [0, 255, 0] #BGR 
-                high_error_mask = np.bitwise_and(left_hand_mask, high_error_mask)
-                diff_vis[high_error_mask] = [0, 0, 255]
+                diff_vis[left_hand_mask] = color_map('left_hand')
+                high_error_mask = np.bitwise_and(high_error_mask, left_hand_mask)
             else:
-                diff_vis[object_mask] = [0, 180, 180] #BGR 
-                high_error_mask = np.bitwise_and(object_mask, high_error_mask)
-                diff_vis[high_error_mask] = [0, 0, 255]
+                diff_vis[object_mask] = color_map('object')
+                high_error_mask = np.bitwise_and(high_error_mask, object_mask)
+            
+            depth_diff_vis = np.zeros_like(rgb_captured)
+            depth_diff_vis[depth_diff>0] = [0, 0, 255]
+            depth_diff_vis[depth_diff<0] = [255, 0, 0]
+            diff_vis[high_error_mask] = depth_diff_vis[high_error_mask]
             self._cur_diff_mask = diff_vis.copy()
         else:
             diff_vis = self._cur_diff_mask.copy()
+
+        
         if "RGB" in mode:
             val = self._rgb_transparency.double_value
             diff_vis = cv2.addWeighted(rgb_captured, val, diff_vis, 1-val, 0)
