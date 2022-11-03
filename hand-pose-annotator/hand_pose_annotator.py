@@ -39,92 +39,92 @@ MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
 temp_side_info = {
-4:	['left'],
-5:	['right'],
-6:	['right'],
-7:	['right'],
-9:	['left'],
-10:	['left'],
-11:	['left'],
-14:	['right'],
-15:	['right'],
-16:	['right'],
-18:	['left'],
-22:	['right'],
-23:	['right'],
-24:	['right'],
-25:	['left'],
-26:	['left'],
-27:	['left'],
-28:	['left'],
-29:	['left'],
-30:	['left'],
-31:	['left'],
-32:	['left'],
-33:	['left'],
-34:	['left'],
-35:	['left'],
-36:	['left'],
-37:	['right'],
-38:	['right'],
-39:	['right'],
-40:	['right'],
-41:	['right'],
-42:	['right'],
-43:	['right'],
-44:	['right'],
-45:	['right'],
-46:	['right'],
-47:	['right'],
-48:	['right'],
-49:	['left'],
-50:	['left'],
-51:	['left'],
-52:	['left'],
-53:	['left'],
-54:	['left'],
-55:	['left'],
-56:	['left'],
-57:	['left'],
-58:	['left'],
-59:	['left'],
-60:	['left'],
-61:	['right'],
-62:	['right'],
-63:	['right'],
-64:	['right'],
-65:	['right'],
-66:	['right'],
-67:	['right'],
-68:	['right'],
-69:	['right'],
-70:	['right'],
-71:	['right'],
-72:	['right'],
-73:	['left'],
-74:	['left'],
-75:	['left'],
-76:	['left'],
-77:	['left'],
-78:	['left'],
-79:	['left'],
-80:	['left'],
-81:	['left'],
-82:	['left'],
-83:	['left'],
-84:	['left'],
-85:	['right'],
-86:	['right'],
-87:	['right'],
-88:	['right'],
-89:	['right'],
-90:	['right'],
-91:	['right'],
-92:	['right'],
-93:	['right'],
-94:	['right'],
-95:	['right'],
-96:	['right'],
+    4:	['left'],
+    5:	['right'],
+    6:	['right'],
+    7:	['right'],
+    9:	['left'],
+    10:	['left'],
+    11:	['left'],
+    14:	['right'],
+    15:	['right'],
+    16:	['right'],
+    18:	['left'],
+    22:	['right'],
+    23:	['right'],
+    24:	['right'],
+    25:	['left'],
+    26:	['left'],
+    27:	['left'],
+    28:	['left'],
+    29:	['left'],
+    30:	['left'],
+    31:	['left'],
+    32:	['left'],
+    33:	['left'],
+    34:	['left'],
+    35:	['left'],
+    36:	['left'],
+    37:	['right'],
+    38:	['right'],
+    39:	['right'],
+    40:	['right'],
+    41:	['right'],
+    42:	['right'],
+    43:	['right'],
+    44:	['right'],
+    45:	['right'],
+    46:	['right'],
+    47:	['right'],
+    48:	['right'],
+    49:	['left'],
+    50:	['left'],
+    51:	['left'],
+    52:	['left'],
+    53:	['left'],
+    54:	['left'],
+    55:	['left'],
+    56:	['left'],
+    57:	['left'],
+    58:	['left'],
+    59:	['left'],
+    60:	['left'],
+    61:	['right'],
+    62:	['right'],
+    63:	['right'],
+    64:	['right'],
+    65:	['right'],
+    66:	['right'],
+    67:	['right'],
+    68:	['right'],
+    69:	['right'],
+    70:	['right'],
+    71:	['right'],
+    72:	['right'],
+    73:	['left'],
+    74:	['left'],
+    75:	['left'],
+    76:	['left'],
+    77:	['left'],
+    78:	['left'],
+    79:	['left'],
+    80:	['left'],
+    81:	['left'],
+    82:	['left'],
+    83:	['left'],
+    84:	['left'],
+    85:	['right'],
+    86:	['right'],
+    87:	['right'],
+    88:	['right'],
+    89:	['right'],
+    90:	['right'],
+    91:	['right'],
+    92:	['right'],
+    93:	['right'],
+    94:	['right'],
+    95:	['right'],
+    96:	['right'],
 }
 
 
@@ -983,6 +983,7 @@ class SceneObject:
             mesh.scale(0.001, [0, 0, 0])
         mesh.translate(-mesh.get_center())
         return mesh
+    
     def set_transform(self, H):
         self.reset()
         self.transform(H)
@@ -1528,7 +1529,7 @@ class Scene:
         try:
             obj_label = dict(np.load(npz_file))
             for obj_id, label in obj_label.items():
-                self._objects[int(obj_id)].load_label(label)
+                self._objects[int(obj_id)].set_transform(label)
             return True
         except:
             return False
@@ -1545,7 +1546,7 @@ class Scene:
             for side, hand_model in self._hands.items():
                 hand_model.set_state(hand_states[side], only_pose=True)
             for obj_id, label in self._obj_previous_label.items():
-                self._objects[int(obj_id)].load_label(label)
+                self._objects[int(obj_id)].set_transform(label)
             return True
         except:
             return False
@@ -2048,8 +2049,8 @@ class AppWindow:
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         #TODO:
-        if os.name=='nt' and os.getlogin()=='GIST':
-            filedlg.set_path('D:\OccludedObjectDataset\data4')
+        if os.name=='nt' and os.getlogin()=='raeyo':
+            filedlg.set_path('C:\data4')
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2776,7 +2777,7 @@ class AppWindow:
         label_control_layout.add_child(button)
         
         button = gui.Button("이전 이미지 라벨 불러오기")
-        button.set_on_clicked(self._on_load_previous_label)
+        button.set_on_clicked(self._on_load_label_button)
         label_control_layout.add_child(button)
         self._settings_panel.add_child(label_control_layout)
 
@@ -2804,11 +2805,46 @@ class AppWindow:
         if ret:
             self._log.text = "\t이전 라벨링 결과를 불러왔습니다."
             self._init_hand_layer()
+            self._init_obj_layer()
             self._annotation_changed = False
         else:
             self._on_error("저장된 라벨이 없습니다. (error at _on_load_previous_label)")
             return
-    
+    def _on_load_label_button(self):
+        self.logger.debug('_on_load_label_button')
+        if not self._check_annotation_scene():
+            return
+        filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
+                                self.window.theme)
+        filedlg.add_filter(".npz", "라벨")
+        filedlg.set_on_cancel(self._on_load_label_cancel)
+        filedlg.set_on_done(self._on_load_label_done)
+        self.window.show_dialog(filedlg)
+    def _on_load_label_cancel(self):
+        self.logger.debug('_on_load_label_cancel')
+        self.window.close_dialog()
+    def _on_load_label_done(self, file_path):
+        self.logger.debug('_on_load_label_done')
+        self._log.text = "\t라벨링 결과를 불러오는 중입니다."
+        self.window.set_needs_layout()
+        if 'hand' in file_path:
+            ret = self.annotation_scene._load_hand_label(file_path)
+        elif 'obj' in file_path:
+            ret = self.annotation_scene._load_obj_label(file_path)
+        else:
+            ret = False
+        if ret:
+            self._log.text = "\t이전 라벨링 결과를 불러왔습니다."
+            self._init_hand_layer()
+            self._init_obj_layer()
+            self._on_save_label()
+            self.window.close_dialog()
+            self._log.text = "\t 라벨링 대상 파일을 불러왔습니다."
+        else:
+            self._on_error("저장된 라벨이 없습니다. (error at _on_load_label_done)")
+            self._log.text = "\t 올바른 파일 경로를 선택하세요."
+
+
     def _init_preset_layout(self):
         self.logger.debug('_init_preset_layout')
         em = self.window.theme.font_size
