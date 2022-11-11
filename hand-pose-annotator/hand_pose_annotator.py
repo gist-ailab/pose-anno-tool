@@ -2049,6 +2049,7 @@ class AppWindow:
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         #TODO:
+        filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
         if os.name=='nt' and os.getlogin()=='raeyo':
             filedlg.set_path('C:\data4')
         self.window.show_dialog(filedlg)
@@ -2079,7 +2080,6 @@ class AppWindow:
             if self.annotation_scene is None:
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
             else:
-                del self.annotation_scene
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
             self._init_cam_name()
             self._load_scene()
