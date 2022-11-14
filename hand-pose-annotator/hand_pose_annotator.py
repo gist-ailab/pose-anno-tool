@@ -13,11 +13,14 @@ import logging
 import atexit
 import matplotlib as mpl
 
+from typing import List, NamedTuple, Optional, TYPE_CHECKING, Union
+
 import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
 
-from pytorch3d.ops import sample_points_from_meshes
+from pytorch3d.ops import sample_points_from_meshes, knn_points
+from pytorch3d.ops import utils as oputil
 from pytorch3d.loss import chamfer_distance, point_mesh_face_distance
 from pytorch3d.structures import Meshes, Pointclouds
 
@@ -211,6 +214,16 @@ class Utils:
         p1 = Pointclouds(torch.Tensor(p1).unsqueeze(0))
         p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
         return chamfer_distance(p1, p2)[0]
+
+    def closest_point_loss(p1, p2):
+        p1 = Pointclouds(torch.Tensor(p1).unsqueeze(0))
+        p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
+        Xt, num_points_X = oputil.convert_pointclouds_to_tensor(p1)
+        Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(p2)
+        knn = knn_points(
+                Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
+            )
+        return torch.mean(knn.dists)
 
 class Logger:
     def __init__(self, name):
@@ -2049,9 +2062,8 @@ class AppWindow:
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         #TODO:
-        filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
         if os.name=='nt' and os.getlogin()=='raeyo':
-            filedlg.set_path('C:\data4')
+            filedlg.set_path('D:\Workspace\data4-source')
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2429,12 +2441,11 @@ class AppWindow:
             elif self._active_object_idx>=0:
                 self._active_object_idx = (self._active_object_idx+1)%len(self._object_names)
             self._deactivate_hand()
-        # elif self._labeling_mode==LabelingMode.MESH:
-        #     self._active_type = 'mesh'
-        #     self._active_object_idx = -1
-        #     self._active_object = None
-        #     self._deactivate_hand()
-        #     self._active_hand.set_optimize_state(labeling_mode)
+            for obj_id, obj in self._objects.items():
+                obj_name = "obj_{}".format(obj_id)
+                if obj_name == self._object_names[self._active_object_idx]:
+                    self._active_object = obj
+       
         else:
             self._active_type = 'hand'
             self._active_object_idx = -1
@@ -3424,14 +3435,16 @@ class AppWindow:
         pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
         for obj_id, obj_model in self._objects.items():
             pcd += obj_model.get_geometry()
+        target_pcd = self._pcd
         target_pcd = self._pcd.crop(pcd.get_oriented_bounding_box())
         if len(target_pcd.points) > 0:
             target_pcd = target_pcd.voxel_down_sample(voxel_size=0.003)
             targets = np.asarray(target_pcd.points)
             points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
-            error = Utils.calc_chamfer_distance(points, targets)*10e3
+            # error = Utils.calc_chamfer_distance(points, targets)*1e6
+            error = Utils.closest_point_loss(targets, points)*1e6
             self._total_pc_error_txt.text = "포인트 에러: {:.6f}".format(error)
-            if error < 1:
+            if error < 50:
                 self._total_pc_error_txt.text_color = gui.Color(0, 1, 0)
             else:
                 self._total_pc_error_txt.text_color = gui.Color(1, 0, 0)
@@ -3898,7 +3911,6 @@ class AppWindow:
                 obj_name = "obj_{}".format(obj_id)
                 if obj_name == self._active_object_name:
                     mat = self.settings.active_obj_material
-                    self._active_object = obj
                 else:
                     mat = self.settings.obj_material
                 self._add_geometry(obj_name, obj.get_geometry(), mat)
