@@ -130,8 +130,6 @@ temp_side_info = {
     96:	['right'],
 }
 
-
-
 class Utils:
     # file
     def get_file_list(path):
@@ -216,6 +214,14 @@ class Utils:
         return chamfer_distance(p1, p2)[0]
 
     def closest_point_loss(p1, p2):
+        np.random.seed(0)
+        if p1.shape[0] > 1e4:
+            p1_idx = np.random.choice(p1.shape[0], 10000, replace=False)
+            p1 = p1[p1_idx]
+        if p2.shape[0] > 1e4:
+            p2_idx = np.random.choice(p2.shape[0], 10000, replace=False)
+            p2 = p2[p2_idx]
+
         p1 = Pointclouds(torch.Tensor(p1).unsqueeze(0))
         p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
         Xt, num_points_X = oputil.convert_pointclouds_to_tensor(p1)
@@ -223,7 +229,9 @@ class Utils:
         knn = knn_points(
                 Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
             )
-        return torch.mean(knn.dists)
+        dist = knn.dists[0]
+        # dist = dist[dist<0.0005]
+        return torch.mean(dist)
 
 class Logger:
     def __init__(self, name):
@@ -3027,7 +3035,9 @@ class AppWindow:
         show_error_layout.add_child(h)
         self._total_error_txt = (right_error_txt, left_error_txt, obj_error_txt)
         h = gui.Horiz(0.4 * em)
-        self._total_pc_error_txt = gui.Label("포인트 에러: 준비 안됨")
+        self._obj_pc_error_txt = gui.Label("물체 포인트 에러: 준비 안됨")
+        self._right_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
+        self._left_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
         h.add_child(self._total_pc_error_txt)
         
         button = gui.Button("에러 업데이트")
