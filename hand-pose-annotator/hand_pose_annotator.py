@@ -978,7 +978,7 @@ class SceneObject:
     def _load_mesh(self):
         mesh = o3d.io.read_triangle_mesh(self.model_path)
         if len(mesh.triangles)==0:
-            mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(self.obj_geo)[0]
+            mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(self.obj_geo, n_threads=4)[0]
         else:
             mesh.scale(0.001, [0, 0, 0])
         mesh.translate(-mesh.get_center())
@@ -2049,9 +2049,11 @@ class AppWindow:
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
         #TODO:
-        filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
         if os.name=='nt' and os.getlogin()=='raeyo':
             filedlg.set_path('C:\data4')
+        elif os.name=='posix' and os.getlogin()=='raeyo':
+            filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
+            
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
