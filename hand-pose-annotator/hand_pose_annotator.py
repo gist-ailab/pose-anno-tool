@@ -2736,7 +2736,9 @@ class AppWindow:
         self._init_hand_layer()
         self._on_change_camera_merge()
         self._update_valid_error(calculate=True)
-        self._update_pc_error()
+        self._update_obj_pc_error()
+        self._update_lhand_pc_error()
+        self._update_rhand_pc_error()
     def _update_progress_str(self):
         self.logger.debug('_update_progress_str')
         self._current_file_pg.text = self.annotation_scene.get_progress()
@@ -3037,15 +3039,31 @@ class AppWindow:
 
         show_error_layout.add_child(h)
         self._total_error_txt = (right_error_txt, left_error_txt, obj_error_txt)
+
         h = gui.Horiz(0.4 * em)
         self._obj_pc_error_txt = gui.Label("물체 포인트 에러: 준비 안됨")
-        self._right_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
-        self._left_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
-        h.add_child(self._total_pc_error_txt)
-        
+        h.add_child(self._obj_pc_error_txt)
         button = gui.Button("에러 업데이트")
         button.vertical_padding_em = 0.1
-        button.set_on_clicked(self._on_update_pc_error)
+        button.set_on_clicked(self._on_update_obj_pc_error)
+        h.add_child(button)
+        show_error_layout.add_child(h)
+        
+        h = gui.Horiz(0.4 * em)
+        self._rhand_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
+        h.add_child(self._rhand_pc_error_txt)
+        button = gui.Button("에러 업데이트")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_rhand_pc_error)
+        h.add_child(button)
+        show_error_layout.add_child(h)
+        
+        h = gui.Horiz(0.4 * em)
+        self._lhand_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
+        h.add_child(self._lhand_pc_error_txt)
+        button = gui.Button("에러 업데이트")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_lhand_pc_error)
         h.add_child(button)
         show_error_layout.add_child(h)
         
@@ -3182,8 +3200,12 @@ class AppWindow:
             return 
         self._update_valid_error(calculate=True)
         self._update_diff_viewer()
-    def _on_update_pc_error(self):
-        self._update_pc_error()
+    def _on_update_obj_pc_error(self):
+        self._update_obj_pc_error()
+    def _on_update_rhand_pc_error(self):
+        self._update_rhand_pc_error()
+    def _on_update_lhand_pc_error(self):
+        self._update_lhand_pc_error()
         
     def _init_cam_name(self):
         self.logger.debug('_init_cam_name')
@@ -3440,12 +3462,9 @@ class AppWindow:
             diff_vis = cv2.addWeighted(rgb_captured, val, diff_vis, 1-val, 0)
         return diff_vis
             
-    def _update_pc_error(self):
+    def _update_obj_pc_error(self):
         # update point cloud error
-        points = []
-        for side in self._hand_names:
-            points.append(self._hands[side].get_mesh_points())
-        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
+        pcd = o3d.geometry.PointCloud()
         for obj_id, obj_model in self._objects.items():
             pcd += obj_model.get_geometry()
         target_pcd = self._pcd
@@ -3456,13 +3475,64 @@ class AppWindow:
             points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
             # error = Utils.calc_chamfer_distance(points, targets)*1e6
             error = Utils.closest_point_loss(targets, points)*1e6
-            self._total_pc_error_txt.text = "포인트 에러: {:.6f}".format(error)
+            self._obj_pc_error_txt.text = "물체 포인트 에러: {:.6f}".format(error)
             if error < 50:
-                self._total_pc_error_txt.text_color = gui.Color(0, 1, 0)
+                self._obj_pc_error_txt.text_color = gui.Color(0, 1, 0)
             else:
-                self._total_pc_error_txt.text_color = gui.Color(1, 0, 0)
+                self._obj_pc_error_txt.text_color = gui.Color(1, 0, 0)
         else:
-            self._total_pc_error_txt.text = "포인트 에러: 근처 포인트가 없음"
+            self._obj_pc_error_txt.text = "물체 포인트 에러: 근처 포인트가 없음"
+    def _update_rhand_pc_error(self):
+        # update point cloud error
+        points = []
+        for side in self._hand_names:
+            if side != 'right': continue
+            points.append(self._hands[side].get_mesh_points())
+        if len(points) > 0:
+            pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
+            target_pcd = self._pcd
+            target_pcd = self._pcd.crop(pcd.get_oriented_bounding_box())
+            if len(target_pcd.points) > 0:
+                target_pcd = target_pcd.voxel_down_sample(voxel_size=0.003)
+                targets = np.asarray(target_pcd.points)
+                points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
+                # error = Utils.calc_chamfer_distance(points, targets)*1e6
+                error = Utils.closest_point_loss(points, targets)*1e6
+                self._rhand_pc_error_txt.text = "오른손 포인트 에러: {:.6f}".format(error)
+                if error < 50:
+                    self._rhand_pc_error_txt.text_color = gui.Color(0, 1, 0)
+                else:
+                    self._rhand_pc_error_txt.text_color = gui.Color(1, 0, 0)
+            else:
+                self._rhand_pc_error_txt.text = "오른손 포인트 에러: 근처 포인트가 없음"
+        else:
+            self._rhand_pc_error_txt.text = "오른손 포인트 에러: 준비 안됨"
+    
+    def _update_lhand_pc_error(self):
+        # update point cloud error
+        points = []
+        for side in self._hand_names:
+            if side != 'left': continue
+            points.append(self._hands[side].get_mesh_points())
+        if len(points) > 0:
+            pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
+            target_pcd = self._pcd
+            target_pcd = self._pcd.crop(pcd.get_oriented_bounding_box())
+            if len(target_pcd.points) > 0:
+                target_pcd = target_pcd.voxel_down_sample(voxel_size=0.003)
+                targets = np.asarray(target_pcd.points)
+                points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
+                # error = Utils.calc_chamfer_distance(points, targets)*1e6
+                error = Utils.closest_point_loss(points, targets)*1e6
+                self._lhand_pc_error_txt.text = "왼손 포인트 에러: {:.6f}".format(error)
+                if error < 50:
+                    self._lhand_pc_error_txt.text_color = gui.Color(0, 1, 0)
+                else:
+                    self._lhand_pc_error_txt.text_color = gui.Color(1, 0, 0)
+            else:
+                self._lhand_pc_error_txt.text = "왼손 포인트 에러: 근처 포인트가 없음"
+        else:
+            self._lhand_pc_error_txt.text = "왼손 포인트 에러: 준비 안됨"
     
     def _img_wrapper(self, img):
         self.logger.debug('_img_wrapper')
@@ -4149,7 +4219,8 @@ class AppWindow:
         # update error
         if event.key == gui.KeyName.SLASH and (event.type==gui.KeyEvent.DOWN):
             self._update_valid_error(calculate=True)
-            self._update_pc_error()
+            self._update_obj_pc_error()
+            self._update_hand_pc_error()
             return gui.Widget.EventCallbackResult.HANDLED
         
         # activate autosave
