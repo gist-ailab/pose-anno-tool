@@ -4220,7 +4220,8 @@ class AppWindow:
         if event.key == gui.KeyName.SLASH and (event.type==gui.KeyEvent.DOWN):
             self._update_valid_error(calculate=True)
             self._update_obj_pc_error()
-            self._update_hand_pc_error()
+            self._update_rhand_pc_error()
+            self._update_lhand_pc_error()
             return gui.Widget.EventCallbackResult.HANDLED
         
         # activate autosave
