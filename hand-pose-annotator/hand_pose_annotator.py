@@ -1511,7 +1511,7 @@ class Scene:
                     {'pose_param': mano_pose,
                      'root_trans': wrist_pos})
                 
-                hand_model.set_root_position(wrist_pos)
+                # hand_model.set_root_position(wrist_pos)
             print("Success to Load AI Label")
             return True
         except:
