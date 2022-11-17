@@ -3463,6 +3463,8 @@ class AppWindow:
         return diff_vis
             
     def _update_obj_pc_error(self):
+        if not self._check_annotation_scene():
+            return
         # update point cloud error
         pcd = o3d.geometry.PointCloud()
         for obj_id, obj_model in self._objects.items():
@@ -3483,6 +3485,8 @@ class AppWindow:
         else:
             self._obj_pc_error_txt.text = "물체 포인트 에러: 근처 포인트가 없음"
     def _update_rhand_pc_error(self):
+        if not self._check_annotation_scene():
+            return
         # update point cloud error
         points = []
         for side in self._hand_names:
@@ -3507,8 +3511,9 @@ class AppWindow:
                 self._rhand_pc_error_txt.text = "오른손 포인트 에러: 근처 포인트가 없음"
         else:
             self._rhand_pc_error_txt.text = "오른손 포인트 에러: 준비 안됨"
-    
     def _update_lhand_pc_error(self):
+        if not self._check_annotation_scene():
+            return
         # update point cloud error
         points = []
         for side in self._hand_names:
