@@ -1003,6 +1003,7 @@ class SceneObject:
     def __init__(self, obj_id, model_path):
         self.id = obj_id
         self.model_path = model_path
+        self.mesh_path = self.model_path.replace("object", "mesh")
         self.obj_geo = self._load_point_cloud()
         self.obj_mesh = self._load_mesh()
         self.H = np.eye(4)
@@ -1024,11 +1025,8 @@ class SceneObject:
         return pcd
     
     def _load_mesh(self):
-        mesh = o3d.io.read_triangle_mesh(self.model_path)
-        if len(mesh.triangles)==0:
-            mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(self.obj_geo, n_threads=4)[0]
-        else:
-            mesh.scale(0.001, [0, 0, 0])
+        mesh = o3d.io.read_triangle_mesh(self.mesh_path)
+        mesh.scale(0.001, [0, 0, 0])
         mesh.translate(-mesh.get_center())
         return mesh
     
