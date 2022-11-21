@@ -213,7 +213,7 @@ class Utils:
         p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
         return chamfer_distance(p1, p2)[0]
 
-    def closest_point_loss(p1, p2):
+    def closest_point_error(p1, p2):
         np.random.seed(0)
         if p1.shape[0] > 1e4:
             p1_idx = np.random.choice(p1.shape[0], 10000, replace=False)
@@ -232,6 +232,18 @@ class Utils:
         dist = knn.dists[0]
         # dist = dist[dist<0.0005]
         return torch.mean(dist)
+    def closest_point_loss(X: Union[torch.Tensor, "Pointclouds"],
+                       Y: Union[torch.Tensor, "Pointclouds"],
+                       relative_rmse_thr: float = 1e-6):
+        Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+        Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(Y)
+
+        b, size_X, dim = Xt.shape
+        
+        knn = knn_points(
+                Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
+            )
+        return torch.sum(knn.dists)
 
 class Logger:
     def __init__(self, name):
@@ -284,7 +296,7 @@ class LabelingMode:
     STATIC      = "F1. 직접 움직여 라벨링"
     OPTIMIZE    = "F2. 가이드 기반 라벨링"
     OBJECT      = "F3. 물체 라벨링"
-    # MESH        = "F4. 메쉬 라벨링"
+    AUTO        = "F4. 자동 라벨링"
 
 class MaskMode:
     RGB_ALL     = "RGB 전체"
@@ -584,10 +596,10 @@ class HandModel:
             self.optimize_idx = self._IDX_OF_GUIDE
             self.set_optimize_target('root')
             self.update_mano()
-        # elif self.optimize_state==LabelingMode.MESH:
-        #     self.optimize_idx = self._IDX_OF_GUIDE
-        #     self.set_optimize_target('whole')
-        #     self.update_mano()
+        elif self.optimize_state==LabelingMode.AUTO:
+            self.optimize_idx = self._IDX_OF_GUIDE
+            self.set_optimize_target('whole')
+            self.update_mano()
         elif self.optimize_state==LabelingMode.STATIC:
             self.optimize_idx = self._IDX_OF_HANDS
             self.set_optimize_target('root')
@@ -604,10 +616,10 @@ class HandModel:
         for param in self.joint_rot:
             param.requires_grad = False
         if self.optimize_target=='whole':
-            self.root_trans.requires_grad = True
+            self.root_trans.requires_grad = False
             for param in self.joint_rot:
                 param.requires_grad = True
-            self.optimizer = optim.Adam([self.root_trans, *self.joint_rot], lr=0.005)
+            self.optimizer = optim.Adam(self.joint_rot, lr=0.005)
             return
         if self.optimize_target=='root':
             self.joint_rot[0].requires_grad = True
@@ -707,6 +719,20 @@ class HandModel:
         pose_param = torch.concat([self.root_trans, *self.joint_rot], dim=1) # 1, 51, 3
         pose = np.array(pose_param.cpu().detach()[0, :])
         return pose.tolist()
+    def set_hand_pose(self, pose_param):
+        pose_param = pose_param.clone().detach()
+        root_grad = self.root_trans.requires_grad
+        joint_grad = [param.requires_grad for param in self.joint_rot]
+        
+        self.root_trans = pose_param[:, :3]
+        self.root_trans.requires_grad = root_grad
+        
+        self.joint_rot = [pose_param[:, 3*i:3*(i+1)] for i in range(1, 17)]
+        for param, grad in zip(self.joint_rot, joint_grad):
+            param.requires_grad = grad
+        self.update_mano()
+        
+        
     def get_hand_shape(self):
         shape = np.array(self.shape_param.cpu().detach()[0, :])
         return shape.tolist()
@@ -736,18 +762,20 @@ class HandModel:
         else:
             return False
     
-    def optimize_to_points(self, target_points):
+    def optimize_to_points(self, target_points, loop=100):
         if self.optimize_target=='root':
             return False
         if self._can_be_move:
-            self.optimizer.zero_grad()
-            # forward
-            self.update_mano()
-            # loss term
-            loss = self._mesh_to_points_loss(target_points, only_activate=True)
-            loss.backward()
-            self._check_lock_state()
-            self.optimizer.step()
+            for i in range(loop):
+                self.optimizer.zero_grad()
+                # forward
+                self.update_mano()
+                # loss term
+                loss = self._mesh_to_points_loss(target_points)
+                loss.backward()
+                print("[{}/{}] loss: {}".format(i, loop, loss.item()))
+                self._check_lock_state()
+                self.optimizer.step()
             return True
         else:
             return False
@@ -765,12 +793,11 @@ class HandModel:
         target_idx = self.optimize_idx[self.optimize_target]
         return self.joint_loss(self.joints[:, target_idx], self.targets[:, target_idx])
     
-    def _mesh_to_points_loss(self, target_points, only_activate=False):
-        target_points = Pointclouds(torch.Tensor(target_points).unsqueeze(0))
-        meshes = self.get_py3d_mesh(only_activate)
-        # meshes = self.get_py3d_mesh()
-        return point_mesh_face_distance(meshes, target_points)
-    
+    def _mesh_to_points_loss(self, target_points):
+        target_points = Pointclouds(torch.tensor(target_points, dtype=torch.float32).unsqueeze(0))
+        vert_points = torch.matmul(self.verts_to_points, self.verts[0]).unsqueeze(0)
+        return Utils.closest_point_loss(target_points, vert_points)
+        
     def _sampling_points_from_mesh(self):
         meshes = self.get_py3d_mesh()
         return sample_points_from_meshes(meshes, 5000)
@@ -842,7 +869,7 @@ class HandModel:
             "joint": self._get_target_joints(self.active_joints),
             "control": self._get_target_joints([self.contorl_joint])
         }
-        elif self.optimize_state==LabelingMode.STATIC:
+        elif self.optimize_state==LabelingMode.STATIC or self.optimize_state==LabelingMode.AUTO:
             return {
             "control": self._get_joints([self.contorl_joint])
         }
@@ -2421,9 +2448,9 @@ class AppWindow:
         button.set_on_clicked(self._on_object_mode)
         stageedit_layout.add_child(button)
 
-        # button = gui.Button(LabelingMode.MESH)
-        # button.set_on_clicked(self._on_object_mode)
-        # stageedit_layout.add_child(button)
+        button = gui.Button(LabelingMode.AUTO)
+        button.set_on_clicked(self._on_auto_mode)
+        stageedit_layout.add_child(button)
 
         self._settings_panel.add_child(stageedit_layout)
     def _on_static_mode(self):
@@ -2435,9 +2462,9 @@ class AppWindow:
     def _on_object_mode(self):
         self.logger.debug('_on_object_mode')
         self._convert_mode(LabelingMode.OBJECT)
-    def _on_mesh_mode(self):
-        self.logger.debug('_on_mesh_mode')
-        self._convert_mode(LabelingMode.MESH)
+    def _on_auto_mode(self):
+        self.logger.debug('_on_auto_mode')
+        self._convert_mode(LabelingMode.AUTO)
     def _convert_mode(self, labeling_mode):
         self.logger.debug('_convert_mode_{}'.format(labeling_mode))
         if not self._check_annotation_scene():
@@ -3043,28 +3070,49 @@ class AppWindow:
         h = gui.Horiz(0.4 * em)
         self._obj_pc_error_txt = gui.Label("물체 포인트 에러: 준비 안됨")
         h.add_child(self._obj_pc_error_txt)
+        
+        v = gui.Vert(0)
         button = gui.Button("에러 업데이트")
         button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_update_obj_pc_error)
-        h.add_child(button)
+        v.add_child(button)
+        # button = gui.Button("자동 정렬")
+        # button.vertical_padding_em = 0.1
+        # button.set_on_clicked(self._on_update_obj_pc_error_optim)
+        # v.add_child(button)
+        h.add_child(v)
         show_error_layout.add_child(h)
         
         h = gui.Horiz(0.4 * em)
         self._rhand_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
         h.add_child(self._rhand_pc_error_txt)
+        
+        v = gui.Vert(0)
         button = gui.Button("에러 업데이트")
         button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_update_rhand_pc_error)
-        h.add_child(button)
+        v.add_child(button)
+        button = gui.Button("자동 정렬")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_rhand_pc_error_optim)
+        v.add_child(button)
+        h.add_child(v)
         show_error_layout.add_child(h)
         
         h = gui.Horiz(0.4 * em)
         self._lhand_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
         h.add_child(self._lhand_pc_error_txt)
+        
+        v = gui.Vert(0)
         button = gui.Button("에러 업데이트")
         button.vertical_padding_em = 0.1
         button.set_on_clicked(self._on_update_lhand_pc_error)
-        h.add_child(button)
+        v.add_child(button)
+        button = gui.Button("자동 정렬")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_lhand_pc_error_optim)
+        v.add_child(button)
+        h.add_child(v)
         show_error_layout.add_child(h)
         
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
@@ -3202,10 +3250,18 @@ class AppWindow:
         self._update_diff_viewer()
     def _on_update_obj_pc_error(self):
         self._update_obj_pc_error()
+    def _on_update_obj_pc_error_optim(self):
+        self._update_obj_pc_error(optim=True)
+    
     def _on_update_rhand_pc_error(self):
         self._update_rhand_pc_error()
+    def _on_update_rhand_pc_error_optim(self):
+        self._update_rhand_pc_error(optim=True)
+    
     def _on_update_lhand_pc_error(self):
         self._update_lhand_pc_error()
+    def _on_update_lhand_pc_error_optim(self):
+        self._update_lhand_pc_error(optim=True)
         
     def _init_cam_name(self):
         self.logger.debug('_init_cam_name')
@@ -3462,7 +3518,7 @@ class AppWindow:
             diff_vis = cv2.addWeighted(rgb_captured, val, diff_vis, 1-val, 0)
         return diff_vis
             
-    def _update_obj_pc_error(self):
+    def _update_obj_pc_error(self, optim=False):
         if not self._check_annotation_scene():
             return
         # update point cloud error
@@ -3476,7 +3532,7 @@ class AppWindow:
             targets = np.asarray(target_pcd.points)
             points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
             # error = Utils.calc_chamfer_distance(points, targets)*1e6
-            error = Utils.closest_point_loss(targets, points)*1e6
+            error = Utils.closest_point_error(targets, points)*1e6
             self._obj_pc_error_txt.text = "물체 포인트 에러: {:.6f}".format(error)
             if error < 50:
                 self._obj_pc_error_txt.text_color = gui.Color(0, 1, 0)
@@ -3484,61 +3540,102 @@ class AppWindow:
                 self._obj_pc_error_txt.text_color = gui.Color(1, 0, 0)
         else:
             self._obj_pc_error_txt.text = "물체 포인트 에러: 근처 포인트가 없음"
-    def _update_rhand_pc_error(self):
+    def _update_rhand_pc_error(self, optim=False):
         if not self._check_annotation_scene():
             return
-        # update point cloud error
-        points = []
-        for side in self._hand_names:
-            if side != 'right': continue
-            points.append(self._hands[side].get_mesh_points())
-        if len(points) > 0:
-            pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
-            target_pcd = self._pcd
-            target_pcd = self._pcd.crop(pcd.get_oriented_bounding_box())
-            if len(target_pcd.points) > 0:
-                target_pcd = target_pcd.voxel_down_sample(voxel_size=0.003)
-                targets = np.asarray(target_pcd.points)
-                points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
-                # error = Utils.calc_chamfer_distance(points, targets)*1e6
-                error = Utils.closest_point_loss(points, targets)*1e6
+        if not 'right' in self._hand_names:
+            self._rhand_pc_error_txt.text = "오른손 포인트 에러: 준비 안됨"
+            return
+        
+        hand_model = self._hands['right']
+        # crop target with target geoemtry
+        target_pcd = self._pcd
+        
+        # crop by current hand and object
+        hand_points = hand_model.get_mesh_points()
+        hand_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(hand_points))
+        hand_crop_bbox = hand_pcd.get_oriented_bounding_box()
+        hand_crop_bbox = hand_crop_bbox.scale(1.3, center=hand_crop_bbox.get_center())
+        
+        obj_pcd = o3d.geometry.PointCloud()
+        for obj_id, obj_model in self._objects.items():
+            obj_pcd += obj_model.get_geometry()
+        obj_crop_bbox = obj_pcd.get_oriented_bounding_box()
+        
+        target_pcd = target_pcd.crop(hand_crop_bbox)
+        nontarget_indices = obj_crop_bbox.get_point_indices_within_bounding_box(target_pcd.points)
+        target_pcd = target_pcd.select_by_index(nontarget_indices, invert=True)
+        
+        if len(target_pcd.points) > 0:
+            # target_points
+            target_pcd = target_pcd.voxel_down_sample(voxel_size=0.005)
+            target_points = np.asarray(target_pcd.points)
+            
+            if optim:
+                ret = hand_model.optimize_to_points(target_points, loop=10)
+                if ret:
+                    self._update_hand_layer()
+                else:
+                    self._on_error("최적화 대상을 확인해주세요(F2, 손가락)")
+            else:
+                error = Utils.closest_point_error(hand_points, target_points)*1e6
                 self._rhand_pc_error_txt.text = "오른손 포인트 에러: {:.6f}".format(error)
+                
                 if error < 50:
                     self._rhand_pc_error_txt.text_color = gui.Color(0, 1, 0)
                 else:
                     self._rhand_pc_error_txt.text_color = gui.Color(1, 0, 0)
-            else:
-                self._rhand_pc_error_txt.text = "오른손 포인트 에러: 근처 포인트가 없음"
         else:
-            self._rhand_pc_error_txt.text = "오른손 포인트 에러: 준비 안됨"
-    def _update_lhand_pc_error(self):
+            self._rhand_pc_error_txt.text = "오른손 포인트 에러: 근처 포인트가 없음"
+
+    def _update_lhand_pc_error(self, optim=False):
         if not self._check_annotation_scene():
             return
-        # update point cloud error
-        points = []
-        for side in self._hand_names:
-            if side != 'left': continue
-            points.append(self._hands[side].get_mesh_points())
-        if len(points) > 0:
-            pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.concatenate(points, axis=0)))
-            target_pcd = self._pcd
-            target_pcd = self._pcd.crop(pcd.get_oriented_bounding_box())
-            if len(target_pcd.points) > 0:
-                target_pcd = target_pcd.voxel_down_sample(voxel_size=0.003)
-                targets = np.asarray(target_pcd.points)
-                points = np.asarray(pcd.voxel_down_sample(voxel_size=0.003).points)
-                # error = Utils.calc_chamfer_distance(points, targets)*1e6
-                error = Utils.closest_point_loss(points, targets)*1e6
+        if not 'left' in self._hand_names:
+            self._lhand_pc_error_txt.text = "왼손 포인트 에러: 준비 안됨"
+            return
+        
+        hand_model = self._hands['left']
+        # crop target with target geoemtry
+        target_pcd = self._pcd
+        
+        # crop by current hand and object
+        hand_points = hand_model.get_mesh_points()
+        hand_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(hand_points))
+        hand_crop_bbox = hand_pcd.get_oriented_bounding_box()
+        hand_crop_bbox = hand_crop_bbox.scale(1.3, center=hand_crop_bbox.get_center())
+        
+        obj_pcd = o3d.geometry.PointCloud()
+        for obj_id, obj_model in self._objects.items():
+            obj_pcd += obj_model.get_geometry()
+        obj_crop_bbox = obj_pcd.get_oriented_bounding_box()
+        
+        target_pcd = target_pcd.crop(hand_crop_bbox)
+        nontarget_indices = obj_crop_bbox.get_point_indices_within_bounding_box(target_pcd.points)
+        target_pcd = target_pcd.select_by_index(nontarget_indices, invert=True)
+        
+        if len(target_pcd.points) > 0:
+            # target_points
+            target_pcd = target_pcd.voxel_down_sample(voxel_size=0.005)
+            target_points = np.asarray(target_pcd.points)
+            
+            if optim:
+                ret = hand_model.optimize_to_points(target_points, loop=10)
+                if ret:
+                    self._update_hand_layer()
+                else:
+                    self._on_error("최적화 대상을 확인해주세요(F2-손가락, F4)")
+            else:
+                error = Utils.closest_point_error(hand_points, target_points)*1e6
                 self._lhand_pc_error_txt.text = "왼손 포인트 에러: {:.6f}".format(error)
+                
                 if error < 50:
                     self._lhand_pc_error_txt.text_color = gui.Color(0, 1, 0)
                 else:
                     self._lhand_pc_error_txt.text_color = gui.Color(1, 0, 0)
-            else:
-                self._lhand_pc_error_txt.text = "왼손 포인트 에러: 근처 포인트가 없음"
         else:
-            self._lhand_pc_error_txt.text = "왼손 포인트 에러: 준비 안됨"
-    
+            self._lhand_pc_error_txt.text = "왼손 포인트 에러: 근처 포인트가 없음"
+        
     def _img_wrapper(self, img):
         self.logger.debug('_img_wrapper')
         ratio = 640 / self.W
@@ -4185,6 +4282,10 @@ class AppWindow:
         elif event.key == gui.KeyName.F3 and event.type == gui.KeyEvent.DOWN:
             self._convert_mode(LabelingMode.OBJECT)
             return gui.Widget.EventCallbackResult.CONSUMED
+        elif event.key == gui.KeyName.F4 and event.type == gui.KeyEvent.DOWN:
+            self._convert_mode(LabelingMode.AUTO)
+            return gui.Widget.EventCallbackResult.CONSUMED
+        
         # elif event.key == gui.KeyName.F4 and event.type == gui.KeyEvent.DOWN:
         #     self._convert_mode(LabelingMode.MESH)
         #     return gui.Widget.EventCallbackResult.CONSUMED
@@ -4398,9 +4499,8 @@ class AppWindow:
                     self._update_target_hand()
                     return gui.Widget.EventCallbackResult.CONSUMED
             
-            
         # Translation
-        if event.type!=gui.KeyEvent.UP:
+        if event.type!=gui.KeyEvent.UP and self._labeling_mode!=LabelingMode.AUTO:
             if not self._left_shift_modifier and \
                 (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
                 if event.key == gui.KeyName.D:
