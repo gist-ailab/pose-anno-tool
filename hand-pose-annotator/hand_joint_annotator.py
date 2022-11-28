@@ -294,18 +294,10 @@ class Logger:
         
 class MaskMode:
     RGB_ALL     = "RGB 전체"
-    RGB_THUMB   = "RGB 엄지"
-    RGB_FORE    = "RGB 검지"
-    RGB_MIDDLE  = "RGB 중지"
-    RGB_RING    = "RGB 약지"
-    RGB_LITTLE  = "RGB 소지"
+    RGB_FINGER  = "RGB 손가락"
     MASK_ALL    = "MASK 전체"
-    MASK_THUMB  = "MASK 엄지"
-    MASK_FORE   = "MASK 검지"
-    MASK_MIDDLE = "MASK 중지"
-    MASK_RING   = "MASK 약지"
-    MASK_LITTLE = "MASK 소지"
-
+    MASK_FINGER  = "MASK 손가락"
+    
 class MultiViewJointModel:
     # JOINT IMG () # 180, 340
     LEFT_JOINT_IMG = {0: [91, 166], 1: [66, 148], 2: [46, 131], 3: [33, 113], 17: [125, 110], 13: [112, 99], 18: [136, 96], 5: [73, 94], 4: [14, 89], 9: [93, 88], 19: [144, 83], 14: [116, 76], 20: [153, 69], 6: [72, 67], 10: [98, 63], 15: [123, 56], 7: [71, 49], 11: [101, 44],  16: [129, 38], 8: [68, 30], 12:[105, 25]}
@@ -374,8 +366,8 @@ class MultiViewJointModel:
         
         self.joint_state = {
             serial: {
-                'position': np.zeros((21, 3), dtype=np.float32),
-                'visible': np.zeros((21, 1), dtype=np.bool),
+                'pose': np.zeros((21, 3), dtype=np.float32),
+                'visible': [True for _ in range(21)],
             } for serial in self.serials
         }
         self.mano_layer = ManoLayer(mano_root=MANO_PATH, side=side,
@@ -412,7 +404,7 @@ class MultiViewJointModel:
         if flat_hand:
             pose_param = torch.zeros(1, 48)
         else:
-            pose_param = torch.concat((torch.zeros(3), self.mano_layer.smpl_data['hands_mean'])).unsqueeze(0)
+            pose_param = torch.concat((torch.zeros(3), torch.tensor(self.mano_layer.smpl_data['hands_mean'], dtype=torch.float32))).unsqueeze(0)
         verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
                                         th_betas=self.shape_param,
                                         th_trans=root_trans)
@@ -420,22 +412,24 @@ class MultiViewJointModel:
         joints = joints / 1000
         self.root_delta = joints.cpu().detach()[0, 0]
         self.optimize_idx = self._IDX_OF_JOINT
-        self.optimize_target = 'none'
-        self.active_joints = None
-        self.contorl_joint = None
-        self.control_idx = -1
+        self.optimize_target = 'root'
+        self.active_joints = self.optimize_idx[self.optimize_target]
+        self.control_idx = 0 # idx of joint to control (in active_joints)
+        self.control_joint = 0 # idx of joint to control (in joints)
         
+        # init label as all camera
         self.ai_label = None
         self.ai_joints = None
         
-        self.current_serial = None
+        # specific view label
+        self.current_serial = self.serials[0]
         self.current_joints = None
         self.current_visible = None
 
     def load_ai_label(self, val=None):
         if val is None:
             self.ai_label = None
-            pose_param = torch.concat((torch.zeros(3), self.mano_layer.smpl_data['hands_mean'])).unsqueeze(0)
+            pose_param = torch.concat((torch.zeros(3), torch.tensor(self.mano_layer.smpl_data['hands_mean'], dtype=torch.float32))).unsqueeze(0)
             root_trans = torch.zeros(1, 3)
         else:    
             self.ai_label = val
@@ -448,27 +442,43 @@ class MultiViewJointModel:
         verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
                                         th_betas=self.shape_param,
                                         th_trans=root_trans)
-        self.ai_joints = joints.cpu().detach()[0] / 1000
-    
+        self.ai_joints = np.array(joints.cpu().detach()[0] / 1000)
     def get_ai_joints(self):
         return self.ai_joints
     def reset_to_ai_label(self):
         for serial in self.joint_state.keys():
-            self.joint_state[serial]['position'] = self.ai_joints
-            self.joint_state[serial]['visible'] = np.ones((21, 1), dtype=np.bool)    
-    
+            self.joint_state[serial]['pose'] = copy.deepcopy(self.ai_joints)
+            self.joint_state[serial]['visible'] = [True for _ in range(21)]
+        self.current_serial = "merge"
+        self.current_visible = [True for _ in range(21)]
+        self.current_joints = copy.deepcopy(self.ai_joints)
     def set_joint_state(self, joint_state):
-        self.joint_state = joint_state
-        self.current_serial = None
-        self.current_joints = None
-        self.current_visible = None
+        # check joint_state and self.joint_state key are same
+        for serial in self.joint_state.keys():
+            self.joint_state[serial]['pose'] = np.array(joint_state[serial]['pose'])
+            self.joint_state[serial]['visible'] = joint_state[serial]['visible']
     def get_joint_state(self):
-        return self.joint_state
+        temp = {}
+        for serial, state in self.joint_state.items():
+            temp[serial] = {
+                "pose": state["pose"].tolist(),
+                "visible": state["visible"]
+            }
+        return temp        
+    def get_current_joints(self):
+        return self.current_joints
+    def convert_camera(self, cam):
+        if cam=="merge":
+            self.current_serial = "merge"
+            self.current_visible = [True for _ in range(21)]
+            self.current_joints = copy.deepcopy(self.ai_joints)
+        else:
+            self.current_serial = cam.serial
+            self.current_visible = self.joint_state[self.current_serial]['visible']
+            self.current_joints = self.joint_state[self.current_serial]['pose']
     
-    def convert_camera(self):
-        #TODO:
-        pass
-
+    def get_visible_state(self, cam):
+        return self.joint_state[cam.serial]['visible']
     def _get_control_joint_param_idx(self):
         if self.optimize_target=='root':
             target_idx = 0
@@ -487,21 +497,6 @@ class MultiViewJointModel:
             else:
                 raise NotImplementedError
         return target_idx
-    def _param2control_idx(self, param_idx):
-        order = (param_idx-1)//3 
-        if order==0: 
-            finger = 1
-        elif order==1: 
-            finger = 2
-        elif order==2: 
-            finger = 4
-        elif order==3: 
-            finger = 3
-        elif order==4: 
-            finger = 0
-        else:
-            return 0
-        return 4*finger + ((param_idx+2)%3 + 1)
     def _get_control_joint_idx(self):
         return self.optimize_idx[self.optimize_target][self.control_idx]
     def get_control_joint_name(self):
@@ -532,34 +527,29 @@ class MultiViewJointModel:
             name += "세번째 관절"
 
         return name
-
     def get_control_position(self):
-        target_idx = self._get_control_joint_idx()
-        self.current_joints[target_idx]
+        return self.current_joints[self.control_joint]
     def set_control_position(self, xyz):
         if self.optimize_target == 'root':
             self.current_joints[0] = xyz
         else:
-            self.current_joints[self.contorl_joint] = xyz
+            self.current_joints[self.control_joint] = xyz
         return True
-        
     def get_optimize_target(self):
         return self.optimize_target
     def set_optimize_target(self, target):
         self.optimize_target = target
         self.active_joints = self.optimize_idx[self.optimize_target]
         self.control_idx = 0
-        self.contorl_joint = self.active_joints[0]
+        self.control_joint = self.active_joints[self.control_idx]
     def set_control_joint(self, idx):
         assert len(self.active_joints) > 0, "set_control_joint error"
         idx = np.clip(idx, 0, len(self.active_joints)-1) 
         self.control_idx = idx
-        self.contorl_joint = self.active_joints[idx]
-    
+        self.control_joint = self.active_joints[self.control_idx]
     def get_hand_shape(self):
         shape = np.array(self.shape_param.cpu().detach()[0, :])
         return shape.tolist()
-    
     def get_geometry(self):
         return {
             "joint": self._get_joints(),
@@ -573,7 +563,7 @@ class MultiViewJointModel:
         joints = o3d.utility.Vector3dVector(joints)
         pcd = o3d.geometry.PointCloud(points=joints)
         return pcd
-    def _get_links(self):
+    def get_links(self):
         joints = self.current_joints
         joints = o3d.utility.Vector3dVector(joints)
         lines = o3d.utility.Vector2iVector(np.array(self.LINK))
@@ -583,7 +573,7 @@ class MultiViewJointModel:
     def get_active_geometry(self):
         return {
             "joint": self._get_joints(self.active_joints),
-            "control": self._get_joints([self.contorl_joint])
+            "control": self._get_joints([self.control_joint])
         }
         
     def init_joint_mask(self):
@@ -611,28 +601,23 @@ class MultiViewJointModel:
         
     def get_joint_mask(self):
         mask = self.total_mask.copy()
-        mask[self.joint_mask['active'][self.contorl_joint]] = [255, 0, 0]
-        
+        mask[self.joint_mask['active'][self.control_joint]] = [255, 0, 0]
         # draw lock state
-        for i in range(16):
-            if i == 0:
-                lock_idx = 0 # + 1
-            else:
-                lock_idx = i + 1
-            is_lock = self.lock_state[lock_idx]
+        for i in range(21):
+            is_visible = self.current_visible[i]
+            cnt = self._active_img[i]
 
-            contorl_joint = self._param2control_idx(i)
-            cnt = self._active_img[contorl_joint]
-
-            if is_lock:
+            if not is_visible:
                 s1, e1 = [cnt[0]-7, cnt[1]-7], [cnt[0]+7, cnt[1]+7]
                 s2, e2 = [cnt[0]-7, cnt[1]+7], [cnt[0]+7, cnt[1]-7]
                 mask = cv2.line(mask, s1, e1, [255, 0, 0], 2)
                 mask = cv2.line(mask, s2, e2, [255, 0, 0], 2)
             else:
                 mask = cv2.circle(mask, cnt, 7, [0, 255, 0], 2)
-        
         return mask
+    
+    def toggle_current_joint_visible(self):
+        self.current_visible[self.control_joint] = not self.current_visible[self.control_joint]
     
 class Camera:
     def __init__(self, name, serial, intrinsic, extrinsics, folder):
@@ -1009,6 +994,20 @@ class Scene:
             self.scene_pcd = self.get_pcd(list(self.cameras.keys()))
             self.active_cam = 'merge' # merge
 
+        def convert_camera(self, camera_name):
+            self.active_cam = camera_name
+            if self.active_cam=='merge':
+                for hand in self.hands.values():
+                    hand.convert_camera("merge")
+            else:
+                for hand in self.hands.values():
+                    hand.convert_camera(self.cameras[camera_name])
+        
+        def get_visible_state(self, camera_name):
+            temp = {}
+            for side, hand in self.hands.items():
+                temp[side] = hand.get_visible_state(self.cameras[camera_name])
+            return temp
         def _load_rgb(self, cam_name):
             folder = self.cameras[cam_name].folder
             rgb_path = self.rgb_format.format(folder)
@@ -1057,7 +1056,7 @@ class Scene:
         self.frame_id = current_frame
         self._frame_idx = self._frame_list.index(self.frame_id)
         
-        self._joint_label_format = os.path.join(self._label_dir, "joints_{:06d}.npz")
+        self._joint_label_format = os.path.join(self._label_dir, "joints_{:06d}.json")
         self._hand_label_format = os.path.join(self._label_dir, "hands_{:06d}.npz")
         self._object_label_format = os.path.join(self._label_dir, "objs_{:06d}.npz")
 
@@ -1068,6 +1067,7 @@ class Scene:
         self._obj_label = None
         self._obj_previous_label = None
 
+    
     def _load_frame(self):
         try:
             self.current_frame = Scene.Frame(scene_dir=self._scene_dir,
@@ -1107,7 +1107,8 @@ class Scene:
         return "현재 진행률: {} [{}/{}]".format(self.frame_id, self._frame_idx+1, self.total_frame)
     
     def save_label(self):
-        np.savez(self._joint_label_path, **self._joint_label)
+        with open(self._joint_label_path, 'w') as f:
+            json.dump(self._joint_label, f)
     def load_label(self):
         #----- object label
         if self._obj_label is not None:
@@ -1141,7 +1142,8 @@ class Scene:
         #----- joint label
         #1. load saved label
         try:
-            self._joint_label = dict(np.load(self._joint_label_path))
+            with open(self._joint_label_path, 'r') as f:
+                self._joint_label = json.load(f)
             for side, hand_model in self._hands.items():
                 val = self._joint_label[side]
                 hand_model.set_joint_state(val)
@@ -1157,10 +1159,7 @@ class Scene:
                 print("Fail to load previous label -> Initialize label with AI label")
             #3. if not exist, initialize joint label with ai label
             for side, hand_model in self._hands.items():
-                joint_position = hand_model.get_ai_joints()
-                joint_visible = [True for _ in range(21)]
-                for side, hand_model in self._hands.items():
-                    hand_model.reset_to_ai_label()
+                hand_model.reset_to_ai_label()
         self._joint_label = {
             side: hand_model.get_joint_state() for side, hand_model in self._hands.items()
         }
@@ -1214,47 +1213,28 @@ class Settings:
         self.scene_material.shader = Settings.SHADER_UNLIT
         self.scene_material.point_size = 1.0
 
-        # ----- hand model setting
-        self.hand_mesh_material = rendering.MaterialRecord()
-        self.hand_mesh_material.base_color = [0.8, 0.8, 0.8, 1.0-self.hand_transparency]
-        self.hand_mesh_material.shader = Settings.SHADER_LIT_TRANS
-        # self.hand_mesh_material.line_width = 2.0
-        
-        self.hand_joint_material = rendering.MaterialRecord()
-        self.hand_joint_material.base_color = [1.0, 0.0, 0.0, 1.0]
-        self.hand_joint_material.shader = Settings.SHADER_UNLIT
-        self.hand_joint_material.point_size = 5.0
+        self.hand_joint_material = []
+        for i in range(21):
+            mat = rendering.MaterialRecord()
+            mat.base_color = list(np.array(MultiViewJointModel._COLOR_OF_JOINT[i])/255) + [1]
+            mat.shader = Settings.SHADER_UNLIT
+            mat.point_size = 5.0
+            self.hand_joint_material.append(mat)
         
         self.hand_link_material = rendering.MaterialRecord()
         self.hand_link_material.base_color = [1.0, 0.0, 0.0, 1.0]
         self.hand_link_material.shader = Settings.SHADER_LINE
         self.hand_link_material.line_width = 2.0
         
-        self.active_hand_mesh_material = rendering.MaterialRecord()
-        self.active_hand_mesh_material.base_color = [0.0, 1.0, 0.0, 1.0-self.hand_transparency]
-        self.active_hand_mesh_material.shader = Settings.SHADER_LIT_TRANS
-        # self.active_hand_mesh_material.line_width = 2.0
-
-        # ----- hand label setting
-        self.target_joint_material = rendering.MaterialRecord()
-        self.target_joint_material.base_color = [0.0, 0.0, 1.0, 1.0]
-        self.target_joint_material.shader = Settings.SHADER_UNLIT
-        self.target_joint_material.point_size = 10.0
-        
-        self.target_link_material = rendering.MaterialRecord()
-        self.target_link_material.base_color = [0.0, 0.0, 1.0, 1.0]
-        self.target_link_material.shader = Settings.SHADER_LINE
-        self.target_link_material.line_width = 3.0
+        self.active_link_material = rendering.MaterialRecord()
+        self.active_link_material.base_color = [0.0, 0.0, 1.0, 1.0]
+        self.active_link_material.shader = Settings.SHADER_LINE
+        self.active_link_material.line_width = 3.0
         
         self.active_target_joint_material = rendering.MaterialRecord()
         self.active_target_joint_material.base_color = [1.0, 0.75, 0.75, 1.0]
         self.active_target_joint_material.shader = Settings.SHADER_UNLIT
         self.active_target_joint_material.point_size = 20.0
-        
-        self.active_target_link_material = rendering.MaterialRecord()
-        self.active_target_link_material.base_color = [0.0, 0.7, 0.0, 1.0]
-        self.active_target_link_material.shader = Settings.SHADER_LINE
-        self.active_target_link_material.line_width = 5.0
         
         self.control_target_joint_material = rendering.MaterialRecord()
         self.control_target_joint_material.base_color = [0.0, 1.0, 0.0, 1.0]
@@ -1274,25 +1254,6 @@ class Settings:
         self.active_obj_material = rendering.MaterialRecord()
         self.active_obj_material.base_color = [0.3, 0.9, 0.3, 1-self.obj_transparency]
         self.active_obj_material.shader = Settings.SHADER_LIT_TRANS
-
-        # mesh
-        self.nonactive_mesh_material = rendering.MaterialRecord()
-        self.nonactive_mesh_material.base_color = [0.5, 0.5, 0.5, 1.0-self.hand_transparency]
-        self.nonactive_mesh_material.shader = Settings.SHADER_LIT_TRANS
-        
-        # activate material
-        self.active_mesh_material = rendering.MaterialRecord()
-        self.active_mesh_material.base_color = [1.0, 0, 0, 1.0-self.hand_transparency]
-        self.active_mesh_material.shader = self.SHADER_LIT_TRANS
-
-        self.active_pcd_material = rendering.MaterialRecord()
-        self.active_pcd_material.base_color = [0.3, 0.9, 0.3, 1]
-        self.active_pcd_material.shader = Settings.SHADER_UNLIT
-        self.active_pcd_material.point_size = 2*self.scene_material.point_size
-
-        self.inlier_sphere_material = rendering.MaterialRecord()
-        self.inlier_sphere_material.base_color = [0.6, 0.1, 0.4, 0.5]
-        self.inlier_sphere_material.shader = Settings.SHADER_UNLIT
 
 class HeadlessRenderer:
     flat_hand_position = {'right': [[0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [0.07744278013706207, 0.006146649364382029, 0.180849090218544], [0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [0.019351951777935028, -0.001628118334338069, 0.12375511229038239]], 'left': [[-0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [-0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [-0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [-0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [-0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [-0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [-0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [-0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [-0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [-0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [-0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [-0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [-0.07929610460996628, 0.010507885366678238, 0.17927193641662598], [-0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [-0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [-0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [-0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [-0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [-0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [-0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [-0.019351951777935028, -0.001628118334338069, 0.12375511229038239]]}
@@ -1359,26 +1320,21 @@ class AppWindow:
         self._scene_name = "annotation_scene"
         
         #----- hand model geometry name
-        self._right_hand_joint_name = "right_hand_joint"
-        self._right_hand_link_name = "right_hand_link"
-        self._left_hand_joint_name = "left_hand_joint"
-        self._left_hand_link_name = "left_hand_link"
-        
+        self._hand_joint_name = "{}_hand_joint_{}"
+        self._hand_link_name = "{}_hand_link"
         #----- active/control geometry name
         self._active_joint_name = "active_joint"
         self._control_joint_name = "control_joint"
+        
         self._hand_geometry_names = [
-            self._right_hand_mesh_name,
-            self._right_hand_joint_name,
-            self._right_hand_link_name,
-            self._left_hand_mesh_name,
-            self._left_hand_joint_name,
-            self._left_hand_link_name,
-            self._target_joint_name,
-            self._target_link_name,
+            self._hand_link_name.format("right"),
+            self._hand_link_name.format("left"),
             self._active_joint_name,
             self._control_joint_name
         ]
+        for i in range(21):
+            self._hand_geometry_names += [self._hand_joint_name.format(side, i) for side in ['right', 'left']]
+        
         self._active_pcd_name = "active_scene"
 
         #----- intialize values
@@ -1395,12 +1351,9 @@ class AppWindow:
         self._last_saved = time.time()
         self.hand_coord_labels = []
         
-        self._view_rock = False
         self._depth_image = None
         self.prev_ms_x, self.prev_ms_y = None, None
-        self._inlier_points = []
-        self._inlier_radius = 0.01
-
+        
         self._objects = None
         self._active_object = None
         self._object_names = []
@@ -1415,7 +1368,6 @@ class AppWindow:
         self.joint_back = False
         self._move_root = False
         self._guide_changed = False
-        self._active_type = "hand"
         self.obj_coord_labels = []
         
         self.window = gui.Application.instance.create_window(self._window_name, width, height)
@@ -1452,8 +1404,6 @@ class AppWindow:
         
         self._init_show_error_layout()
         self._init_joint_mask_layout()
-        self._init_preset_layout()
-        
         # ---- log panel
         self._log_panel = gui.VGrid(1, em)
         self._log = gui.Label("\t 라벨링 대상 파일을 선택하세요. ")
@@ -1472,7 +1422,7 @@ class AppWindow:
         self._initialize_background()
         self._on_scene_point_size(1) # set default size to 1
         self._on_object_transparency(0)
-        self._on_hand_point_size(10) # set default size to 10
+        self._on_hand_point_size(5) # set default size to 10
         self._on_hand_line_size(2) # set default size to 2
         self._on_responsiveness(5) # set default responsiveness to 5
         
@@ -1576,10 +1526,7 @@ class AppWindow:
         self.window.set_needs_layout()
         center = np.array([0, 0, 0])
         self._scene.setup_camera(60, self.bounds, center)
-        if self._active_type=='hand' or self._active_type=='mesh':
-            eye_on = self._active_hand.get_control_position()
-        else:
-            eye_on = self._active_object.get_transform()[:3, 3]
+        eye_on = self._active_hand.get_control_position()
         center = eye_on - 0.4* eye_on/np.linalg.norm(eye_on)
         up = np.array([0, -1, 0])
         self._scene.look_at(eye_on, center, up)
@@ -1771,7 +1718,6 @@ class AppWindow:
         self.window.set_needs_layout()
         self._last_change = time.time()
         self.settings.scene_material.point_size = int(size)
-        self.settings.active_mesh_material.point_size = int(size)*2
         if self._check_geometry(self._scene_name):
             self._set_geometry_material(self._scene_name, self.settings.scene_material)
         self._scene_point_size.double_value = size
@@ -1797,41 +1743,35 @@ class AppWindow:
         self._log.text = "\t 손 관절 사이즈 값을 변경합니다."
         self.window.set_needs_layout()
         self._last_change = time.time()
-        mat = self.settings.hand_joint_material
-        mat.point_size = int(size)
-        if self._check_geometry(self._right_hand_joint_name):
-            self._set_geometry_material(self._right_hand_joint_name, mat)
-        if self._check_geometry(self._left_hand_joint_name):
-            self._set_geometry_material(self._left_hand_joint_name, mat)
+
+        for i in range(21):
+            mat = self.settings.hand_joint_material[i]
+            mat.point_size = int(size)
+            for side in ['right', 'left']:
+                if self._check_geometry(self._hand_joint_name.format(side, i)):
+                    self._set_geometry_material(self._hand_joint_name.format(side, i), mat)
         self._hand_point_size.double_value = size
+        if self._active_hand is not None:
+            self._update_hand_mask()
+            self._update_diff_viewer()
     def _on_hand_line_size(self, size):
         self.logger.debug('_on_hand_line_size')
         self._log.text = "\t 손 연결선 두께 값을 변경합니다."
         self.window.set_needs_layout()
         self._last_change = time.time()
-        mat = self.settings.hand_mesh_material
+        mat = self.settings.hand_link_material
         mat.line_width = int(size)
-        if self._check_geometry(self._right_hand_mesh_name):
-            self._set_geometry_material(self._right_hand_mesh_name, mat)
-        if self._check_geometry(self._left_hand_mesh_name):
-            self._set_geometry_material(self._left_hand_mesh_name, mat)
-
+        for side in ['right', 'left']:
+            if self._check_geometry(self._hand_link_name.format(side)):
+                self._set_geometry_material(self._right_hand_link_name, mat)
         if self._active_hand is not None:
-            mat = self.settings.active_hand_mesh_material
+            mat = self.settings.active_link_material
             mat.line_width = int(size)
             active_side = self._active_hand.side
             if active_side == 'right':
-                self._set_geometry_material(self._right_hand_mesh_name, mat)
+                self._set_geometry_material(self._right_hand_link_name, mat)
             else:
-                self._set_geometry_material(self._left_hand_mesh_name, mat)
-        # link        
-        mat = self.settings.hand_link_material
-        mat.line_width = int(size)
-        if self._check_geometry(self._right_hand_link_name):
-            self._set_geometry_material(self._right_hand_link_name, mat)
-        if self._check_geometry(self._left_hand_link_name):
-            self._set_geometry_material(self._left_hand_link_name, mat)
-
+                self._set_geometry_material(self._left_hand_link_name, mat)
         self._hand_line_size.double_value = size
     def _on_responsiveness(self, responsiveness):
         self.logger.debug('_on_responsiveness')
@@ -1928,37 +1868,22 @@ class AppWindow:
             return 
         self._active_hand.reset_pose()
         self._update_hand_layer()
-    def _deactivate_hand(self):
-        self.logger.debug('_deactivate_hand')
-        if self._hands is None:
-            self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_hand)")
-            return 
-        if self._check_geometry(self._target_joint_name):
-            self._remove_geometry(self._target_joint_name)
-        if self._check_geometry(self._target_link_name):
-            self._remove_geometry(self._target_link_name)
-        if self._check_geometry(self._active_joint_name):
-            self._remove_geometry(self._active_joint_name)
-        if self._check_geometry(self._control_joint_name):
-            self._remove_geometry(self._control_joint_name)
     def _convert_hand(self):
         self.logger.debug('_convert_hand')
         if self._hands is None:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_hand)")
             return 
+        # convert active hand
         self._active_hand_idx = (self._active_hand_idx+1) % len(self._hands.keys())
         active_side = self._hand_names[self._active_hand_idx]
-        
-        if self._check_geometry(self._target_joint_name):
-            self._remove_geometry(self._target_joint_name)
-        if self._check_geometry(self._target_link_name):
-            self._remove_geometry(self._target_link_name)
-        if self._check_geometry(self._active_joint_name):
-            self._remove_geometry(self._active_joint_name)
             
         self._active_hand = self._hands[active_side]
-        self._update_current_hand_str()
+        self._convert_to_root()
         self._update_joint_mask()
+        self._update_current_hand_visible()
+        self._update_hand_mask()
+        self._update_diff_viewer()
+        self._update_current_hand_str()
     # convert finger
     def _convert_to_root(self):
         self.logger.debug('_convert_to_root')
@@ -1984,7 +1909,9 @@ class AppWindow:
             self._on_error("라벨링 대상 파일을 선택하세요. (error at _convert_finger)")
             return
         self._active_hand.set_optimize_target(name)
-        self._update_target_hand()
+        self._update_hand_mask()
+        self._update_hand_layer()
+        self._update_diff_viewer()
         self._update_current_hand_str()
     def _control_joint_up(self):
         self.logger.debug('_control_joint_up')
@@ -1994,7 +1921,9 @@ class AppWindow:
         ctrl_idx = self._active_hand.control_idx + 1
         self._active_hand.set_control_joint(ctrl_idx)
         self._update_joint_mask()
-        self._update_target_hand()
+        self._update_hand_layer()
+        self._update_hand_mask()
+        self._update_diff_viewer()
         self._update_current_hand_str()
     def _control_joint_down(self):
         self.logger.debug('_control_joint_down')
@@ -2004,7 +1933,9 @@ class AppWindow:
         ctrl_idx = self._active_hand.control_idx - 1
         self._active_hand.set_control_joint(ctrl_idx)
         self._update_joint_mask()
-        self._update_target_hand()
+        self._update_hand_layer()
+        self._update_hand_mask()
+        self._update_diff_viewer()
         self._update_current_hand_str()
     def _update_current_hand_str(self):
         self.logger.debug('_update_current_hand_str')
@@ -2068,20 +1999,13 @@ class AppWindow:
         except:
             self._log.text = "\t 저장된 라벨이 없습니다."
             pass
-        if not ret:
-            hands = self._frame.hands
-            objs = self._frame.objects
-            pcd = self._frame.scene_pcd
-            center = pcd.get_center()
-            for s, hand_model in hands.items():
-                hand_model.set_root_position(center)
-            for obj_name, obj in objs.items():
-                obj.set_position(center)
         self._update_progress_str()
         self._init_pcd_layer()
         self._init_obj_layer()
         self._init_hand_layer()
         self._on_change_camera_merge()
+        
+        
     def _update_progress_str(self):
         self.logger.debug('_update_progress_str')
         self._current_file_pg.text = self.annotation_scene.get_progress()
@@ -2209,10 +2133,13 @@ class AppWindow:
         joint_mask_layout.add_child(self._joint_mask_proxy)
         self._validation_panel.add_child(joint_mask_layout)
     def _update_joint_mask(self):
-        img = self._active_hand.get_joint_mask()
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = o3d.geometry.Image(img)
-        self._joint_mask_proxy.set_widget(gui.ImageWidget(img))
+        try:
+            img = self._active_hand.get_joint_mask()
+            # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = o3d.geometry.Image(img)
+            self._joint_mask_proxy.set_widget(gui.ImageWidget(img))
+        except:
+            pass
 
     # image viewer
     def _init_image_view_layout(self):
@@ -2231,28 +2158,23 @@ class AppWindow:
         self._mask_mode = gui.Combobox()
         
         self._mask_mode.add_item(MaskMode.RGB_ALL)
-        self._mask_mode.add_item(MaskMode.RGB_THUMB)
-        self._mask_mode.add_item(MaskMode.RGB_FORE)
-        self._mask_mode.add_item(MaskMode.RGB_MIDDLE)
-        self._mask_mode.add_item(MaskMode.RGB_RING)
-        self._mask_mode.add_item(MaskMode.RGB_LITTLE)
+        self._mask_mode.add_item(MaskMode.RGB_FINGER)
         self._mask_mode.add_item(MaskMode.MASK_ALL)
-        self._mask_mode.add_item(MaskMode.MASK_THUMB)
-        self._mask_mode.add_item(MaskMode.MASK_FORE)
-        self._mask_mode.add_item(MaskMode.MASK_MIDDLE)
-        self._mask_mode.add_item(MaskMode.MASK_RING)
-        self._mask_mode.add_item(MaskMode.MASK_LITTLE)
+        self._mask_mode.add_item(MaskMode.MASK_FINGER)
         self._mask_mode.set_on_selection_changed(self._on_update_mode)
         h.add_child(self._mask_mode)
-        
-        self._rgb_transparency = gui.Slider(gui.Slider.DOUBLE)
-        self._rgb_transparency.set_limits(0, 1)
-        self._rgb_transparency.double_value = 0.5
-        self._last_rgb_transparency = 0.5
-        self._rgb_transparency.set_on_value_changed(self._on_update_rgb_transparency)
-        
         self._images_panel.add_child(h)
-        self._images_panel.add_child(self._rgb_transparency)
+        
+        h = gui.Horiz(0.4 * em)
+        self._mask_transparency = gui.Slider(gui.Slider.DOUBLE)
+        self._mask_transparency.set_limits(0, 1)
+        self._mask_transparency.double_value = 0.5
+        self._last_mask_transparency = 0.5
+        self._mask_transparency.set_on_value_changed(self._on_update_mask_transparency)
+        h.add_child(gui.Label("마스크 투명도:"))
+        h.add_child(self._mask_transparency)
+        self._images_panel.add_child(h)
+
 
     def _init_show_error_layout(self):
         self.logger.debug('_init_show_error_layout')
@@ -2270,18 +2192,20 @@ class AppWindow:
             button.set_on_clicked(self.__getattribute__("_on_change_camera_{}".format(i)))
             button.vertical_padding_em = 0.1
             h.add_child(button)
-            h.add_child(gui.Label(" | "))
+            h.add_child(gui.Label(" | \n | "))
             
             v = gui.Vert(0)
-            vis_joint_num = gui.Label("조인트: 00/21")
-            v.add_child(vis_joint_num)
+            left_vis_joint_num = gui.Label("왼손 : 00/21")
+            v.add_child(left_vis_joint_num)
+            right_vis_joint_num = gui.Label("오른손 : 00/21")
+            v.add_child(right_vis_joint_num)
             h.add_child(v)
-            h.add_child(gui.Label(" | "))
+            h.add_child(gui.Label(" | \n | "))
             
             box = gui.Checkbox("")
             box.set_on_checked(self._on_change_bbox)
             h.add_child(box)
-            h.add_child(gui.Label(" | "))
+            h.add_child(gui.Label(" | \n | "))
 
             _button = gui.Button("*")
             _button.set_on_clicked(self.__getattribute__("_on_click_focus_{}".format(i)))
@@ -2289,7 +2213,7 @@ class AppWindow:
             h.add_child(_button)
             
             show_error_layout.add_child(h)
-            self._view_label_layout_list.append((button, vis_joint_num,  box))
+            self._view_label_layout_list.append((button, right_vis_joint_num, left_vis_joint_num,  box))
 
         show_error_layout.add_child(gui.Label("-"*60))
 
@@ -2307,7 +2231,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 0
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_1(self):
@@ -2315,7 +2239,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 1
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_2(self):
@@ -2323,7 +2247,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 2
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_3(self):
@@ -2331,7 +2255,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 3
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_4(self):
@@ -2339,7 +2263,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 4
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_5(self):
@@ -2347,7 +2271,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 5
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_6(self):
@@ -2355,7 +2279,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 6
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_7(self):
@@ -2363,7 +2287,7 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = 7
-        self._frame.active_cam=self._view_label_layout_list[self._camera_idx][0].text
+        self._frame.convert_camera(self._view_label_layout_list[self._camera_idx][0].text)
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: {}".format(self._view_label_layout_list[self._camera_idx][0].text)
     def _on_change_camera_merge(self):
@@ -2371,16 +2295,20 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._camera_idx = -1
-        self._frame.active_cam="merge"
+        self._frame.convert_camera("merge")
         for but, _, _, bbox in self._view_label_layout_list:
             bbox.checked = True
         self._update_pcd_layer()
         self._on_change_camera()
         self._activate_cam_txt.text = "현재 활성화된 카메라: 합쳐진 뷰"
     def _on_change_camera(self):
+        self._update_hand_mask()
         self._reset_image_viewer()
         self._update_image_viewer()
         self._update_diff_viewer()
+        self._update_current_hand_visible()
+        self._update_joint_mask()
+        self._update_hand_layer()
         self._on_active_camera_viewpoint()
     def _on_change_bbox(self, visible):
         self.logger.debug('_on_change_bbox')
@@ -2390,7 +2318,7 @@ class AppWindow:
     def _get_activate_cam(self):
         self.logger.debug('_get_activate_cam')
         cam_list = []
-        for but, _, bbox in self._view_label_layout_list:
+        for but, _, _, bbox in self._view_label_layout_list:
             if bbox.checked:
                 cam_list.append(but.text)
         return cam_list
@@ -2420,7 +2348,7 @@ class AppWindow:
         self._on_focus(7)
     def _on_focus(self, idx):
         self.logger.debug('_on_focus')
-        for i, (_, _, bbox) in enumerate(self._view_label_layout_list):
+        for i, (_, _, _, bbox) in enumerate(self._view_label_layout_list):
             if i == idx:
                 bbox.checked = True
             else:
@@ -2429,7 +2357,7 @@ class AppWindow:
     def _init_cam_name(self):
         self.logger.debug('_init_cam_name')
         self._cam_name_list = list(self.annotation_scene._cameras.keys())
-        for idx, (cam_button, _, _) in enumerate(self._view_label_layout_list):
+        for idx, (cam_button, _, _, _) in enumerate(self._view_label_layout_list):
             cam_button.text = self._cam_name_list[idx]
         self._diff_images = {cam_name: None for cam_name in self._cam_name_list}
     def _update_image_viewer(self):
@@ -2450,7 +2378,8 @@ class AppWindow:
         current_cam = self._cam_name_list[self._camera_idx]
         try:
             diff_img = self._generate_valid_image(current_cam)
-        except:
+        except Exception as e:
+            print(e)
             self._on_error('이미지 생성 실패')
             return
         self.diff_img = diff_img
@@ -2462,15 +2391,15 @@ class AppWindow:
         if not self._check_annotation_scene():
             return
         self._update_diff_viewer()
-    def _on_update_rgb_transparency(self, value):
+    def _on_update_mask_transparency(self, value):
         if not self._check_annotation_scene():
             return
-        if abs(value - self._last_rgb_transparency) > 0.01:
-            self._last_rgb_transparency = value
+        if abs(value - self._last_mask_transparency) > 0.01:
+            self._last_mask_transparency = value
             self._update_diff_viewer()
         
-    def _update_valid_mask(self):
-        self.logger.debug('Start _init_object_mask')
+    def _update_obj_mask(self):
+        self.logger.debug('Start _update_obj_mask')
         self.logger.debug('\tset hl renderer')
         
         self.hl_renderer.reset()    
@@ -2478,75 +2407,127 @@ class AppWindow:
 
         # rendering depth for each camera
         self.logger.debug('\trendering depth for each camera')
+        self._obj_mask = {}
+        
         for error_layout in self._view_label_layout_list:
             cam_name = error_layout[0].text
             intrinsic = self._frame.cameras[cam_name].intrinsic
             extrinsic = self._frame.cameras[cam_name].extrinsics
             
             self.hl_renderer.set_camera(intrinsic, extrinsic, self.W, self.H)
+            
             rgb_rendered = self.hl_renderer.render_rgb()
             rgb_rendered = np.array(rgb_rendered)
-            # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rgb_rendered.png'), rgb_rendered)
+            depth_rendered = self.hl_renderer.render_depth()
+            depth_rendered = np.array(depth_rendered, dtype=np.float32)
+            depth_rendered[np.isposinf(depth_rendered)] = 0
+            
             # object mask
             object_mask = np.bitwise_and(rgb_rendered[:, :, 0]>10, np.bitwise_and(rgb_rendered[:, :, 1]<2, rgb_rendered[:, :, 2]<2))
             rgb_rendered[~object_mask] = [0,0,0]
-        
+            
+            rgb_captured = self._frame.get_rgb(cam_name)
+            
+            self._obj_mask[cam_name] = {
+                "rgb_captured": rgb_captured,
+                "object_mask": rgb_rendered,
+                "depth_rendered": depth_rendered
+            }
+        # clear geometry
+        self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
+        self.window.set_needs_layout()
+        self.logger.debug('End _update_valid_error')
+    def _update_hand_mask(self):
+        self.logger.debug('Start _update_hand_mask')
+        self._joint_mask = {}
+        for error_layout in self._view_label_layout_list:
+            cam_name = error_layout[0].text
+            if cam_name != self._frame.active_cam:
+                continue
+            intrinsic = self._frame.cameras[cam_name].intrinsic
+            extrinsic = self._frame.cameras[cam_name].extrinsics
             # add hand joint mask
-            joints = self._active_hand.joints.detach()[0, :] # unit is mm
+            joints = self._active_hand.get_current_joints() # unit is m
             
             # convert 3d world xyz to 2d image xy
-            joint_2d = intrinsic @ extrinsic[:3] @ np.concatenate((joints, np.ones((joints.shape[0], 1))), axis=1).T
+            inv_SE = np.linalg.inv(extrinsic)
+            joint_z = (inv_SE[:3] @ np.concatenate((joints, np.ones((joints.shape[0], 1))), axis=1).T)[2, :]
+            joint_2d = intrinsic @ inv_SE[:3] @ np.concatenate((joints, np.ones((joints.shape[0], 1))), axis=1).T
             joint_2d = joint_2d[:2, :] / joint_2d[2, :]
             joint_2d = joint_2d.astype(np.int32)
             joint_2d = joint_2d.T
             valid_joint_2d = np.bitwise_and(joint_2d[:, 0]>=0, np.bitwise_and(joint_2d[:, 0]<self.W, np.bitwise_and(joint_2d[:, 1]>=0, joint_2d[:, 1]<self.H)))
             
-            rgb_captured = self._frame.get_rgb(cam_name)
-            
-            self._diff_images[cam_name] = {
-                "rgb_captured": rgb_captured,
-                "object_mask": object_mask,
+            self._joint_mask[cam_name] = {
                 "joint_2d": joint_2d,
                 "valid_joint_2d": valid_joint_2d,
+                "joint_z": joint_z
             }
-            
-        # clear geometry
-        self._log.text = "\t라벨링 검증용 이미지를 생성했습니다."
-        self.window.set_needs_layout()
-        self.logger.debug('End _update_valid_error')
-        
+    
     def _generate_valid_image(self, cam_name):
+        self.logger.debug('Start _generate_valid_image')
         mode = self._mask_mode.selected_text
 
-        rgb_captured = self._diff_images[cam_name]['rgb_captured']
-        object_mask  = self._diff_images[cam_name]['object_mask']
-        joint_2d  = self._diff_images[cam_name]['joint_2d']
-        valid_joint_2d  = self._diff_images[cam_name]['valid_joint_2d']
+        rgb_captured = self._obj_mask[cam_name]['rgb_captured']
+        object_mask  = self._obj_mask[cam_name]['object_mask']
+        depth_rendered = self._obj_mask[cam_name]['depth_rendered']
+        joint_2d  = self._joint_mask[cam_name]['joint_2d']
+        valid_joint_2d  = self._joint_mask[cam_name]['valid_joint_2d']
+        joint_z = self._joint_mask[cam_name]['joint_z']
 
         target_idx = [0]
-        
+        target = self._active_hand.optimize_target
         if "전체" in mode:
             target_idx += list(range(1, 21))
-        elif "엄지" in mode:
-            target_idx += list(range(1, 5))
-        elif "검지" in mode:
-            target_idx += list(range(5, 9))
-        elif "중지" in mode:
-            target_idx += list(range(9, 13))
-        elif "약지" in mode:
-            target_idx += list(range(13, 17))
-        elif "소지" in mode:
-            target_idx += list(range(17, 21))
+        elif "손가락" in mode:
+            if target=="root":
+                pass
+            elif target=="thumb":
+                target_idx += list(range(1, 5))
+            elif target=="fore":
+                target_idx += list(range(5, 9))
+            elif target=="middle":
+                target_idx += list(range(9, 13))
+            elif target=="ring":
+                target_idx += list(range(13, 17))
+            elif target=="little":
+                target_idx += list(range(17, 21))
 
-        joint_mask = object_mask.copy()
-
+        joint_mask = copy.deepcopy(object_mask)
         for idx in target_idx:
             if not valid_joint_2d[idx]: continue
-            joint_mask = cv2.circle(joint_mask, tuple(joint_2d[idx]), 5, self._active_hand._COLOR_OF_JOINT[idx], -1)
+            
+            if not self._active_hand.current_visible[idx]: continue
+            
+            # check depth with padding 5 consider H, W
+            x, y = joint_2d[idx]
+            x_min = max(0, x-5)
+            x_max = min(self.W, x+5)
+            y_min = max(0, y-5)
+            y_max = min(self.H, y+5)
+            depth_mask = depth_rendered[y_min:y_max, x_min:x_max]
+            try:
+                mean_depth = np.sum(depth_mask)/np.count_nonzero(depth_mask)
+            except:
+                mean_depth = np.inf
+            joint_depth = joint_z[idx]
+            if joint_depth > mean_depth:
+                continue
+            joint_mask = cv2.circle(joint_mask, tuple(joint_2d[idx]), int(self._hand_point_size.double_value), self._active_hand._COLOR_OF_JOINT[idx], -1)
+            # control idx
+            if idx == self._active_hand.control_joint:
+                joint_mask = cv2.circle(joint_mask, tuple(joint_2d[idx]), int(self._hand_point_size.double_value*1.5), [0, 255, 0], 5)
+        joint_mask = cv2.cvtColor(joint_mask, cv2.COLOR_BGR2RGB)
+        image = joint_mask
         if "RGB" in mode:
-            val = self._rgb_transparency.double_value
-            joint_mask = cv2.addWeighted(rgb_captured, val, joint_mask, 1-val, 0)
-        return joint_mask
+            val = self._mask_transparency.double_value
+            bool_mask = np.bitwise_or(joint_mask[:,:,0]>0, np.bitwise_or(joint_mask[:,:,1]>0, joint_mask[:,:,2]>0))
+            
+            
+            image = copy.deepcopy(rgb_captured)
+            image[bool_mask] = image[bool_mask]*(val) + joint_mask[bool_mask]*(1-val)
+            
+        return image
             
     def _img_wrapper(self, img):
         self.logger.debug('_img_wrapper')
@@ -2649,7 +2630,6 @@ class AppWindow:
     
     #endregion
     def _on_mouse(self, event):
-        
         # We could override BUTTON_DOWN without a modifier, but that would
         # interfere with manipulating the scene.
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
@@ -2687,17 +2667,11 @@ class AppWindow:
         
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
                 gui.KeyModifier.SHIFT) and event.is_button_down(gui.MouseButton.RIGHT):
-            ctrl_idx = self._active_hand.control_idx + 1
-            self._active_hand.set_control_joint(ctrl_idx)
-            self._update_target_hand()
-            self._update_joint_mask()
+            self._control_joint_up()
             self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
                 gui.KeyModifier.CTRL) and event.is_button_down(gui.MouseButton.RIGHT):
-            ctrl_idx = self._active_hand.control_idx - 1
-            self._active_hand.set_control_joint(ctrl_idx)
-            self._update_target_hand()
-            self._update_joint_mask()
+            self._control_joint_down()
             self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
         
         return gui.Widget.EventCallbackResult.IGNORED
@@ -2706,45 +2680,28 @@ class AppWindow:
         self._depth_image = np.asarray(depth_image)
     
     def move(self, x, y, z, rx, ry, rz):
-        self.logger.debug('move_{}'.format(self._active_type))
+        self.logger.debug('move')
         self._log.text = "{} 라벨 이동 중입니다.".format(self._active_hand.get_control_joint_name())
         self.window.set_needs_layout()
         self._last_change = time.time()
-        if x != 0 or y != 0 or z != 0: # translation
-            current_xyz = self._active_hand.get_control_position()
-            # convert x, y, z cam to world
-            R = self._scene.scene.camera.get_view_matrix()[:3,:3]
-            R_inv = np.linalg.inv(R)
-            xyz = np.dot(R_inv, np.array([x, y, z]))
-            xyz = current_xyz + xyz
+        
+        current_xyz = self._active_hand.get_control_position()
+        # convert x, y, z cam to world
+        R = self._scene.scene.camera.get_view_matrix()[:3,:3]
+        R_inv = np.linalg.inv(R)
+        xyz = np.dot(R_inv, np.array([x, y, z]))
+        xyz = current_xyz + xyz
+        
+        self._move_hand_translation(xyz)
+        self._update_hand_mask()
+        self._update_diff_viewer()
             
-            self._move_hand_translation(xyz)
-        else: # rotation
-            current_xyz = self._active_hand.get_control_rotation()
-            r = Rot.from_rotvec(current_xyz)
-            current_rot_mat = r.as_matrix()
-            rot_mat = o3d.geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
-            r = Rot.from_matrix(np.matmul(current_rot_mat, rot_mat))
-            xyz = r.as_rotvec()
-
-            self._move_hand_rotation(xyz)
     
     # move hand
     def _move_hand_translation(self, xyz):
         self._active_hand.set_control_position(xyz)
-        if self._active_hand.get_optimize_target()=='root':
-            self._active_hand.save_undo(forced=True)
-            self._annotation_changed = True
-            self._move_root = True
-        else:
-            self._guide_changed = True
-        self._update_hand_layer()
-    def _move_hand_rotation(self, xyz):
-        self._active_hand.set_control_rotation(xyz)
-        self._active_hand.save_undo()
         self._annotation_changed = True
         self._update_hand_layer()
-    
     
     def _init_pcd_layer(self):
         self.logger.debug('_init_pcd_layer')
@@ -2765,23 +2722,10 @@ class AppWindow:
                 return
             self._pcd = self._frame.get_pcd(cam_name_list)
             self.bounds = self._pcd.get_axis_aligned_bounding_box()
-            if self._down_sample_pcd.checked:
-                pcd = self._get_active_pcd(self._pcd)
-            else:
-                pcd = self._pcd
-            
-            self._add_geometry(self._scene_name, pcd, self.settings.scene_material)
+            self._add_geometry(self._scene_name, self._pcd, self.settings.scene_material)
             self._inlier_points = []
         else:
             self._remove_geometry(self._scene_name)
-    def _get_active_pcd(self, pcd):
-        hand = self._active_hand.get_geometry()['mesh']
-        bbox = hand.get_axis_aligned_bounding_box()
-        bbox = bbox.scale(3, bbox.get_center())
-        
-        active_pcd = pcd.crop(bbox)
-        nactive_pcd = pcd.voxel_down_sample(0.02)
-        return active_pcd+nactive_pcd
     def _toggle_pcd_visible(self):
         self.logger.debug('_toggle_pcd_visible')
         show = self._show_pcd.checked
@@ -2802,7 +2746,7 @@ class AppWindow:
                 self._add_geometry(obj_name, geo, self.settings.obj_material)
                 self._object_names.append(obj_name)
         # update object mask
-        self._update_valid_mask()
+        self._update_obj_mask()
     def _toggle_obj_visible(self):
         show = self._show_objects.checked
         self._show_objects.checked = not show
@@ -2839,173 +2783,65 @@ class AppWindow:
         active_side = self._hand_names[self._active_hand_idx]
         self._hands = hands
         self._active_hand = hands[active_side]
+        self._active_hand.set_optimize_target('root')
+        self._on_change_camera_merge()
         
-        for side, hand in hands.items():
-            hand_geo = hand.get_geometry()
-            if side == 'right':
-                joint_name = self._right_hand_joint_name
-                link_name = self._right_hand_link_name
-            elif side == 'left':
-                joint_name = self._left_hand_joint_name
-                link_name = self._left_hand_link_name
-            else:
-                assert False, "visualize hand error"
-            self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
-            self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
-    
-        active_geo = self._active_hand.get_active_geometry()
-        self._add_geometry(self._control_joint_name, 
-                           active_geo['control'], self.settings.control_target_joint_material)
-        self.control_joint_geo = active_geo['control']
-        self._update_joint_mask()
-        self._update_current_hand_str()
     def _update_hand_layer(self):
-        # update active hand
+        if not self._check_annotation_scene():
+            return
         
-        # get geo from hands
+        active_side = self._active_hand.side
         
-        
-        
-        
-        # update control joint
-        
-        
-        
-        self._update_activate_hand()
-        self._update_target_hand()
-        self._update_joint_mask()
-    def _update_target_hand(self):
-        
-        
-            target_geo = self._active_hand.get_target_geometry()
-            self._add_geometry(self._target_joint_name, 
-                            target_geo['joint'], self.settings.target_joint_material)
-            self._add_geometry(self._target_link_name, 
-                            target_geo['link'], self.settings.target_link_material)
-            active_geo = self._active_hand.get_active_geometry()
-            self._add_geometry(self._active_joint_name, 
-                            active_geo['joint'], self.settings.active_target_joint_material)
-            self._add_geometry(self._control_joint_name, 
-                            active_geo['control'], self.settings.control_target_joint_material)
-            self.control_joint_geo = active_geo['control']
-        else:
-            if self._check_geometry(self._target_joint_name):
-                self._remove_geometry(self._target_joint_name)
-            if self._check_geometry(self._target_link_name):
-                self._remove_geometry(self._target_link_name)
-            if self._check_geometry(self._active_joint_name):
-                self._remove_geometry(self._active_joint_name)
-            active_geo = self._active_hand.get_active_geometry()
-            self._add_geometry(self._control_joint_name, 
-                            active_geo['control'], self.settings.control_target_joint_material)
-            self.control_joint_geo = active_geo['control']
-    def _update_activate_hand(self):
-        if self.settings.show_hand:
-            hand_geo = self._active_hand.get_geometry()
-            side = self._active_hand.side
-            if side == 'right':
-                mesh_name = self._right_hand_mesh_name
-                joint_name = self._right_hand_joint_name
-                link_name = self._right_hand_link_name
-            elif side == 'left':
-                mesh_name = self._left_hand_mesh_name
-                joint_name = self._left_hand_joint_name
-                link_name = self._left_hand_link_name
+        for side, hand in self._hands.items():
+            joints = hand.get_current_joints()
+            # add joints
+            for i, xyz in enumerate(joints):
+                geo = o3d.geometry.PointCloud(o3d.utility.Vector3dVector([xyz]))
+                mat = self.settings.hand_joint_material[i]
+                self._add_geometry(self._hand_joint_name.format(side, i), geo, mat)
+
+            
+            if side==active_side:
+                # add link
+                link_geo = hand.get_links()
+                mat = self.settings.active_link_material
+                self._add_geometry(self._hand_link_name.format(side), link_geo, mat)
+                
+                active_geo = hand.get_active_geometry()
+                
+                mat = self.settings.active_target_joint_material
+                self._add_geometry(self._active_joint_name, active_geo['joint'], mat)
+                mat = self.settings.control_target_joint_material
+                self._add_geometry(self._control_joint_name, active_geo['control'], mat)
+                
             else:
-                assert False, "visualize hand error"
-            mesh_mat = self.settings.active_hand_mesh_material
-            self._add_geometry(mesh_name, hand_geo['mesh'], mesh_mat)
-            self._add_geometry(joint_name, hand_geo['joint'], self.settings.hand_joint_material)
-            self._add_geometry(link_name, hand_geo['link'], self.settings.hand_link_material)
-        else:
-            side = self._active_hand.side
-            if side == 'right':
-                mesh_name = self._right_hand_mesh_name
-                joint_name = self._right_hand_joint_name
-                link_name = self._right_hand_link_name
-            elif side == 'left':
-                mesh_name = self._left_hand_mesh_name
-                joint_name = self._left_hand_joint_name
-                link_name = self._left_hand_link_name
-            self._remove_geometry(mesh_name)
-            self._remove_geometry(joint_name)
-            self._remove_geometry(link_name)
+                # add link
+                link_geo = hand.get_links()
+                mat = self.settings.hand_link_material
+                self._add_geometry(self._hand_link_name.format(side), link_geo, mat)
+    
+        self._update_hand_mask()
+    def _update_current_hand_visible(self):
+        if not self._check_annotation_scene():
+            return
+        for but, r, l, _ in self._view_label_layout_list:
+            state = self._frame.get_visible_state(but.text)
+            for side, vis_state in state.items():
+                if side=='left':
+                    l.text = "왼손: {:02d}/21".format(sum(vis_state))
+                elif side=='right':
+                    r.text = "오른손: {:02d}/21".format(sum(vis_state))
+    
     def _toggle_hand_visible(self):
         self.logger.debug('_toggle_hand_visible')
         show = self._show_hands.checked
         self._show_hands.checked = not show
         self._on_show_hand(not show)
-    def _on_optimize(self):
-        self._log.text = "\t {} 자동 정렬 중입니다.".format(self._active_hand.get_control_joint_name())
-        self.window.set_needs_layout()
-        self._last_change = time.time()
-        self._annotation_changed = self._active_hand.optimize_to_target()
-        if self._annotation_changed:
-            self._update_hand_layer()
-            self._active_hand.save_undo()
-    def _on_icp(self):
-        self.logger.debug('_on_icp')
-        if not self._check_annotation_scene():
-            return
-        # TODO: Selected mesh and (option) selected points
-        if len(self._inlier_points) == 0:
-            self._on_error("No inlier points selected")
-            return
-        target_pcd = self._pcd.select_by_index(self._inlier_points)
-        if len(target_pcd.points) > 10000:
-            # downsampling
-            sample = min(10000, len(target_pcd.points))
-            target_pcd = target_pcd.uniform_down_sample(sample)
-        target_points = np.asarray(target_pcd.points)
-        ret = self._active_hand.optimize_to_points(target_points)
-        if not ret:
-            self._on_error("최적화 실패")
-        self._update_hand_layer()
-        self._active_hand.save_undo()
-            
-    def _undo(self):
-        self.logger.debug('_undo')
-        self._auto_optimize.checked = False
-        ret = self._active_hand.undo()
-        if not ret:
-            self._on_error("이전 상태가 없습니다. (error at _undo)")
-        else:
-            self._log.text = "이전 상태를 불러옵니다."
-            self.window.set_needs_layout()
-            self._update_hand_layer()
-    def _redo(self):
-        self.logger.debug('_redo')
-        self._auto_optimize.checked = False
-        ret = self._active_hand.redo()
-        if not ret:
-            self._on_error("이후 상태가 없습니다. (error at _redo)")
-        else:
-            self._log.text = "이후 상태를 불러옵니다."
-            self.window.set_needs_layout()
-            self._update_hand_layer()
-        
+
     def _on_key(self, event):
         if self._active_hand is None:
             return gui.Widget.EventCallbackResult.IGNORED
 
-        # mode change
-        if event.key == gui.KeyName.F1 and event.type == gui.KeyEvent.DOWN:
-            self._convert_mode(LabelingMode.STATIC)
-            return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F2 and event.type == gui.KeyEvent.DOWN:
-            self._convert_mode(LabelingMode.OPTIMIZE)
-            return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F3 and event.type == gui.KeyEvent.DOWN:
-            self._convert_mode(LabelingMode.OBJECT)
-            return gui.Widget.EventCallbackResult.CONSUMED
-        elif event.key == gui.KeyName.F4 and event.type == gui.KeyEvent.DOWN:
-            self._convert_mode(LabelingMode.AUTO)
-            return gui.Widget.EventCallbackResult.CONSUMED
-        
-        # elif event.key == gui.KeyName.F4 and event.type == gui.KeyEvent.DOWN:
-        #     self._convert_mode(LabelingMode.MESH)
-        #     return gui.Widget.EventCallbackResult.CONSUMED
-        # if ctrl is pressed then  increase translation / reset finger to flat
         if event.key == gui.KeyName.LEFT_CONTROL or event.key == gui.KeyName.RIGHT_CONTROL:
             if event.type == gui.KeyEvent.DOWN:
                 if not self.upscale_responsiveness:
@@ -3043,9 +2879,6 @@ class AppWindow:
         if event.key==gui.KeyName.Z and event.type==gui.KeyEvent.DOWN:
             self._toggle_hand_visible()
             return gui.Widget.EventCallbackResult.CONSUMED
-        if event.key==gui.KeyName.X and event.type==gui.KeyEvent.DOWN:
-            self._auto_optimize.checked = not self._auto_optimize.checked
-            return gui.Widget.EventCallbackResult.CONSUMED
         if event.key==gui.KeyName.C and event.type==gui.KeyEvent.DOWN:
             self._toggle_obj_visible()
             return gui.Widget.EventCallbackResult.CONSUMED
@@ -3071,19 +2904,6 @@ class AppWindow:
             if event.key == gui.KeyName.P:
                 self._reset_image_viewer()
             self._move_viewer()
-            
-            # out = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
-            # ratio = 640 / self.W
-            # _rgb_img = cv2.resize(out, (640, int(self.H*ratio)))
-            # _rgb_img = o3d.geometry.Image(cv2.cvtColor(_rgb_img, cv2.COLOR_BGR2RGB))
-            
-            
-            # out = cv2.warpAffine(self.diff_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
-            # ratio = 640 / self.W
-            # _diff_img = cv2.resize(out, (640, int(self.H*ratio)))
-            # _diff_img = o3d.geometry.Image(cv2.cvtColor(_diff_img, cv2.COLOR_BGR2RGB))
-            
-            
             return gui.Widget.EventCallbackResult.HANDLED
         
         # save label
@@ -3091,23 +2911,6 @@ class AppWindow:
             self._on_save_label()
             return gui.Widget.EventCallbackResult.HANDLED
         
-
-
-        
-        
-        # if shift pressed then 
-        # 1. translation -> rotation
-        if (event.key == gui.KeyName.LEFT_SHIFT or event.key == gui.KeyName.RIGHT_SHIFT) \
-            and (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root'):
-            if event.type == gui.KeyEvent.DOWN:
-                self._left_shift_modifier = True
-                self._add_hand_frame()
-            elif event.type == gui.KeyEvent.UP:
-                self._left_shift_modifier = False
-                self._remove_hand_frame()
-            return gui.Widget.EventCallbackResult.HANDLED
-        
-    
         # convert hand
         if (event.key == gui.KeyName.TAB) and (event.type==gui.KeyEvent.DOWN):
             self._convert_hand()
@@ -3115,107 +2918,70 @@ class AppWindow:
         
         # reset hand pose
         if event.key == gui.KeyName.R and event.type==gui.KeyEvent.DOWN:
+            return gui.Widget.EventCallbackResult.CONSUMED
+            #TODO
             if self.reset_flat:
                 self._active_hand.reset_pose(flat_hand=True)
             else:
                 self._active_hand.reset_pose()
             self._update_hand_layer()
             return gui.Widget.EventCallbackResult.CONSUMED
-
-        if (event.key==gui.KeyName.COMMA and event.type==gui.KeyEvent.DOWN):
-            self._undo()
-            return gui.Widget.EventCallbackResult.CONSUMED
-        elif (event.key==gui.KeyName.PERIOD and event.type==gui.KeyEvent.DOWN):
-            self._redo()
-            return gui.Widget.EventCallbackResult.CONSUMED
         
-        if event.key == gui.KeyName.ZERO and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.toggle_current_joint_lock()
+        if event.key == gui.KeyName.X and (event.type==gui.KeyEvent.DOWN):
+            self._active_hand.toggle_current_joint_visible()
+            self._annotation_changed = True
+            self._update_current_hand_visible()
+            self._update_hand_mask()
+            self._update_diff_viewer()
             self._update_joint_mask()
+            
             return gui.Widget.EventCallbackResult.HANDLED
         
         # convert finger
         is_converted_finger = True
         if event.key == gui.KeyName.BACKTICK:
-            self._active_hand.set_optimize_target('root')
+            self._convert_to_root()
         elif event.key == gui.KeyName.ONE and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.set_optimize_target('thumb')
+            self._convert_to_thumb()
         elif event.key == gui.KeyName.TWO and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.set_optimize_target('fore')
+            self._convert_to_fore()
         elif event.key == gui.KeyName.THREE and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.set_optimize_target('middle')
+            self._convert_to_middle()
         elif event.key == gui.KeyName.FOUR and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.set_optimize_target('ring')
+            self._convert_to_ring()
         elif event.key == gui.KeyName.FIVE and (event.type==gui.KeyEvent.DOWN):
-            self._active_hand.set_optimize_target('little')
+            self._convert_to_little()
         else:
             is_converted_finger = False
         
         is_convert_joint = True
         if event.key == gui.KeyName.PAGE_UP and (event.type==gui.KeyEvent.DOWN):
-            ctrl_idx = self._active_hand.control_idx + 1
-            self._active_hand.set_control_joint(ctrl_idx)
+            self._control_joint_up()
         elif event.key == gui.KeyName.PAGE_DOWN and (event.type==gui.KeyEvent.DOWN):
-            ctrl_idx = self._active_hand.control_idx - 1
-            self._active_hand.set_control_joint(ctrl_idx)
+            self._control_joint_down()
         else:
             is_convert_joint = False
         
         if is_converted_finger or is_convert_joint:
             self.logger.debug("convert joint {}".format(self._active_hand.get_control_joint_name()))
-            self._update_target_hand()
+            self._update_hand_layer()
             self._update_joint_mask()
             return gui.Widget.EventCallbackResult.CONSUMED
 
-        if self._labeling_mode==LabelingMode.OPTIMIZE:
-            # optimze
-            if event.key == gui.KeyName.SPACE:
-                if self._active_hand is None:
-                    return gui.Widget.EventCallbackResult.IGNORED
-                self._on_optimize()
-                return gui.Widget.EventCallbackResult.CONSUMED
-            # reset guide pose
-            elif event.key == gui.KeyName.HOME:
-                self._guide_changed = False
-                self._active_hand.reset_target()
-                self._update_target_hand()
-                return gui.Widget.EventCallbackResult.CONSUMED
-        
         # Translation
-        if event.type!=gui.KeyEvent.UP and self._labeling_mode!=LabelingMode.AUTO:
-            if not self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.OPTIMIZE or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
-                if event.key == gui.KeyName.D:
-                    self.move( self.dist, 0, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.A:
-                    self.move( -self.dist, 0, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.S:
-                    self.move( 0, -self.dist, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.W:
-                    self.move( 0, self.dist, 0, 0, 0, 0)
-                elif event.key == gui.KeyName.Q:
-                    self.move( 0, 0, -self.dist, 0, 0, 0)
-                elif event.key == gui.KeyName.E:
-                    self.move( 0, 0, self.dist, 0, 0, 0)
-            # Rot - keystrokes are not in same order as translation to make movement more human intuitive
-            elif self._left_shift_modifier and \
-                (self._labeling_mode==LabelingMode.STATIC or self._active_hand.get_optimize_target()=='root' or self._labeling_mode==LabelingMode.OBJECT):
-                if event.key == gui.KeyName.E:
-                    self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
-                elif event.key == gui.KeyName.Q:
-                    self.move( 0, 0, 0, 0, 0, -self.deg * np.pi / 180)
-                elif event.key == gui.KeyName.A:
-                    self.move( 0, 0, 0, 0, self.deg * np.pi / 180, 0)
-                elif event.key == gui.KeyName.D:
-                    self.move( 0, 0, 0, 0, -self.deg * np.pi / 180, 0)
-                elif event.key == gui.KeyName.S:
-                    self.move( 0, 0, 0, self.deg * np.pi / 180, 0, 0)
-                elif event.key == gui.KeyName.W:
-                    self.move( 0, 0, 0, -self.deg * np.pi / 180, 0, 0)
-                if self._active_type=='hand':
-                    self._add_hand_frame()
-                elif self._active_type=='object':
-                    self._add_obj_frame()
+        if event.type!=gui.KeyEvent.UP:
+            if event.key == gui.KeyName.D:
+                self.move( self.dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.A:
+                self.move( -self.dist, 0, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.S:
+                self.move( 0, -self.dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.W:
+                self.move( 0, self.dist, 0, 0, 0, 0)
+            elif event.key == gui.KeyName.Q:
+                self.move( 0, 0, -self.dist, 0, 0, 0)
+            elif event.key == gui.KeyName.E:
+                self.move( 0, 0, self.dist, 0, 0, 0)
         return gui.Widget.EventCallbackResult.IGNORED
         
  
@@ -3228,11 +2994,6 @@ class AppWindow:
                 self._log.text = "{} 라벨링 중입니다.".format(self._active_hand.get_control_joint_name())
                 self.window.set_needs_layout()
         
-        if self._auto_optimize.checked and self._active_hand is not None:
-            if self._labeling_mode==LabelingMode.OPTIMIZE and self._guide_changed:
-                if not self._active_hand.get_optimize_target()=='root':
-                    self._on_optimize()
-        
         if self._auto_save.checked and self.annotation_scene is not None:
             if (time.time()-self._last_saved) > self._auto_save_interval.double_value and self._annotation_changed:
                 self.logger.debug('auto saving')
@@ -3241,11 +3002,8 @@ class AppWindow:
                 self._last_saved = time.time()
                 self._log.text = "라벨 결과 자동 저장중입니다."
                 self.window.set_needs_layout()
-                self._update_diff_viewer()
         
-        if self._down_sample_pcd.checked and self._move_root:
-            self._update_pcd_layer()
-            self._move_root = False
+        
         self.logger.memory_usage()
         self._init_view_control()
 
