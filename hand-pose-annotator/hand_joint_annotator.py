@@ -11,18 +11,11 @@ import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 import logging
 import atexit
-import matplotlib as mpl
 
 from typing import List, NamedTuple, Optional, TYPE_CHECKING, Union
 
 import torch
 from manopth.manolayer import ManoLayer
-from torch import optim
-
-from pytorch3d.ops import sample_points_from_meshes, knn_points
-from pytorch3d.ops import utils as oputil
-from pytorch3d.loss import chamfer_distance, point_mesh_face_distance
-from pytorch3d.structures import Meshes, Pointclouds
 
 import numpy as np
 import cv2
@@ -31,10 +24,7 @@ import pickle
 import yaml
 import time
 import json
-import datetime
-import shutil
 import copy
-from scipy.spatial.transform import Rotation as Rot
 
 import psutil
 
@@ -182,69 +172,7 @@ class Utils:
                 data = pickle5.load(f)
 
         return data
-
-
-    def trimesh_to_open3d(mesh):
-        return mesh.as_open3d()
-
-    def open3d_to_trimesh(mesh):
-        pass
-
-
-    #https://gist.github.com/JosueCom/7e89afc7f30761022d7747a501260fe3
-    def distance_matrix(x, y=None, p = 2): #pairwise distance of vectors
-        
-        y = x if type(y) == type(None) else y
-
-        n = x.size(0)
-        m = y.size(0)
-        d = x.size(1)
-
-        x = x.unsqueeze(1).expand(n, m, d)
-        y = y.unsqueeze(0).expand(n, m, d)
-        
-        dist = torch.pow(x - y, p).sum(2) ** (1/p)
-        
-        return dist
-
-    @staticmethod
-    def calc_chamfer_distance(p1, p2):
-        p1 = Pointclouds(torch.Tensor(p1).unsqueeze(0))
-        p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
-        return chamfer_distance(p1, p2)[0]
-
-    def closest_point_error(p1, p2):
-        np.random.seed(0)
-        if p1.shape[0] > 1e4:
-            p1_idx = np.random.choice(p1.shape[0], 10000, replace=False)
-            p1 = p1[p1_idx]
-        if p2.shape[0] > 1e4:
-            p2_idx = np.random.choice(p2.shape[0], 10000, replace=False)
-            p2 = p2[p2_idx]
-
-        p1 = Pointclouds(torch.Tensor(p1).unsqueeze(0))
-        p2 = Pointclouds(torch.Tensor(p2).unsqueeze(0))
-        Xt, num_points_X = oputil.convert_pointclouds_to_tensor(p1)
-        Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(p2)
-        knn = knn_points(
-                Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
-            )
-        dist = knn.dists[0]
-        # dist = dist[dist<0.0005]
-        return torch.mean(dist)
-    def closest_point_loss(X: Union[torch.Tensor, "Pointclouds"],
-                       Y: Union[torch.Tensor, "Pointclouds"],
-                       relative_rmse_thr: float = 1e-6):
-        Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-        Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(Y)
-
-        b, size_X, dim = Xt.shape
-        
-        knn = knn_points(
-                Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
-            )
-        return torch.sum(knn.dists)
-
+    
 class Logger:
     def __init__(self, name):
         self.logger = logging.getLogger(name)
