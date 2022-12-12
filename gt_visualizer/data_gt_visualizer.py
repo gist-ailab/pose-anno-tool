@@ -323,10 +323,7 @@ class GTVisualizer():
             except:
                 x, y = 0, 0
             occ_toplefts.append((y, x))
-            if "data2" in self.data_type:
-                obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
-            else:
-                obj_names.append("{}".format(anno["object_id"]))
+            obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
 
         # draw amodal and visible masks on rgb
         amodal = self.rgb.copy()
@@ -334,36 +331,16 @@ class GTVisualizer():
         occ = self.rgb.copy()
         cmap = matplotlib.cm.get_cmap('gist_rainbow')
 
-        if "data2" in self.data_type:
-            for i, (amodal_mask, vis_mask, amodal_topleft, vis_topleft, occ_mask, occ_top_left) in enumerate(zip(amodal_masks, vis_masks, amodal_toplefts, vis_toplefts, occ_masks, occ_toplefts)):
-                amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
-                vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
-                occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
-                if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
-                    amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
-                if vis_topleft[0] != 0 and vis_topleft[1] != 0:
-                    vis = cv2.putText(vis, obj_names[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
-                if occ_top_left[0] != 0 and occ_top_left[1] != 0:
-                    occ = cv2.putText(occ, obj_names[i], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
-        elif "data3-1" in self.data_type and len(amodal_masks) > 0:
-            amodal_mask = amodal_masks[0]
-            vis_mask = vis_masks[0]
-            occ_mask = occ_masks[0]
-            amodal_topleft = amodal_toplefts[0]
-            vis_topleft = vis_toplefts[0]
-            occ_top_left = occ_toplefts[0]
-            amodal[amodal_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
-            vis[vis_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
-            occ[occ_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
-            amodal = np.uint8(amodal)[:, :, :3]
-            vis = np.uint8(vis)[:, :, :3]
-            occ = np.uint8(occ)[:, :, :3]
+        for i, (amodal_mask, vis_mask, amodal_topleft, vis_topleft, occ_mask, occ_top_left) in enumerate(zip(amodal_masks, vis_masks, amodal_toplefts, vis_toplefts, occ_masks, occ_toplefts)):
+            amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
+            vis[vis_mask] = np.array(cmap(i/len(vis_masks))[:3]) * 255 * 0.6 + vis[vis_mask] * 0.4
+            occ[occ_mask] = np.array(cmap(i/len(occ_masks))[:3]) * 255 * 0.6 + occ[occ_mask] * 0.4
             if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
-                amodal = cv2.putText(amodal, obj_names[0], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
+                amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
             if vis_topleft[0] != 0 and vis_topleft[1] != 0:
-                vis = cv2.putText(vis, obj_names[0], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
+                vis = cv2.putText(vis, obj_names[i], vis_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
             if occ_top_left[0] != 0 and occ_top_left[1] != 0:
-                occ = cv2.putText(occ, obj_names[0], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
+                occ = cv2.putText(occ, obj_names[i], occ_top_left, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(vis_masks))[:3]) * 255, 2)
 
         amodal = cv2.resize(amodal, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
         vis = cv2.resize(vis, (self.width//3, self.height//2), interpolation=cv2.INTER_NEAREST)
