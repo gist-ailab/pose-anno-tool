@@ -145,8 +145,8 @@ class GTVisualizer():
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_image_id)
+        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', self.min_scene_id, self.max_scene_id, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', self.min_image_id, self.max_image_id, self.on_image_id)
         cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
         cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
         cv2.setMouseCallback('GIST AILAB Data GT Visualizer', self.on_mouse)
@@ -408,17 +408,17 @@ class GTVisualizer():
         sub_path, sub_dir_2 = os.path.split(sub_path)
         aihub_root, sub_dir_1 = os.path.split(sub_path)
         if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
-            if os.path.basename(aihub_root) == "실제":
+            if os.path.basename(aihub_root) == "02_실제":
                 self.data_type = "data2_real"
-            elif os.path.basename(aihub_root) == "가상":
+            elif os.path.basename(aihub_root) == "01_가상":
                 self.data_type = "data2_syn"
             else:
                 print("폴더 구조를 확인하세요.")
-        elif sub_dir_1 in ["UR5", "Panda"]:
-            if os.path.basename(aihub_root) == "실제":
-                self.data_type = "data3-1_real"
-            elif os.path.basename(aihub_root) == "가상":
-                self.data_type = "data3-1_syn"
+        elif sub_dir_1 in ["01_UR5", "02_Panda"]:
+            if os.path.basename(aihub_root) == "02_실제":
+                self.data_type = "data3_real"
+            elif os.path.basename(aihub_root) == "01_가상":
+                self.data_type = "data3_syn"
             else:
                 print("폴더 구조를 확인하세요.")  
         else:
@@ -440,18 +440,22 @@ class GTVisualizer():
             self.min_scene_id = 0
             self.max_image_id = 999
             self.min_image_id = 0
-        elif self.data_type == "data3-1_real":
+        elif self.data_type == "data3_real":
             self.max_scene_id = 1000
             self.min_scene_id = 1
             self.max_image_id = 999
             self.min_image_id = 1
-        elif self.data_type == "data3-1_syn":
-            self.max_scene_id = 100
+        elif self.data_type == "data3_syn":
+            self.max_scene_id = 184
             self.min_scene_id = 1
-            self.max_image_id = 150
-            self.min_image_id = 0
-        
+            self.max_image_id = 250
+            self.min_image_id = 1
         self.init_cv2()
+        cv2.setTrackbarMax('scene_id', 'GIST AILAB Data GT Visualizer', self.max_scene_id)
+        cv2.setTrackbarMin('scene_id', 'GIST AILAB Data GT Visualizer', self.min_scene_id)
+        cv2.setTrackbarMax('image_id', 'GIST AILAB Data GT Visualizer', self.max_image_id)
+        cv2.setTrackbarMin('image_id', 'GIST AILAB Data GT Visualizer', self.min_image_id)
+
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
 
