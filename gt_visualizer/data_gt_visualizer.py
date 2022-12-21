@@ -371,7 +371,7 @@ class GTVisualizer():
         sub_path, scene_id = os.path.split(sub_path)
         sub_path, sub_dir_2 = os.path.split(sub_path)
         aihub_root, sub_dir_1 = os.path.split(sub_path)
-        if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
+        if sub_dir_1 in ["04_YCB", "05_HOPE", "06_APC", "07_GraspNet1Billion", "08_DexNet", "01_가정", "02_산업", "03_물류", "09_혼합"]:
             if os.path.basename(aihub_root) == "02_실제":
                 self.data_type = "data2_real"
             elif os.path.basename(aihub_root) == "01_가상":
@@ -395,7 +395,7 @@ class GTVisualizer():
         self.scene_id = int(scene_id)
         self.image_id = int(image_id)
         if self.data_type == "data2_real":
-            self.max_scene_id = 1000
+            self.max_scene_id = 1050
             self.min_scene_id = 1
             self.max_image_id = 52
             self.min_image_id = 1
