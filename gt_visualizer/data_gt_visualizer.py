@@ -57,9 +57,11 @@ class GTVisualizer():
         self.scale_factor = 1
         self.rbtn_down = False
 
-        self.icx, self.icy = self.width/2, self.height/2
+        self.img_height, self.img_width = self.height//2, self.width//3
+        self.icx, self.icy = self.img_width//2, self.img_height//2
         self.data_type = None
         self.black = np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8)
+        self._grid_img = [np.zeros((self.height//2, self.width//3, 3), dtype=np.uint8) for x in range(6)]
 
 
 
@@ -67,6 +69,8 @@ class GTVisualizer():
         
         for sub_dir_1 in os.listdir(self.aihub_root):
             for sub_dir_2 in os.listdir(os.path.join(self.aihub_root, sub_dir_1)):
+                if sub_dir_2[-4:] in ['.zip', '.tar']:
+                    continue
                 for scene_id in os.listdir(os.path.join(self.aihub_root, sub_dir_1, sub_dir_2)):
                     if int(scene_id) == self.scene_id:
                         self.sub_dir_1 = sub_dir_1
@@ -99,23 +103,30 @@ class GTVisualizer():
             self.is_updated = False
         elif event == cv2.EVENT_LBUTTONDOWN:
             # if self.icx == self.width/2 and self.icy == self.height/2 and self.scale_factor == 1:
+            cx = x % self.img_width
+            cy = y % self.img_height
             if self.M is not None:
                 H_inv = cv2.invertAffineTransform(self.M)
-                x, y = H_inv @ np.array([x, y, 1])
-                x, y = int(x), int(y)
+                cx, cy = H_inv @ np.array([cx, cy, 1])
+                cx, cy = int(cx), int(cy)
             # draw rectangular grid on rgb image centered at (x, y)
             grid_size = 9
             # draw horizontal lines
-            min_x = x - grid_size//2
-            max_x = x + grid_size//2
-            min_y = y - grid_size//2
-            max_y = y + grid_size//2
-            for i in range(grid_size):
-                if i % 2 == 0:
-                    cv2.line(self.grid_img, (min_x, min_y+i), (max_x, min_y+i), (0, 255, 0), 1)
-                    cv2.line(self.grid_img, (min_x+i, min_y), (min_x+i, max_y), (0, 255, 0), 1)
+            min_x = cx - grid_size//2
+            max_x = cx + grid_size//2
+            min_y = cy - grid_size//2
+            max_y = cy + grid_size//2
+            for idx, _ in enumerate(self._grid_img):
+                if idx == 2:
+                    continue
+                for i in range(grid_size):
+                    if i % 2 == 0:
+                        self._grid_img[idx] = cv2.line(self._grid_img[idx], (min_x, min_y+i), (max_x, min_y+i), (0, 255, 0), 1)
+                        self._grid_img[idx] = cv2.line(self._grid_img[idx], (min_x+i, min_y), (min_x+i, max_y), (0, 255, 0), 1)
+            self.grid_img = np.vstack([np.hstack(self._grid_img[:3]), np.hstack(self._grid_img[3:])])
             # overlay grid image on self.frame
             self.is_updated = False
+
         elif event == cv2.EVENT_RBUTTONDOWN:
             if self.M is not None:
                 H_inv = cv2.invertAffineTransform(self.M)
@@ -191,11 +202,12 @@ class GTVisualizer():
             self.is_img_load = False
         elif key == ord('x'):
             self.grid_img = np.zeros((self.height, self.width, 3), np.uint8)
+            self._grid_img = [np.zeros((self.img_height, self.img_width, 3), np.uint8) for _ in range(len(self._grid_img))]
             self.is_updated = False
         
 
     def affine_transform(self, img):
-        ow, oh = self.width, self.height
+        ow, oh = self.img_width, self.img_height
         (ocx, ocy) = ((ow-1)/2, (oh-1)/2) 
         H = translate(+ocx, +ocy) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
         self.M = H[0:2]
@@ -217,16 +229,16 @@ class GTVisualizer():
         elif key == ord('d'):
             self.icx += 10
         elif key == ord('z'):
-            self.icx, self.icy = self.width/2, self.height/2
+            self.icx, self.icy = self.img_width/2, self.img_height /2
             self.scale_factor = 1
         if self.icx < 0:
             self.icx = 0
         if self.icy < 0:
             self.icy = 0
-        if self.icx > self.width:
-            self.icx = self.width
-        if self.icy > self.height:
-            self.icy = self.height
+        if self.icx > self.img_width:
+            self.icx = self.img_width
+        if self.icy > self.img_height:
+            self.icy = self.img_height
         self.is_updated = False
 
 
@@ -244,13 +256,20 @@ class GTVisualizer():
             rgbd = np.hstack((self.rgb, self.depth, black))
             masks = np.hstack((self.amodal, self.vis, self.occ))
             self.frame = np.vstack((rgbd, masks))
-            self.frame_original = self.frame.copy()
+            self.frame_original = [self.rgb.copy(), self.depth.copy(), black.copy(), self.amodal.copy(), self.vis.copy(), self.occ.copy()]
             self.frame = cv2.addWeighted(self.frame, 1.0, self.grid_img, 1.0, 0)
             self.is_img_load = True
 
         if not self.is_updated and self.rgb_path is not None:
-            self.frame = cv2.addWeighted(self.frame_original.copy(), 1.0, self.grid_img, 1.0, 0)
-            self.frame = self.affine_transform(self.frame)
+            rgb, depth, black, amodal, vis, occ = self.frame_original
+            rgbd = np.hstack((self.affine_transform(rgb.copy()), self.affine_transform(depth.copy()), black.copy()))
+            masks = np.hstack((self.affine_transform(amodal.copy()), self.affine_transform(vis.copy()), self.affine_transform(occ.copy())))
+            frame = np.vstack((rgbd, masks))
+            _grid_imgs = []
+            for idx in range(len(self._grid_img)):
+                _grid_imgs.append(self.affine_transform(self._grid_img[idx].copy()))
+            self.grid_img = np.vstack([np.hstack(_grid_imgs[:3]), np.hstack(_grid_imgs[3:])])
+            self.frame = cv2.addWeighted(frame, 1.0, self.grid_img, 1.0, 0)
             self.is_updated = True
 
         
@@ -405,9 +424,9 @@ class GTVisualizer():
             self.max_image_id = 999
             self.min_image_id = 0
         elif self.data_type == "data3_real":
-            self.max_scene_id = 1000
-            self.min_scene_id = 1
-            self.max_image_id = 999
+            self.max_scene_id = 1160
+            self.min_scene_id = 1001
+            self.max_image_id = 400
             self.min_image_id = 1
         elif self.data_type == "data3_syn":
             self.max_scene_id = 184

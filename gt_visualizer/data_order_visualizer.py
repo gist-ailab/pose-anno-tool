@@ -128,6 +128,8 @@ class GTVisualizer():
         
         for sub_dir_1 in os.listdir(self.aihub_root):
             for sub_dir_2 in os.listdir(os.path.join(self.aihub_root, sub_dir_1)):
+                if sub_dir_2[-4:] in ['.zip', '.tar']:
+                    continue
                 for scene_id in os.listdir(os.path.join(self.aihub_root, sub_dir_1, sub_dir_2)):
                     if int(scene_id) == self.scene_id:
                         self.sub_dir_1 = sub_dir_1
@@ -369,7 +371,6 @@ class GTVisualizer():
                 x, y = 0, 0
             amodal_toplefts.append((y, x))
             obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
-        print(len(amodal_masks), len(amodal_toplefts), len(obj_names))
 
         self.obj_names = obj_names
         # draw amodal and visible masks on rgb
@@ -442,9 +443,9 @@ class GTVisualizer():
             self.max_image_id = 999
             self.min_image_id = 0
         elif self.data_type == "data3_real":
-            self.max_scene_id = 1000
-            self.min_scene_id = 1
-            self.max_image_id = 999
+            self.max_scene_id = 1160
+            self.min_scene_id = 1001
+            self.max_image_id = 400
             self.min_image_id = 1
         elif self.data_type == "data3_syn":
             self.max_scene_id = 184
