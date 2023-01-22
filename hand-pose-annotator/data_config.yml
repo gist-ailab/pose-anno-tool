@@ -1,0 +1,23 @@
+# Data Info
+DATASET_NAME: 04_사람-물체 파지
+HAND_TYPE:
+  - 01_왼손
+  - 02_오른손
+  - 03_양손
+OBJECT_TYPE:
+  - 01_물체1개
+  - 02_물체2개
+CAMERA_TYPE:
+  000390922112: 1. 좌하단
+  000355922112: 2. 좌중단
+  000375922112: 3. 정상단
+  000363922112: 4. 우중단
+  000210922112: 5. 우하단
+MASTER_CAMERA: 000390922112
+
+# Path to Data
+DATA_ROOT: "/media/raeyo/ssd_f/data4-source"
+LABEL_ROOT: "/media/raeyo/ssd_f/data4-labeling2"
+CALIB_ROOT: "/media/raeyo/ssd_e/data4/source/calibration"
+MODEL_ROOT: "/media/raeyo/ssd_e/data4/source/models"
+SCENE_META_ROOT: "/media/raeyo/ssd_e/data4/source/scene_meta"
