@@ -27,6 +27,9 @@ $ (window) pip3 install torch
 $ pip install git+https://github.com/hassony2/chumpy.git
 $ pip install git+https://github.com/hassony2/manopth
 
+# install pytorch3d
+
+
 # run
 $ python hand_pose_annotator.py
 
