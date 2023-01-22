@@ -128,6 +128,8 @@ class GTVisualizer():
         
         for sub_dir_1 in os.listdir(self.aihub_root):
             for sub_dir_2 in os.listdir(os.path.join(self.aihub_root, sub_dir_1)):
+                if sub_dir_2[-4:] in ['.zip', '.tar']:
+                    continue
                 for scene_id in os.listdir(os.path.join(self.aihub_root, sub_dir_1, sub_dir_2)):
                     if int(scene_id) == self.scene_id:
                         self.sub_dir_1 = sub_dir_1
@@ -145,8 +147,8 @@ class GTVisualizer():
 
     def init_cv2(self):
         cv2.namedWindow('GIST AILAB Data GT Visualizer')
-        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_scene_id)
-        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', 0, 1000, self.on_image_id)
+        cv2.createTrackbar('scene_id','GIST AILAB Data GT Visualizer', self.min_scene_id, self.max_scene_id, self.on_scene_id)
+        cv2.createTrackbar('image_id','GIST AILAB Data GT Visualizer', self.min_image_id, self.max_image_id, self.on_image_id)
         cv2.setTrackbarPos('scene_id','GIST AILAB Data GT Visualizer', self.scene_id)
         cv2.setTrackbarPos('image_id','GIST AILAB Data GT Visualizer', self.image_id)
         cv2.setMouseCallback('GIST AILAB Data GT Visualizer', self.on_mouse)
@@ -362,37 +364,23 @@ class GTVisualizer():
             amodal_mask = cv2.resize(amodal_mask, (self.width//3, self.height//5*2), interpolation=cv2.INTER_NEAREST)
             amodal_mask = amodal_mask.astype(bool)
             amodal_masks.append(amodal_mask)
-
             try:
                 x, y = np.where(amodal_mask)
                 x, y = x.min(), y.min()
             except:
                 x, y = 0, 0
             amodal_toplefts.append((y, x))
+            obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
 
-            if "data2" in self.data_type:
-                obj_names.append("{}_{}".format(anno["object_id"], anno["instance_id"]))
-            else:
-                obj_names.append("{}".format(anno["object_id"]))
         self.obj_names = obj_names
         # draw amodal and visible masks on rgb
         amodal = self.rgb.copy()
         cmap = matplotlib.cm.get_cmap('gist_rainbow')
 
-        if "data2" in self.data_type:
-            for i, (amodal_mask, amodal_topleft) in enumerate(zip(amodal_masks, amodal_toplefts)):
-                amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
-                if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
-                    amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
-        elif "data3-1" in self.data_type and len(amodal_masks) > 0:
-            amodal_mask = amodal_masks[0]
-            amodal_topleft = amodal_toplefts[0]
-            print(amodal.shape, amodal_mask.shape)
-            amodal[amodal_mask] = np.array(cmap(0)[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
-            amodal = np.uint8(amodal)[:, :, :3]
+        for i, (amodal_mask, amodal_topleft) in enumerate(zip(amodal_masks, amodal_toplefts)):
+            amodal[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 255 * 0.6 + amodal[amodal_mask] * 0.4
             if amodal_topleft[0] > 0 and amodal_topleft[1] > 0:
-                amodal = cv2.putText(amodal, obj_names[0], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(0)[:3]) * 255, 2)
-
+                amodal = cv2.putText(amodal, obj_names[i], amodal_topleft, cv2.FONT_HERSHEY_SIMPLEX, 0.7, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
         amodal = cv2.resize(amodal, (self.width//3, self.height//5*2), interpolation=cv2.INTER_NEAREST)
         return amodal
 
@@ -420,18 +408,19 @@ class GTVisualizer():
         sub_path, scene_id = os.path.split(sub_path)
         sub_path, sub_dir_2 = os.path.split(sub_path)
         aihub_root, sub_dir_1 = os.path.split(sub_path)
-        if sub_dir_1 in ["YCB", "HOPE", "APC", "GraspNet1Billion", "DexNet", "가정", "산업", "물류", "혼합"]:
-            if os.path.basename(aihub_root) == "실제":
+        print(aihub_root, sub_dir_1, sub_dir_2, scene_id, image_id)
+        if sub_dir_1 in ["04_YCB", "05_HOPE", "06_APC", "07_GraspNet1Billion", "08_DexNet", "01_가정", "02_산업", "03_물류", "09_혼합"]:
+            if os.path.basename(aihub_root) == "02_실제":
                 self.data_type = "data2_real"
-            elif os.path.basename(aihub_root) == "가상":
+            elif os.path.basename(aihub_root) == "01_가상":
                 self.data_type = "data2_syn"
             else:
                 print("폴더 구조를 확인하세요.")
-        elif sub_dir_1 in ["UR5", "Panda"]:
-            if os.path.basename(aihub_root) == "실제":
-                self.data_type = "data3-1_real"
-            elif os.path.basename(aihub_root) == "가상":
-                self.data_type = "data3-1_syn"
+        elif sub_dir_1 in ["01_UR5", "02_Panda"]:
+            if os.path.basename(aihub_root) == "02_실제":
+                self.data_type = "data3_real"
+            elif os.path.basename(aihub_root) == "01_가상":
+                self.data_type = "data3_syn"
             else:
                 print("폴더 구조를 확인하세요.")  
         else:
@@ -444,7 +433,7 @@ class GTVisualizer():
         self.scene_id = int(scene_id)
         self.image_id = int(image_id)
         if self.data_type == "data2_real":
-            self.max_scene_id = 1000
+            self.max_scene_id = 1050
             self.min_scene_id = 1
             self.max_image_id = 52
             self.min_image_id = 1
@@ -453,18 +442,22 @@ class GTVisualizer():
             self.min_scene_id = 0
             self.max_image_id = 999
             self.min_image_id = 0
-        elif self.data_type == "data3-1_real":
-            self.max_scene_id = 1000
-            self.min_scene_id = 1
-            self.max_image_id = 999
+        elif self.data_type == "data3_real":
+            self.max_scene_id = 1160
+            self.min_scene_id = 1001
+            self.max_image_id = 400
             self.min_image_id = 1
-        elif self.data_type == "data3-1_syn":
-            self.max_scene_id = 100
+        elif self.data_type == "data3_syn":
+            self.max_scene_id = 184
             self.min_scene_id = 1
-            self.max_image_id = 150
-            self.min_image_id = 0
-        
+            self.max_image_id = 250
+            self.min_image_id = 1
         self.init_cv2()
+        cv2.setTrackbarMax('scene_id', 'GIST AILAB Data GT Visualizer', self.max_scene_id)
+        cv2.setTrackbarMin('scene_id', 'GIST AILAB Data GT Visualizer', self.min_scene_id)
+        cv2.setTrackbarMax('image_id', 'GIST AILAB Data GT Visualizer', self.max_image_id)
+        cv2.setTrackbarMin('image_id', 'GIST AILAB Data GT Visualizer', self.min_image_id)
+
         self.on_scene_id(self.scene_id)
         self.on_image_id(self.image_id)
 
