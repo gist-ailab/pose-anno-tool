@@ -370,5 +370,5 @@ if __name__=="__main__":
         faces = hand_model.faces.unsqueeze(0)
         meshes = Meshes(verts=verts, faces=faces)
     
-        verts_to_points = get_verts_to_points_tensor(meshes, num_samples=50000)
+        verts_to_points = get_verts_to_points_tensor(meshes, num_samples=3000)
         torch.save(verts_to_points, os.path.join(MANO_PATH, f"verts_to_points_{side}.pt"))

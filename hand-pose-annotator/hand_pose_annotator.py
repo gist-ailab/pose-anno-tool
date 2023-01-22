@@ -2098,7 +2098,7 @@ class AppWindow:
         if os.name=='nt' and os.getlogin()=='raeyo':
             filedlg.set_path('C:\data4')
         elif os.name=='posix' and os.getlogin()=='raeyo':
-            filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
+            filedlg.set_path('/media/raeyo/ssd_e/data4/source')
             
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
@@ -2123,7 +2123,6 @@ class AppWindow:
                     pass
                 else:
                     del self.dataset
-                    
                     self.dataset = load_dataset_from_file(file_path)
             if self.annotation_scene is None:
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)
