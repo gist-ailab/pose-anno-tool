@@ -38,11 +38,18 @@ from scipy.spatial.transform import Rotation as Rot
 
 import psutil
 
+from collections import OrderedDict
+from pycocotools import mask as m
+
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
+DATA_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_config.yml")
 
-# datset file path
-
+bbox_bound = [
+    [-0.3, -0.3, 0.3],
+    [0.3, 0.3, 0.9],
+]
+bbox = o3d.geometry.AxisAlignedBoundingBox(bbox_bound[0], bbox_bound[1])
 
 
 class Utils:
@@ -159,6 +166,15 @@ class Utils:
                 Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
             )
         return torch.sum(knn.dists)
+
+DATA_CONFIG = Utils.load_yaml_to_dic(DATA_CONFIG)
+
+def mask2rle(im):
+    im = np.array(im, order='F', dtype=bool)
+    rle = m.encode(im)
+    rle['counts'] = rle['counts'].decode('ascii')
+    rle = rle['counts']
+    return rle
 
 class Logger:
     def __init__(self, name):
@@ -922,6 +938,9 @@ class SceneObject:
         self.obj_geo = self._load_point_cloud()
         self.obj_mesh = self._load_mesh()
         self.H = np.eye(4)
+        
+        self.amodal_mask = {}
+        self.visible_mask = {}
 
     def reset(self):
         self.obj_geo.clear()
@@ -966,6 +985,16 @@ class SceneObject:
     
     def get_mesh(self):
         return self.obj_mesh
+
+    def set_amodal_mask(self, cam_name, mask):
+        self.amodal_mask[cam_name] = mask
+    def get_amodal_mask(self, cam_name):
+        return self.amodal_mask[cam_name].astype(np.uint8)*255
+    
+    def set_visible_mask(self, cam_name, mask):
+        self.visible_mask[cam_name] = mask
+    def get_visible_mask(self, cam_name):
+        return self.visible_mask[cam_name].astype(np.uint8)*255
 
 class Dataset:
     def __init__(self):
@@ -1028,10 +1057,14 @@ class Dataset:
     def get_scene(self, sc_name, frame_id):
         # scene meta
         sc_path = self._scene_path[sc_name]
+        sc_label_path = self._scene_label[sc_name]
         sc_hand_shapes = self._scene_hand[sc_name] 
         sc_objects = self._scene_object[sc_name] 
         sc_cam_info = self._scene_camera[sc_name] 
         sc_frame_list = self._scene_frame[sc_name] 
+        meta = self._scene_meta[sc_name]
+        
+          
         
         # hand
         hands = {}
@@ -1046,20 +1079,64 @@ class Dataset:
 
         # camera
         cameras = {}
+        scene_labels = {}
         for cam, cam_info in sc_cam_info.items():
-            cameras[cam] = Camera(cam, self._cam2serial[cam], cam_info['intrinsic'], cam_info['extrinsics'], self._cam2serial[cam])
-        
+            cameras[cam] = Camera(cam, self._cam2serial[cam], cam_info['intrinsic'], cam_info['extrinsics'], cam)
+            
+            #----- generate image gt
+            #1. scene info
+            camera_id = int(cam.split(".")[0])
+            subject_id = meta['mano_calib']
+            subject_id = subject_id.split('-')[-1]
+            subject_id = "subject_{}".format(int(subject_id))
+            image_id = frame_id
+            
+            if image_id <= 33:
+                split = 'train'
+            elif image_id <= 37:
+                split = 'val'
+            else:
+                split = 'test'
+            scene_info = OrderedDict()
+            scene_info['camera_id'] = camera_id
+            scene_info['subject_id'] = subject_id
+            scene_info['image_id'] = image_id
+            scene_info['split'] = split
+            
+            #2. camera info
+            camera_info = OrderedDict()
+            extr = cam_info['extrinsics']
+            cam_R_w2c = [extr[0,0], extr[0,1], extr[0,2],
+                            extr[1,0], extr[1,1], extr[1,2],
+                            extr[2,0], extr[2,1], extr[2,2]]
+            cam_t_w2c = [extr[0,3], extr[1,3], extr[2,3]]
+            camera_info['cam_R_w2c'] = cam_R_w2c
+            camera_info['cam_t_w2c'] = cam_t_w2c
+            camera_info['cam_K'] = cam_info['intrinsic'].tolist()
+            camera_info['depth_scale'] = 1.0
+            camera_info['resolution'] = [self.H, self.W]
+            image_gt = OrderedDict()
+            image_gt['scene_info'] = scene_info
+            image_gt['camera_info'] = camera_info
+            image_gt['hand_pose_info'] = OrderedDict()
+            image_gt['object_6d_pose_info'] = OrderedDict()
+            
+            scene_labels[cam] = image_gt
+
         self.current_scene_idx = self._total_scene.index(sc_name)
         self.current_scene_file = sc_name
         self.current_frame_file = frame_id
             
         return Scene(scene_dir=sc_path, 
+                     sc_label_dir=sc_label_path,
                      hands=hands, 
                      objects=objects,
                      cameras=cameras,
                      frame_list=sc_frame_list,
                      current_frame=frame_id,
-                     load_pcd=self.load_point_cloud)
+                     load_pcd=self.load_point_cloud,
+                     scene_labels=scene_labels,
+                     master_cam=self._master_cam)
 
     def get_progress(self):
         return "작업 폴더: {} [{}/{}]".format(self.current_scene_file, self.current_scene_idx+1, len(self._total_scene))
@@ -1114,113 +1191,109 @@ class Dataset:
             pcd.normalize_normals()
         else:
             print("[WARNING] Failed to read points")
+        pcd = pcd.crop(bbox)
+        pcd = pcd.voxel_down_sample(voxel_size=0.005)
+        colors = np.asarray(pcd.colors)
+        colors = colors[:,[2,1,0]]
+        pcd.colors = o3d.utility.Vector3dVector(colors)
         return pcd
 
 class AihubDataset(Dataset):
-    _SERIALS = [
-        '000390922112', # master
-        '000480922112',
-        '000056922112',
-        '000210922112',
-        '000363922112',
-        '000375922112',
-        '000355922112',
-        # '000364922112', # ego_centric
-    ]
-    _CAMERAS = [
-        "좌하단",
-        "정하단",
-        "정중단",
-        "우하단",
-        "우중단",
-        "정상단",
-        "좌중단",
-        # "후상단",
-    ]
-
     def __init__(self, config):
         # Total Data Statics
-        self._data_dir = config['data_root']
-        self._label_dir = config['label_root']
+        self._data_dir = os.path.join(config['DATA_ROOT'], config['DATASET_NAME'])
+        self._label_dir = os.path.join(config['LABEL_ROOT'], config['DATASET_NAME'])
+        os.makedirs(self._label_dir, exist_ok=True)
+        self._calib_dir = config['CALIB_ROOT']
+        self._model_dir = config['MODEL_ROOT']
+        self._scene_meta_dir = config['SCENE_META_ROOT']
         
-        self._calib_dir = config['calib_dir']
-        self._model_dir = config['model_dir']
-
+        if not os.path.exists(self._data_dir):
+            raise Exception("Dataset directory does not exist: {}".format(self._data_dir))
+        if not os.path.exists(self._label_dir):
+            raise Exception("Label directory does not exist: {}".format(self._label_dir))
+        if not os.path.exists(self._calib_dir):
+            raise Exception("Calibration directory does not exist: {}".format(self._calib_dir))
+        if not os.path.exists(self._model_dir):
+            raise Exception("Model directory does not exist: {}".format(self._model_dir))
+        if not os.path.exists(self._scene_meta_dir):
+            raise Exception("Scene meta directory does not exist: {}".format(self._scene_meta_dir))
         self._mano_shape_path = os.path.join(self._calib_dir, "mano-hand", '{}.json') # {}-subject-{:02d}.format(scan-date, id)
         self._cam_calib_path = os.path.join(self._calib_dir, 'camera', '{}.json') # {}.format(calib-date)
+        self._serial2cam = config['CAMERA_TYPE']
+        self._cam2serial = {v: k for k,v in self._serial2cam.items()}
+        
+        self._cameras = list(config['CAMERA_TYPE'].values())
+        self._cameras.sort()
+        self._serials = [self._cam2serial[cam] for cam in self._cameras]
+        
+        self._master_serial = config['MASTER_CAMERA']
+        self._master_cam = self._serial2cam[self._master_serial]
 
-        self._cameras = self._CAMERAS
-        self._cam2serial = {cam: self._SERIALS[i] for i , cam in enumerate(self._cameras)}
-        self._master_cam = self._SERIALS[0]
-
-        self._obj_path = os.path.join(self._model_dir, "obj_{:06d}.ply")
+        self._obj_path = os.path.join(self._model_dir, "object", "obj_{:06d}.ply")
         
         self._total_scene = [] # list of scene, idx -> sc_name
         self._scene_path = {} # sc_name: scene dir
+        self._scene_label = {} # sc_name: scene label dir
+        self._scene_meta = {} # sc_name: scene meta dir
         self._scene_hand = {} # sc_name: scene hand info
         self._scene_object = {} # sc_name: scene object info
         self._scene_camera = {} # sc_name: scene camera info
         self._scene_frame = {} # sc_name: scene frames(master)
         
-        for sc_dir in [os.path.join(self._data_dir, p) for p in os.listdir(self._data_dir)]:
-            
-            sc_name = os.path.basename(sc_dir)
-            if sc_name in ['calibration', 'models']:
-                continue
-            meta_file = os.path.join(sc_dir, "meta.yml")
-            if not os.path.isfile(meta_file):
-                continue
-            with open(meta_file, 'r') as f:
-                meta = yaml.load(f, Loader=yaml.FullLoader)
-            
-            # points
-            pcd_dir = os.path.join(sc_dir, self._master_cam, "pcd")
-            if not os.path.isdir(pcd_dir):
-                continue
-            
-            frame_list = [int(os.path.splitext(p)[0]) for p in os.listdir(pcd_dir)]
-            frame_list.sort()
-            self._scene_frame[sc_name] = frame_list
-            
-            # scene list
-            self._total_scene.append(sc_name)
-            
-            # scene dir
-            self._scene_path[sc_name] = sc_dir
-            
-            # hand
-            shape = Utils.load_json_to_dic(self._mano_shape_path.format(meta['mano_calib']))
-            if 'mano_sides' in meta.keys():
-                mano_sides = meta['mano_sides']
-            else:
-                mano_sides = temp_side_info[int(sc_name)]
-                meta.update({'mano_sides': mano_sides})
-                Utils.save_dic_to_yaml(meta, meta_file)
-            
-            self._scene_hand[sc_name] = {side: shape[side] for side in mano_sides}
-            # objects
-            self._scene_object[sc_name] = {
-                obj_id : self._obj_path.format(obj_id) for obj_id in meta['obj_ids']
-            }
+        for hand_type in os.listdir(self._data_dir):
+            hand_dir = os.path.join(self._data_dir, hand_type)
+            for obj_type in os.listdir(hand_dir):
+                obj_dir = os.path.join(hand_dir, obj_type)
+                for sc_dir in [os.path.join(obj_dir, p) for p in os.listdir(obj_dir)]:
+                    sc_name = os.path.basename(sc_dir)
+                    meta_file = os.path.join(self._scene_meta_dir, sc_name, "meta.yml")
+                    if not os.path.isfile(meta_file):
+                        continue
+                    with open(meta_file, 'r') as f:
+                        meta = yaml.load(f, Loader=yaml.FullLoader)
+                    
+                    # points
+                    pcd_dir = os.path.join(sc_dir, self._master_cam, "pcd")
+                    if not os.path.isdir(pcd_dir):
+                        continue
+                    frame_list = [int(os.path.splitext(p)[0].split('_')[-1]) for p in os.listdir(pcd_dir)]
+                    frame_list.sort()
+                    self._scene_frame[sc_name] = frame_list
+                    # scene list
+                    self._total_scene.append(sc_name)
+                    # scene dir
+                    self._scene_meta[sc_name] = meta
+                    self._scene_path[sc_name] = sc_dir
+                    self._scene_label[sc_name] = sc_dir.replace(self._data_dir, self._label_dir)
+                    # hand
+                    shape = Utils.load_json_to_dic(self._mano_shape_path.format(meta['mano_calib']))
+                    mano_sides = meta['mano_sides']
+                    
+                    self._scene_hand[sc_name] = {side: shape[side] for side in mano_sides}
+                    # objects
+                    self._scene_object[sc_name] = {
+                        obj_id : self._obj_path.format(obj_id) for obj_id in meta['obj_ids']
+                    }
 
-            # camera 
-            cam_calib = Utils.load_json_to_dic(self._cam_calib_path.format(meta['cam_calib']))
-            self._scene_camera[sc_name] = {}
-            for cam in self._cameras:
-                serial = self._cam2serial[cam]
-                K = self.get_intrinsic_from_dic(cam_calib[serial])
-                extr = self.get_extrinsic_from_dic(cam_calib[serial])
-                extrinsic = np.eye(4)
-                R = extr[:3, :3]
-                t = extr[:3, 3] / 1e3 # convert to meter
-                extrinsic[:3, :3] = R
-                extrinsic[:3, 3] = t
-                self._scene_camera[sc_name][cam] = {
-                    "intrinsic": K,
-                    "extrinsics": extrinsic
-                }
-            self.H = cam_calib[serial]["height"]
-            self.W = cam_calib[serial]["width"]
+                    # camera 
+                    cam_calib = Utils.load_json_to_dic(self._cam_calib_path.format(meta['cam_calib']))
+                    self._scene_camera[sc_name] = {}
+                    for cam in self._cameras:
+                        serial = self._cam2serial[cam]
+                        K = self.get_intrinsic_from_dic(cam_calib[serial])
+                        extr = self.get_extrinsic_from_dic(cam_calib[serial])
+                        extrinsic = np.eye(4)
+                        R = extr[:3, :3]
+                        t = extr[:3, 3] / 1e3 # convert to meter
+                        extrinsic[:3, :3] = R
+                        extrinsic[:3, 3] = t
+                        self._scene_camera[sc_name][cam] = {
+                            "intrinsic": K,
+                            "extrinsics": extrinsic
+                        }
+                    self.H = cam_calib[serial]["height"]
+                    self.W = cam_calib[serial]["width"]
             
         self._total_scene.sort()
         super().__init__()
@@ -1229,20 +1302,10 @@ class AihubDataset(Dataset):
         return np.array(dic['K']).reshape(3, 3)
     def get_extrinsic_from_dic(self, dic):
         return np.array(dic["H"]).reshape(4, 4)
-    @staticmethod
-    def load_point_cloud(pc_file):
-        pcd = o3d.io.read_point_cloud(pc_file)
-        if pcd is not None:
-            print("[Info] Successfully read scene ")
-            if not pcd.has_normals():
-                pcd.estimate_normals()
-            pcd.normalize_normals()
-        else:
-            print("[WARNING] Failed to read points")
-        return pcd
+    
 
-def load_aihub_dataset(config):
-    return AihubDataset(config)
+def load_aihub_dataset():
+    return AihubDataset(DATA_CONFIG)
     
 class Scene:
     
@@ -1256,16 +1319,17 @@ class Scene:
 
         def __init__(self, scene_dir, frame_id, hands, objs, cams, load_pcd):
             self.scene_dir = scene_dir
-            
+            sc_name = os.path.basename(scene_dir)
+            self._data_name = "H4_2_{}_".format(sc_name)
             self.id = frame_id
             
             self.hands = hands
             self.objects = objs
             self.cameras = cams
             
-            self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", "{:06d}.png".format(self.id)) 
-            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", "{:06d}.png".format(self.id))
-            self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", "{:06d}.pcd".format(self.id))
+            self.rgb_format = os.path.join(self.scene_dir, "{}", "rgb", self._data_name+"{:06d}.png".format(self.id)) 
+            self.depth_format = os.path.join(self.scene_dir, "{}", "depth", self._data_name+"{:06d}.png".format(self.id))
+            self.pcd_format = os.path.join(self.scene_dir, "{}", "pcd", self._data_name+"{:06d}.pcd".format(self.id))
 
             self._load_pcd_fn = load_pcd
 
@@ -1311,31 +1375,45 @@ class Scene:
                 pcd += self.single_views[cam_name].pcd
             return pcd
 
-    def __init__(self, scene_dir, hands, objects, cameras, frame_list, current_frame, load_pcd):
+    def __init__(self, scene_dir, sc_label_dir, hands, objects, cameras, frame_list, current_frame, load_pcd, scene_labels, master_cam):
         self._scene_dir = scene_dir
         sc_name = os.path.basename(scene_dir)
+        self._sc_label_dir = sc_label_dir
+        os.makedirs(self._sc_label_dir, exist_ok=True)
+        
         self._label_dir = os.path.join(scene_dir, f'{sc_name}_labels')
         os.makedirs(self._label_dir, exist_ok=True)
+        
+        
+        self._data_name = "H4_2_{}_".format(sc_name)
         
         self._hands = hands
         self._objects = objects
         self._cameras = cameras
+        
+        self._master = master_cam
         
         self.total_frame = len(frame_list) # for master camera
         self._frame_list = frame_list
         self.frame_id = current_frame
         self._frame_idx = self._frame_list.index(self.frame_id)
         
+        self._sc_label_format = os.path.join(self._sc_label_dir, "{}", "gt", self._data_name + "{:06d}.json") # cam, frame_id
         self._hand_label_format = os.path.join(self._label_dir, "hands_{:06d}.npz")
         self._object_label_format = os.path.join(self._label_dir, "objs_{:06d}.npz")
 
+        
         self._load_point_cloud = load_pcd
 
-        self._label = None
-        self._previous_label = None
+        self._scene_labels = scene_labels
+        self._previous_scene_labels = None
+        
         self._obj_label = None
-        self._obj_previous_label = None
-
+        self._previous_obj_label = None
+        
+        self._hand_label = None
+        self._previous_hand_label = None
+        
     def _load_frame(self):
         try:
             self.current_frame = Scene.Frame(scene_dir=self._scene_dir,
@@ -1382,14 +1460,93 @@ class Scene:
         np.savez(self._obj_label_path, **obj_label)
         self._obj_label = obj_label
         # get current hand label
-        label = {}
+        hand_label = {}
         for side, hand_model in self._hands.items():
             h_state = hand_model.get_state()
             for k, v in h_state.items():
-                label['{}_{}'.format(side, k)] = v
-        np.savez(self._hand_label_path, **label)
-        self._label = label
+                hand_label['{}_{}'.format(side, k)] = v
+        np.savez(self._hand_label_path, **hand_label)
+        self._hand_label = hand_label
+        self._save_scene_label()
+        
+    def _save_scene_label(self):
+        frame_hand_label = self._hand_label
+        frame_obj_label = self._obj_label
+        hand_list = list(self._hands.keys())
+        for cam_name, cam in self._cameras.items():
+            label_path = self._sc_label_format.format(cam.folder, self.frame_id)
+            os.makedirs(os.path.dirname(label_path), exist_ok=True)
+            label = self._scene_labels[cam_name]
+            # convert to camera coordinate
+            extr = cam.extrinsics
+            extr_R = extr[:3, :3]
+            extr_T = extr[:3, 3]
+            inv_extr = np.eye(4)
+            inv_extr[:3, :3] = extr_R.T
+            inv_extr[:3, 3] = -extr_R.T @ extr_T
 
+            def convert_joints_to_camera_coordinate(xyz):
+                xyz = np.concatenate([xyz, np.ones((xyz.shape[0], 1))], axis=1)
+                xyz = (inv_extr @ xyz.T).T  
+                return xyz[:, :3]
+            
+            def convert_mano_pose_to_camera_coordinate(mano_pose):
+                mano_H = np.eye(4)
+                mano_H[:3, :3] = Rot.from_rotvec(mano_pose[3:6]).as_matrix()
+                mano_H[:3, 3] = mano_pose[:3]
+                mano_H = inv_extr @ mano_H
+                
+                rot = Rot.from_matrix(mano_H[:3, :3]).as_rotvec()
+                trans = mano_H[:3, 3]
+                mano_pose[:6] = np.concatenate([trans, rot], axis=0)
+                return mano_pose
+            
+            # 3. hand pose info
+            hand_pose_info = OrderedDict()
+            
+            if 'right' in hand_list:
+                hand_pose_info['right'] = OrderedDict()
+                hand_pose_info['right']['hand_position'] = convert_joints_to_camera_coordinate(frame_hand_label["right_joints"]).tolist()
+                hand_pose_info['right']['mano_shape'] = frame_hand_label["right_shape_param"].tolist()
+                mano_pose = np.concatenate([frame_hand_label['right_root_trans'], frame_hand_label['right_pose_param']])
+                mano_pose = convert_mano_pose_to_camera_coordinate(mano_pose)
+                hand_pose_info['right']['mano_pose'] = mano_pose.tolist()
+            if 'left' in hand_list:
+                hand_pose_info['left'] = OrderedDict()
+                hand_pose_info['left']['hand_position'] = convert_joints_to_camera_coordinate(frame_hand_label["left_joints"]).tolist()
+                hand_pose_info['left']['mano_shape'] = frame_hand_label["left_shape_param"].tolist()
+                mano_pose = np.concatenate([frame_hand_label['left_root_trans'], frame_hand_label['left_pose_param']])
+                mano_pose = convert_mano_pose_to_camera_coordinate(mano_pose)
+                hand_pose_info['left']['mano_pose'] = mano_pose.tolist()
+            
+            # object_6d_pose_info
+            object_6d_pose_info = []
+            for obj_id, pose in frame_obj_label.items():
+                cam_R_m2c = [pose[0,0], pose[0,1], pose[0,2],
+                            pose[1,0], pose[1,1], pose[1,2],
+                            pose[2,0], pose[2,1], pose[2,2]]
+                cam_t_m2c = [pose[0,3], pose[1,3], pose[2,3]]
+                
+                amodal_mask = self._objects[int(obj_id)].get_amodal_mask(cam_name)
+                visible_mask = self._objects[int(obj_id)].get_visible_mask(cam_name)
+                invisible_mask = cv2.bitwise_xor(amodal_mask, visible_mask)
+
+                pose_info = OrderedDict()
+                pose_info["object_id"] = int(obj_id)
+                pose_info["instance_id"] = 1
+                pose_info["cam_R_m2c"] = cam_R_m2c
+                pose_info["cam_t_m2c"] = cam_t_m2c
+                if mask2rle(amodal_mask) == "PPYo1":
+                    print()
+                pose_info['visible_mask'] = mask2rle(visible_mask)
+                pose_info['invisible_mask'] = mask2rle(invisible_mask)
+                pose_info['amodal_mask'] = mask2rle(amodal_mask)
+                object_6d_pose_info.append(pose_info)
+            label['hand_pose_info'] = hand_pose_info
+            label['object_6d_pose_info'] = object_6d_pose_info
+            with open(label_path, 'w') as f:
+                json.dump(label, f)
+            
     def load_label(self):
         # object label
         if self._obj_label is not None:
@@ -1410,51 +1567,25 @@ class Scene:
                     obj.reset()
         #----- hand label
         # default is previous frame
-        if self._label is not None:
-            self._previous_label = self._label.copy()
+        if self._hand_label is not None:
+            self._previous_hand_label = self._hand_label.copy()
         # first previous saved label
         try:
-            self._label = dict(np.load(self._hand_label_path))
+            self._hand_label = dict(np.load(self._hand_label_path))
             hand_states = {}
-            for k, v in self._label.items():
+            for k, v in self._hand_label.items():
                 side = k.split('_')[0]
                 hand_states.setdefault(side, {})
                 param = k.replace(side + "_", "")
                 hand_states[side][param] = v
-            for side, hand_model in self._hands.items():
+            for side, hand_model in self._hand_label.items():
                 hand_model.set_state(hand_states[side])
             return True
         except:
             print("Fail to load previous Label -> Try to load AI label")
         
-        # second ai label
-        # for cam_name, cam in self._cameras.items():
-        try:
-            ai_label_path = os.path.join(self._scene_dir, "hand_mocap", "{:06d}.json".format(self.frame_id))
-            # all_pred_path = os.path.join(self._scene_dir, cam.folder, "hand_mocap", "{:06d}_prediction_result.pkl".format(self.frame_id))
-            ai_label = Utils.load_json_to_dic(ai_label_path)
-            # all_pred = Utils.load_pickle(all_pred_path)['pred_output_list'][0]
-            # extr = cam.extrinsics
-            # R = extr[:3, :3]
-            # R_inv = np.linalg.inv(R)
-            for side, hand_model in self._hands.items():
-                val = ai_label[side]
-                mano_pose = np.array(val['mano_pose']).reshape(-1)
-                wrist_pos = np.array(val['wrist_pos'])
-                wrist_ori = np.array(val['wrist_ori'])
-                mano_pose = np.concatenate((wrist_ori, mano_pose))
-                
-                hand_model.set_state(
-                    {'pose_param': mano_pose,
-                     'root_trans': wrist_pos})
-                
-                # hand_model.set_root_position(wrist_pos)
-            print("Success to Load AI Label")
-            return True
-        except:
-            print("Fail to load AI Label")
         hand_states = {}
-        if self._previous_label is not None:
+        if self._previous_hand_label is not None:
             self._label = self._previous_label.copy()
             for k, v in self._label.items():
                 side = k.split('_')[0]
@@ -1533,14 +1664,16 @@ class Scene:
             json.dump(json_label, f, sort_keys=True, indent=4)
 
     @property
-    def _frame_path(self):
-        return os.path.join(self._scene_dir, self._data_format.format(self.frame_id))
+    def _label_path(self):
+        return self._label_format.format(self._master, self.frame_id)
     @property
     def _hand_label_path(self):
         return os.path.join(self._scene_dir, self._hand_label_format.format(self.frame_id))
     @property
     def _obj_label_path(self):
         return os.path.join(self._scene_dir, self._object_label_format.format(self.frame_id))
+    
+    
     
 class Settings:
     SHADER_UNLIT = "defaultUnlit"
@@ -1650,20 +1783,27 @@ class Settings:
         self.inlier_sphere_material.shader = Settings.SHADER_UNLIT
 
 class HeadlessRenderer:
-    flat_hand_position = {'right': [[0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [0.07744278013706207, 0.006146649364382029, 0.180849090218544], [0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [0.019351951777935028, -0.001628118334338069, 0.12375511229038239]], 'left': [[-0.0956699401140213, 0.0063834283500909805, 0.006186304613947868], [-0.12148278951644897, -0.009138907305896282, 0.030276024714112282], [-0.14518234133720398, -0.008247620426118374, 0.04990927129983902], [-0.1597064584493637, -0.013680592179298401, 0.07212700694799423], [-0.1803981363773346, -0.01809500716626644, 0.09962499886751175], [-0.11635593324899673, 0.0011830711737275124, 0.0942835733294487], [-0.11857300251722336, 0.005192427430301905, 0.12696248292922974], [-0.11845888197422028, 0.003894004039466381, 0.14911839365959167], [-0.12250815331935883, 0.004611973185092211, 0.17238116264343262], [-0.09231240302324295, 0.00490446574985981, 0.1008467748761177], [-0.08671789616346359, 0.006765794008970261, 0.1320294439792633], [-0.08277337998151779, 0.0055136894807219505, 0.1549340784549713], [-0.07929610460996628, 0.010507885366678238, 0.17927193641662598], [-0.06899674236774445, 0.0024260072968900204, 0.0879218801856041], [-0.06389820575714111, 0.004493014886975288, 0.11623615771532059], [-0.05626438930630684, 0.002804903080686927, 0.1397566795349121], [-0.049281422048807144, 0.00734306126832962, 0.16266049444675446], [-0.052460599690675735, -0.0035569006577134132, 0.07497329264879227], [-0.039961814880371094, -0.0034950755070894957, 0.09198770672082901], [-0.029629912227392197, -0.004186231642961502, 0.10785461217164993], [-0.019351951777935028, -0.001628118334338069, 0.12375511229038239]]}
-    
     def __init__(self, W, H):
         self.W, self.H = W, H
         self.render = rendering.OffscreenRenderer(width=self.W, height=self.H)
         self.render.scene.set_background([0, 0, 0, 0]) # black background color
         self.render.scene.set_lighting(self.render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
 
+        self.mtl = o3d.visualization.rendering.MaterialRecord()
+        self.mtl.shader = "defaultUnlit"
+    
         self.obj_mtl = o3d.visualization.rendering.MaterialRecord()
         self.obj_mtl.shader = "defaultUnlit"
         
         self.hand_mtl = o3d.visualization.rendering.MaterialRecord()
         self.hand_mtl.shader = "defaultUnlit"
-        
+    
+    def add_geo(self, name, obj, color):
+        geo = obj.get_mesh()
+        geo = copy.deepcopy(geo)
+        geo.paint_uniform_color(color)
+        self.render.scene.add_geometry(name, geo, self.mtl)
+    
     def add_objects(self, objects, color=[1, 0, 0]):
         for obj_id, obj in objects.items():
             obj_name = "obj_{}".format(obj_id)
@@ -2003,10 +2143,10 @@ class AppWindow:
         self.logger.debug('_on_filedlg_button')
         filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
                                 self.window.theme)
-        filedlg.add_filter(".yml", "데이터 설정")
+        filedlg.add_filter(".pcd", "포인트 클라우드")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
-        filedlg.set_path(os.path.abspath(__file__))
+        filedlg.set_path(DATA_CONFIG['DATA_ROOT'])
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -2018,15 +2158,14 @@ class AppWindow:
             file_path (_type_): _description_
         """
         self._fileedit.text_value = file_path
-        config = Utils.load_yaml_to_dic(file_path)
         try:
             # if already initialized
             if self.dataset is None:
-                self.dataset = load_aihub_dataset(config)
+                self.dataset = load_aihub_dataset()
                 self.H, self.W = self.dataset.H, self.dataset.W
                 self.hl_renderer = HeadlessRenderer(self.W, self.H)
             else:
-                self.dataset = load_aihub_dataset(config)
+                self.dataset = load_aihub_dataset()
                 self.H, self.W = self.dataset.H, self.dataset.W
             
             if self.annotation_scene is None:
@@ -2912,7 +3051,7 @@ class AppWindow:
         
         self._view_error_layout_list = []
         
-        for i in range(7):
+        for i in range(len(DATA_CONFIG["CAMERA_TYPE"].keys())):
             h = gui.Horiz(0)
             
             button = gui.Button("카메라 {}".format(i+1))
@@ -3215,10 +3354,31 @@ class AppWindow:
 
         if calculate or (self._depth_diff_list==[]) or self._error_box.checked:
             self.logger.debug('\tset hl renderer')
-            self.hl_renderer.reset()    
+            
+            # cal single depth
+            single_object_depth = {}
+            for obj_id, obj in self._objects.items():
+                name = "obj_{}".format(obj_id)
+                self.hl_renderer.reset()
+                self.hl_renderer.add_geo(name, obj, color=[1, 0, 0])
+                single_object_depth[name] = {}
+                for error_layout in self._view_error_layout_list:
+                    cam_name = error_layout[0].text
+                    intrinsic = self._frame.cameras[cam_name].intrinsic
+                    extrinsic = self._frame.cameras[cam_name].extrinsics
+
+                    self.hl_renderer.set_camera(intrinsic, extrinsic, self.W, self.H)
+                    # rendering depth
+                    depth_rendered = self.hl_renderer.render_depth()
+                    depth_rendered = np.array(depth_rendered, dtype=np.float32)
+                    depth_rendered[np.isposinf(depth_rendered)] = 0
+                    depth_rendered *= 1000 # convert meter to mm
+
+                    single_object_depth[name][cam_name] = depth_rendered
+
+            self.hl_renderer.reset()
             self.hl_renderer.add_objects(self._objects, color=[1, 0, 0])
             self.hl_renderer.add_hands(self._hands) # right [0, 1, 0] left [0, 0, 1]
-
 
             # rendering depth for each camera
             self.logger.debug('\trendering depth for each camera')
@@ -3236,6 +3396,14 @@ class AppWindow:
                 depth_rendered[np.isposinf(depth_rendered)] = 0
                 depth_rendered *= 1000 # convert meter to mm
                 # cv2.imwrite(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'depth_rendered.png'), depth_rendered)
+                
+                for obj_id, obj in self._objects.items():
+                    name = "obj_{}".format(obj_id)
+                    amodal_depth = single_object_depth[name][cam_name]
+                    amodal_mask = amodal_depth > 0
+                    visible_mask = np.logical_and(amodal_mask, np.abs(amodal_depth-depth_rendered) < 1e-9)
+                    obj.set_amodal_mask(cam_name, amodal_mask)
+                    obj.set_visible_mask(cam_name, visible_mask)
                 
                 rgb_rendered = self.hl_renderer.render_rgb()
                 rgb_rendered = np.array(rgb_rendered)
