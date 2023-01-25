@@ -1126,7 +1126,7 @@ class Dataset:
             cam_t_w2c = [extr[0,3], extr[1,3], extr[2,3]]
             camera_info['cam_R_w2c'] = cam_R_w2c
             camera_info['cam_t_w2c'] = cam_t_w2c
-            camera_info['cam_K'] = cam_info['intrinsic'].tolist()
+            camera_info['cam_K'] = cam_info['intrinsic'].reshape(9).tolist()
             camera_info['depth_scale'] = 1.0
             camera_info['resolution'] = [self.H, self.W]
             image_gt = OrderedDict()
