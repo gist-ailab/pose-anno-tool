@@ -19,10 +19,10 @@ import torch
 from manopth.manolayer import ManoLayer
 from torch import optim
 
-# from pytorch3d.ops import sample_points_from_meshes, knn_points
-# from pytorch3d.ops import utils as oputil
-# from pytorch3d.loss import chamfer_distance, point_mesh_face_distance
-# from pytorch3d.structures import Meshes, Pointclouds
+from pytorch3d.ops import sample_points_from_meshes, knn_points
+from pytorch3d.ops import utils as oputil
+from pytorch3d.loss import chamfer_distance, point_mesh_face_distance
+from pytorch3d.structures import Meshes, Pointclouds
 
 import numpy as np
 import cv2
@@ -43,15 +43,13 @@ from pycocotools import mask as m
 
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
+DATA_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_config.yml")
 
 bbox_bound = [
     [-0.3, -0.3, 0.3],
     [0.3, 0.3, 0.9],
 ]
 bbox = o3d.geometry.AxisAlignedBoundingBox(bbox_bound[0], bbox_bound[1])
-
-DATASET_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATASET_NAME = "04_사람-물체 파지"
 
 
 class Utils:
@@ -168,6 +166,8 @@ class Utils:
                 Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
             )
         return torch.sum(knn.dists)
+
+DATA_CONFIG = Utils.load_yaml_to_dic(DATA_CONFIG)
 
 def mask2rle(im):
     im = np.array(im, order='F', dtype=bool)
@@ -1057,28 +1057,14 @@ class Dataset:
     def get_scene(self, sc_name, frame_id):
         # scene meta
         sc_path = self._scene_path[sc_name]
+        sc_label_path = self._scene_label[sc_name]
         sc_hand_shapes = self._scene_hand[sc_name] 
         sc_objects = self._scene_object[sc_name] 
         sc_cam_info = self._scene_camera[sc_name] 
         sc_frame_list = self._scene_frame[sc_name] 
         meta = self._scene_meta[sc_name]
         
-        if len(meta['mano_sides']) ==2:
-            hand_type = "03_양손"
-        elif meta['mano_sides'][0] == 'left':
-            hand_type = "01_왼손"
-        else:
-            hand_type = "02_오른손"
-        
-        if len(meta['obj_ids'])==1:
-            object_type = '01_물체1개'
-        else:
-            object_type = '02_물체2개'
-
-        sc_data_dir = os.path.join(self._save_dir, hand_type, object_type, sc_name)
-        sc_label_dir = os.path.join(self._label_dir, hand_type, object_type, sc_name)
-        os.makedirs(sc_data_dir, exist_ok=True)
-        os.makedirs(sc_label_dir, exist_ok=True)
+          
         
         # hand
         hands = {}
@@ -1095,7 +1081,7 @@ class Dataset:
         cameras = {}
         scene_labels = {}
         for cam, cam_info in sc_cam_info.items():
-            cameras[cam] = Camera(cam, self._cam2serial[cam], cam_info['intrinsic'], cam_info['extrinsics'], self._cam2serial[cam])
+            cameras[cam] = Camera(cam, self._cam2serial[cam], cam_info['intrinsic'], cam_info['extrinsics'], cam)
             
             #----- generate image gt
             #1. scene info
@@ -1142,8 +1128,7 @@ class Dataset:
         self.current_frame_file = frame_id
             
         return Scene(scene_dir=sc_path, 
-                     sc_data_dir=sc_data_dir,
-                     sc_label_dir=sc_label_dir,
+                     sc_label_dir=sc_label_path,
                      hands=hands, 
                      objects=objects,
                      cameras=cameras,
@@ -1207,112 +1192,108 @@ class Dataset:
         else:
             print("[WARNING] Failed to read points")
         pcd = pcd.crop(bbox)
-        pcd = pcd.voxel_down_sample(voxel_size=0.001)
+        pcd = pcd.voxel_down_sample(voxel_size=0.005)
         colors = np.asarray(pcd.colors)
         colors = colors[:,[2,1,0]]
         pcd.colors = o3d.utility.Vector3dVector(colors)
         return pcd
 
 class AihubDataset(Dataset):
-    SERIAL2NAME = {
-        "000390922112": "1. 좌하단",
-        "000355922112": "2. 좌중단",
-        "000375922112": "3. 정상단",
-        "000363922112": "4. 우중단",
-        "000210922112": "5. 우하단"
-    }
-    
-    def __init__(self):
+    def __init__(self, config):
         # Total Data Statics
-        self._data_dir = os.path.join(DATASET_ROOT, 'dataset', 'data4-target')
-        self._save_dir = os.path.join(DATASET_ROOT, 'dataset', 'data4-source', DATASET_NAME)
-        self._label_dir = os.path.join(DATASET_ROOT, 'dataset', 'data4-labeling', DATASET_NAME)
-        self._calib_dir = os.path.join(self._data_dir, "calibration")
-        self._model_dir = os.path.join(self._data_dir, "models")
+        self._data_dir = os.path.join(config['DATA_ROOT'], config['DATASET_NAME'])
+        self._label_dir = os.path.join(config['LABEL_ROOT'], config['DATASET_NAME'])
+        os.makedirs(self._label_dir, exist_ok=True)
+        self._calib_dir = config['CALIB_ROOT']
+        self._model_dir = config['MODEL_ROOT']
+        self._scene_meta_dir = config['SCENE_META_ROOT']
         
         if not os.path.exists(self._data_dir):
             raise Exception("Dataset directory does not exist: {}".format(self._data_dir))
+        if not os.path.exists(self._label_dir):
+            raise Exception("Label directory does not exist: {}".format(self._label_dir))
         if not os.path.exists(self._calib_dir):
             raise Exception("Calibration directory does not exist: {}".format(self._calib_dir))
         if not os.path.exists(self._model_dir):
             raise Exception("Model directory does not exist: {}".format(self._model_dir))
+        if not os.path.exists(self._scene_meta_dir):
+            raise Exception("Scene meta directory does not exist: {}".format(self._scene_meta_dir))
         self._mano_shape_path = os.path.join(self._calib_dir, "mano-hand", '{}.json') # {}-subject-{:02d}.format(scan-date, id)
         self._cam_calib_path = os.path.join(self._calib_dir, 'camera', '{}.json') # {}.format(calib-date)
-        self._serial2cam = self.SERIAL2NAME
+        self._serial2cam = config['CAMERA_TYPE']
         self._cam2serial = {v: k for k,v in self._serial2cam.items()}
         
-        self._cameras = list(self._serial2cam.values())
+        self._cameras = list(config['CAMERA_TYPE'].values())
         self._cameras.sort()
         self._serials = [self._cam2serial[cam] for cam in self._cameras]
         
-        self._master_serial = "000390922112"
+        self._master_serial = config['MASTER_CAMERA']
         self._master_cam = self._serial2cam[self._master_serial]
 
         self._obj_path = os.path.join(self._model_dir, "object", "obj_{:06d}.ply")
         
         self._total_scene = [] # list of scene, idx -> sc_name
         self._scene_path = {} # sc_name: scene dir
+        self._scene_label = {} # sc_name: scene label dir
         self._scene_meta = {} # sc_name: scene meta dir
         self._scene_hand = {} # sc_name: scene hand info
         self._scene_object = {} # sc_name: scene object info
         self._scene_camera = {} # sc_name: scene camera info
         self._scene_frame = {} # sc_name: scene frames(master)
         
-        for sc_dir in [os.path.join(self._data_dir, p) for p in os.listdir(self._data_dir)]:
-            
-            sc_name = os.path.basename(sc_dir)
-            if sc_name in ['calibration', 'models']:
-                continue
-            meta_file = os.path.join(sc_dir, "meta.yml")
-            if not os.path.isfile(meta_file):
-                continue
-            with open(meta_file, 'r') as f:
-                meta = yaml.load(f, Loader=yaml.FullLoader)
-            
-            # points
-            pcd_dir = os.path.join(sc_dir, self._master_serial, "pcd")
-            if not os.path.isdir(pcd_dir):
-                continue
-            
-            frame_list = [int(os.path.splitext(p)[0].split('_')[-1]) for p in os.listdir(pcd_dir)]
-            frame_list.sort()
-            self._scene_frame[sc_name] = frame_list
-            
-            # scene list
-            self._total_scene.append(sc_name)
-            
-            # scene dir
-            self._scene_path[sc_name] = sc_dir
-            self._scene_meta[sc_name] = meta
-            
-            # hand
-            shape = Utils.load_json_to_dic(self._mano_shape_path.format(meta['mano_calib']))
-            mano_sides = meta['mano_sides']
-            
-            self._scene_hand[sc_name] = {side: shape[side] for side in mano_sides}
-            # objects
-            self._scene_object[sc_name] = {
-                obj_id : self._obj_path.format(obj_id) for obj_id in meta['obj_ids']
-            }
+        for hand_type in os.listdir(self._data_dir):
+            hand_dir = os.path.join(self._data_dir, hand_type)
+            for obj_type in os.listdir(hand_dir):
+                obj_dir = os.path.join(hand_dir, obj_type)
+                for sc_dir in [os.path.join(obj_dir, p) for p in os.listdir(obj_dir)]:
+                    sc_name = os.path.basename(sc_dir)
+                    meta_file = os.path.join(self._scene_meta_dir, sc_name, "meta.yml")
+                    if not os.path.isfile(meta_file):
+                        continue
+                    with open(meta_file, 'r') as f:
+                        meta = yaml.load(f, Loader=yaml.FullLoader)
+                    
+                    # points
+                    pcd_dir = os.path.join(sc_dir, self._master_cam, "pcd")
+                    if not os.path.isdir(pcd_dir):
+                        continue
+                    frame_list = [int(os.path.splitext(p)[0].split('_')[-1]) for p in os.listdir(pcd_dir)]
+                    frame_list.sort()
+                    self._scene_frame[sc_name] = frame_list
+                    # scene list
+                    self._total_scene.append(sc_name)
+                    # scene dir
+                    self._scene_meta[sc_name] = meta
+                    self._scene_path[sc_name] = sc_dir
+                    self._scene_label[sc_name] = sc_dir.replace(self._data_dir, self._label_dir)
+                    # hand
+                    shape = Utils.load_json_to_dic(self._mano_shape_path.format(meta['mano_calib']))
+                    mano_sides = meta['mano_sides']
+                    
+                    self._scene_hand[sc_name] = {side: shape[side] for side in mano_sides}
+                    # objects
+                    self._scene_object[sc_name] = {
+                        obj_id : self._obj_path.format(obj_id) for obj_id in meta['obj_ids']
+                    }
 
-            # camera 
-            cam_calib = Utils.load_json_to_dic(self._cam_calib_path.format(meta['cam_calib']))
-            self._scene_camera[sc_name] = {}
-            for cam in self._cameras:
-                serial = self._cam2serial[cam]
-                K = self.get_intrinsic_from_dic(cam_calib[serial])
-                extr = self.get_extrinsic_from_dic(cam_calib[serial])
-                extrinsic = np.eye(4)
-                R = extr[:3, :3]
-                t = extr[:3, 3] / 1e3 # convert to meter
-                extrinsic[:3, :3] = R
-                extrinsic[:3, 3] = t
-                self._scene_camera[sc_name][cam] = {
-                    "intrinsic": K,
-                    "extrinsics": extrinsic
-                }
-            self.H = cam_calib[serial]["height"]
-            self.W = cam_calib[serial]["width"]
+                    # camera 
+                    cam_calib = Utils.load_json_to_dic(self._cam_calib_path.format(meta['cam_calib']))
+                    self._scene_camera[sc_name] = {}
+                    for cam in self._cameras:
+                        serial = self._cam2serial[cam]
+                        K = self.get_intrinsic_from_dic(cam_calib[serial])
+                        extr = self.get_extrinsic_from_dic(cam_calib[serial])
+                        extrinsic = np.eye(4)
+                        R = extr[:3, :3]
+                        t = extr[:3, 3] / 1e3 # convert to meter
+                        extrinsic[:3, :3] = R
+                        extrinsic[:3, 3] = t
+                        self._scene_camera[sc_name][cam] = {
+                            "intrinsic": K,
+                            "extrinsics": extrinsic
+                        }
+                    self.H = cam_calib[serial]["height"]
+                    self.W = cam_calib[serial]["width"]
             
         self._total_scene.sort()
         super().__init__()
@@ -1324,7 +1305,7 @@ class AihubDataset(Dataset):
     
 
 def load_aihub_dataset():
-    return AihubDataset()
+    return AihubDataset(DATA_CONFIG)
     
 class Scene:
     
@@ -1394,15 +1375,15 @@ class Scene:
                 pcd += self.single_views[cam_name].pcd
             return pcd
 
-    def __init__(self, scene_dir, sc_data_dir, sc_label_dir, hands, objects, cameras, frame_list, current_frame, load_pcd, scene_labels, master_cam):
+    def __init__(self, scene_dir, sc_label_dir, hands, objects, cameras, frame_list, current_frame, load_pcd, scene_labels, master_cam):
         self._scene_dir = scene_dir
         sc_name = os.path.basename(scene_dir)
-        
-        self._sc_data_dir = sc_data_dir
         self._sc_label_dir = sc_label_dir
+        os.makedirs(self._sc_label_dir, exist_ok=True)
         
         self._label_dir = os.path.join(scene_dir, f'{sc_name}_labels')
         os.makedirs(self._label_dir, exist_ok=True)
+        
         
         self._data_name = "H4_2_{}_".format(sc_name)
         
@@ -1493,22 +1474,7 @@ class Scene:
         frame_obj_label = self._obj_label
         hand_list = list(self._hands.keys())
         for cam_name, cam in self._cameras.items():
-            # copy data if not exist
-            src_rgb = os.path.join(self._scene_dir, cam.serial, 'rgb', self._data_name+"{:06d}.png".format(self.frame_id))
-            trg_rgb = os.path.join(self._sc_data_dir, cam_name, 'rgb', self._data_name+"{:06d}.png".format(self.frame_id))
-            os.makedirs(os.path.dirname(trg_rgb), exist_ok=True)
-            
-            src_depth = os.path.join(self._scene_dir, cam.serial, 'depth', self._data_name+"{:06d}.png".format(self.frame_id))
-            trg_depth = os.path.join(self._sc_data_dir, cam_name, 'depth', self._data_name+"{:06d}.png".format(self.frame_id))
-            os.makedirs(os.path.dirname(trg_depth), exist_ok=True)
-            
-            if not os.path.isfile(trg_rgb):
-                shutil.copy(src_rgb, trg_rgb)
-            if not os.path.isfile(trg_depth):
-                shutil.copy(src_depth, trg_depth)
-            
-            # create gt
-            label_path = self._sc_label_format.format(cam_name, self.frame_id)
+            label_path = self._sc_label_format.format(cam.folder, self.frame_id)
             os.makedirs(os.path.dirname(label_path), exist_ok=True)
             label = self._scene_labels[cam_name]
             # convert to camera coordinate
@@ -1570,8 +1536,8 @@ class Scene:
                 pose_info["instance_id"] = 1
                 pose_info["cam_R_m2c"] = cam_R_m2c
                 pose_info["cam_t_m2c"] = cam_t_m2c
-                #if mask2rle(amodal_mask) == "PPYo1":
-                #   print()
+                if mask2rle(amodal_mask) == "PPYo1":
+                    print()
                 pose_info['visible_mask'] = mask2rle(visible_mask)
                 pose_info['invisible_mask'] = mask2rle(invisible_mask)
                 pose_info['amodal_mask'] = mask2rle(amodal_mask)
@@ -1580,11 +1546,7 @@ class Scene:
             label['object_6d_pose_info'] = object_6d_pose_info
             with open(label_path, 'w') as f:
                 json.dump(label, f)
-    
-    def _copy_data(self):
-        pass
-    
-    
+            
     def load_label(self):
         # object label
         if self._obj_label is not None:
@@ -2184,7 +2146,7 @@ class AppWindow:
         # filedlg.add_filter(".pcd", "포인트 클라우드")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
-        filedlg.set_path(DATASET_ROOT)
+        filedlg.set_path(os.path.join(DATA_CONFIG['DATA_ROOT'], DATA_CONFIG['DATASET_NAME']))
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
         self.logger.debug('_on_filedlg_cancel')
@@ -3089,7 +3051,7 @@ class AppWindow:
         
         self._view_error_layout_list = []
         
-        for i in range(5):
+        for i in range(len(DATA_CONFIG["CAMERA_TYPE"].keys())):
             h = gui.Horiz(0)
             
             button = gui.Button("카메라 {}".format(i+1))
@@ -3146,53 +3108,53 @@ class AppWindow:
         show_error_layout.add_child(h)
         self._total_error_txt = (right_error_txt, left_error_txt, obj_error_txt)
 
-        # h = gui.Horiz(0.4 * em)
-        # self._obj_pc_error_txt = gui.Label("물체 포인트 에러: 준비 안됨")
-        # h.add_child(self._obj_pc_error_txt)
+        h = gui.Horiz(0.4 * em)
+        self._obj_pc_error_txt = gui.Label("물체 포인트 에러: 준비 안됨")
+        h.add_child(self._obj_pc_error_txt)
         
-        # v = gui.Vert(0)
-        # button = gui.Button("에러 업데이트")
-        # button.vertical_padding_em = 0.1
-        # button.set_on_clicked(self._on_update_obj_pc_error)
-        # v.add_child(button)
+        v = gui.Vert(0)
+        button = gui.Button("에러 업데이트")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_obj_pc_error)
+        v.add_child(button)
         # button = gui.Button("자동 정렬")
         # button.vertical_padding_em = 0.1
         # button.set_on_clicked(self._on_update_obj_pc_error_optim)
         # v.add_child(button)
-        # h.add_child(v)
-        # show_error_layout.add_child(h)
+        h.add_child(v)
+        show_error_layout.add_child(h)
         
-        # h = gui.Horiz(0.4 * em)
-        # self._rhand_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
-        # h.add_child(self._rhand_pc_error_txt)
+        h = gui.Horiz(0.4 * em)
+        self._rhand_pc_error_txt = gui.Label("오른손 포인트 에러: 준비 안됨")
+        h.add_child(self._rhand_pc_error_txt)
         
-        # v = gui.Vert(0)
-        # button = gui.Button("에러 업데이트")
-        # button.vertical_padding_em = 0.1
-        # button.set_on_clicked(self._on_update_rhand_pc_error)
-        # v.add_child(button)
-        # button = gui.Button("자동 정렬")
-        # button.vertical_padding_em = 0.1
-        # button.set_on_clicked(self._on_update_rhand_pc_error_optim)
-        # v.add_child(button)
-        # h.add_child(v)
-        # show_error_layout.add_child(h)
+        v = gui.Vert(0)
+        button = gui.Button("에러 업데이트")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_rhand_pc_error)
+        v.add_child(button)
+        button = gui.Button("자동 정렬")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_rhand_pc_error_optim)
+        v.add_child(button)
+        h.add_child(v)
+        show_error_layout.add_child(h)
         
-        # h = gui.Horiz(0.4 * em)
-        # self._lhand_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
-        # h.add_child(self._lhand_pc_error_txt)
+        h = gui.Horiz(0.4 * em)
+        self._lhand_pc_error_txt = gui.Label("왼손 포인트 에러: 준비 안됨")
+        h.add_child(self._lhand_pc_error_txt)
         
-        # v = gui.Vert(0)
-        # button = gui.Button("에러 업데이트")
-        # button.vertical_padding_em = 0.1
-        # button.set_on_clicked(self._on_update_lhand_pc_error)
-        # v.add_child(button)
-        # button = gui.Button("자동 정렬")
-        # button.vertical_padding_em = 0.1
-        # button.set_on_clicked(self._on_update_lhand_pc_error_optim)
-        # v.add_child(button)
-        # h.add_child(v)
-        # show_error_layout.add_child(h)
+        v = gui.Vert(0)
+        button = gui.Button("에러 업데이트")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_lhand_pc_error)
+        v.add_child(button)
+        button = gui.Button("자동 정렬")
+        button.vertical_padding_em = 0.1
+        button.set_on_clicked(self._on_update_lhand_pc_error_optim)
+        v.add_child(button)
+        h.add_child(v)
+        show_error_layout.add_child(h)
         
         self._activate_cam_txt = gui.Label("현재 활성화된 카메라: 없음")
         show_error_layout.add_child(self._activate_cam_txt)
@@ -3627,7 +3589,6 @@ class AppWindow:
         return diff_vis
             
     def _update_obj_pc_error(self, optim=False):
-        return
         if not self._check_annotation_scene():
             return
         # update point cloud error
@@ -3650,7 +3611,6 @@ class AppWindow:
         else:
             self._obj_pc_error_txt.text = "물체 포인트 에러: 근처 포인트가 없음"
     def _update_rhand_pc_error(self, optim=False):
-        return
         if not self._check_annotation_scene():
             return
         if not 'right' in self._hand_names:
@@ -3699,7 +3659,6 @@ class AppWindow:
             self._rhand_pc_error_txt.text = "오른손 포인트 에러: 근처 포인트가 없음"
 
     def _update_lhand_pc_error(self, optim=False):
-        return
         if not self._check_annotation_scene():
             return
         if not 'left' in self._hand_names:
