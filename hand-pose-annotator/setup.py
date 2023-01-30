@@ -17,9 +17,6 @@ build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "chumpy"
                     #  "include_files": [r'C:\\Users\\user\\minionda3\\Library\\plugins\\platforms'],
                      "excludes": []}
 
-# os.environ['TCL_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
-# os.environ['TK_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
-
 base = None
 
 setup(
@@ -28,7 +25,7 @@ setup(
     description="GIST AILAB 3D Hand Pose Annotation Tool",
     author="Raeyoung Kang, GIST AILAB, raeyo@gm.gist.ac.kr",
     options={"build_exe": build_exe_options},
-    executables=[Executable("hand_pose_annotator_aihub.py", 
+    executables=[Executable("hand_pose_annotator.py", 
                             copyright="MIT License, Raeyoung Kang, GIST AILAB",
                             icon="./lib/icon.ico",
                             base=base)],

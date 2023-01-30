@@ -352,7 +352,6 @@ class HandModel:
         self.lock_state = [False for _ in range(17)]
         self.save_undo(forced=True)
     
-    #region mano model
     def update_mano(self):
         pose_param = torch.concat(self.joint_rot, dim=1)
         verts, joints = self.mano_layer(th_pose_coeffs=pose_param,

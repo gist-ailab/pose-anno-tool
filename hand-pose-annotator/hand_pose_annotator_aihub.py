@@ -1616,7 +1616,7 @@ class Scene:
                 hand_states.setdefault(side, {})
                 param = k.replace(side + "_", "")
                 hand_states[side][param] = v
-            for side, hand_model in self._hand_label.items():
+            for side, hand_model in self._hands.items():
                 hand_model.set_state(hand_states[side])
             return True
         except:
