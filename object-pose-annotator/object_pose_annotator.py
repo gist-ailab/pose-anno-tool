@@ -746,7 +746,7 @@ class AppWindow:
         self._log.text = "\t이미지 " + source_image_num + "의 라벨링 결과를 " + target_image_num + "로 복사합니다."
         self.window.set_needs_layout()
 
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if not os.path.exists(json_6d_path):
             self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
@@ -805,8 +805,8 @@ class AppWindow:
                 obj_inst_name = f'obj_{obj_id:06}_{inst_id}'
                 target_obj_names.append(obj_name)
                 target_obj_inst_names.append(obj_inst_name)
-                if obj_inst_name in self.depth_diff_means.keys():
-                    err = abs(self.depth_diff_means[obj_inst_name]) 
+                # if obj_inst_name in self.depth_diff_means.keys():
+                    # err = abs(self.depth_diff_means[obj_inst_name]) 
                 
                 ok_delta = self.ok_delta 
                 ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
@@ -1223,7 +1223,7 @@ class AppWindow:
 
         image_num = self._annotation_scene.image_num
         # model_names = self.load_model_names()
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
@@ -1263,7 +1263,7 @@ class AppWindow:
             self.window.set_needs_layout()
         except Exception as e:
             date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_backup_{}.json".format(date_time))
+            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_aligned_c4_plane_icp_backup_{}.json".format(date_time))
             with open(json_6d_path, 'w+') as gt_scene:
                 view_angle_data = list()
                 for obj in self._annotation_scene.get_objects():
@@ -1307,6 +1307,9 @@ class AppWindow:
         up = [0, -1, 0]  # camera orientation
         render.scene.camera.look_at(center, eye, up)
         render.scene.camera.set_projection(intrinsic, 0.01, 3.0, self.W, self.H)
+        
+        import time
+        start_time = time.time()
 
         objects = self._annotation_scene.get_objects()
         # generate object material
@@ -1413,7 +1416,8 @@ class AppWindow:
                 [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
             try:
                 diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
-            except:
+            except Exception as e:
+                print(e)
                 self._on_error("물체 {}가 카메라 밖에 있거나 포인트 클라우드와 너무 멀리 떨어져 있습니다.".format(obj_name))
                 continue
             text = "{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2]))
@@ -1435,7 +1439,6 @@ class AppWindow:
             is_oks.append(is_ok)
             amodal_masks.append(amodal_mask)
             bboxes.append(bbox)
-        
 
         # draw amodal masks
         mask_img = rgb_img.copy()
@@ -1697,7 +1700,7 @@ class AppWindow:
                         self._on_error("키프레임이 아닙니다. 첫번째 키프레임으로 이동합니다. (error at _scene_load)")
                     self.load_keyframe_first = False
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) # !TODO: change to scene_camera.json
+        camera_params_path = os.path.join(scene_path, 'scene_camera_adjusted.json'.format(self.current_scene_idx)) 
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
@@ -1741,7 +1744,7 @@ class AppWindow:
 
         # load values if an annotation already exists
         scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}",
-                                        'scene_gt_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+                                        'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if os.path.exists(scene_gt_path):
             with open(scene_gt_path) as scene_gt_file:
                 try:
@@ -1798,33 +1801,33 @@ class AppWindow:
         if os.path.exists(note_json_path): # !TODO: This is too ugly ..
             with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
                 note_json = json.load(f)
-            if str(self.image_num_lists[self.current_image_idx]) in note_json.keys():
-                if '1' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
-                    self.note_edit_1.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['1']
-                else:
-                    self.note_edit_1.text_value = ''
-                if '2' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
-                    self.note_edit_2.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['2']
-                else:
-                    self.note_edit_2.text_value = ''
-                if '3' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
-                    self.note_edit_3.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['3']
-                else:
-                    self.note_edit_3.text_value = ''
-                if '4' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
-                    self.note_edit_4.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['4']
-                else:
-                    self.note_edit_4.text_value = ''
-                if '5' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
-                    self.note_edit_5.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['5']
-                else:
-                    self.note_edit_5.text_value = ''
-            else:
-                self.note_edit_1.text_value = ""
-                self.note_edit_2.text_value = ""
-                self.note_edit_3.text_value = ""
-                self.note_edit_4.text_value = ""
-                self.note_edit_5.text_value = ""
+            # if str(self.image_num_lists[self.current_image_idx]) in note_json.keys():
+            #     if '1' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_1.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['1']
+            #     else:
+            #         self.note_edit_1.text_value = ''
+            #     if '2' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_2.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['2']
+            #     else:
+            #         self.note_edit_2.text_value = ''
+            #     if '3' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_3.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['3']
+            #     else:
+            #         self.note_edit_3.text_value = ''
+            #     if '4' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_4.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['4']
+            #     else:
+            #         self.note_edit_4.text_value = ''
+            #     if '5' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_5.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['5']
+            #     else:
+            #         self.note_edit_5.text_value = ''
+            # else:
+            self.note_edit_1.text_value = ""
+            self.note_edit_2.text_value = ""
+            self.note_edit_3.text_value = ""
+            self.note_edit_4.text_value = ""
+            self.note_edit_5.text_value = ""
         # self.source_id_edit.set_value(image_num)
 
 
@@ -1877,7 +1880,7 @@ class AppWindow:
         self.window.set_needs_layout()
         self.current_scene_idx += 1
         self.load_keyframe_first = True
-        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
+        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], -4)  # open next scene on the first image
 
     def _on_previous_scene(self):
         if self._check_changes():
@@ -1892,7 +1895,7 @@ class AppWindow:
         self._log.text = "\t 이전 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
         self.load_keyframe_first = True
-        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], 0)  # open next scene on the first image
+        self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], -4)  # open next scene on the first image
 
     def _on_change_image(self):
         if self._check_changes():
