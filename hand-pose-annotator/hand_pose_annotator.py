@@ -41,95 +41,6 @@ import psutil
 MANO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "mano")
 hangeul = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "NanumGothic.ttf")
 
-temp_side_info = {
-    4:	['left'],
-    5:	['right'],
-    6:	['right'],
-    7:	['right'],
-    9:	['left'],
-    10:	['left'],
-    11:	['left'],
-    14:	['right'],
-    15:	['right'],
-    16:	['right'],
-    18:	['left'],
-    22:	['right'],
-    23:	['right'],
-    24:	['right'],
-    25:	['left'],
-    26:	['left'],
-    27:	['left'],
-    28:	['left'],
-    29:	['left'],
-    30:	['left'],
-    31:	['left'],
-    32:	['left'],
-    33:	['left'],
-    34:	['left'],
-    35:	['left'],
-    36:	['left'],
-    37:	['right'],
-    38:	['right'],
-    39:	['right'],
-    40:	['right'],
-    41:	['right'],
-    42:	['right'],
-    43:	['right'],
-    44:	['right'],
-    45:	['right'],
-    46:	['right'],
-    47:	['right'],
-    48:	['right'],
-    49:	['left'],
-    50:	['left'],
-    51:	['left'],
-    52:	['left'],
-    53:	['left'],
-    54:	['left'],
-    55:	['left'],
-    56:	['left'],
-    57:	['left'],
-    58:	['left'],
-    59:	['left'],
-    60:	['left'],
-    61:	['right'],
-    62:	['right'],
-    63:	['right'],
-    64:	['right'],
-    65:	['right'],
-    66:	['right'],
-    67:	['right'],
-    68:	['right'],
-    69:	['right'],
-    70:	['right'],
-    71:	['right'],
-    72:	['right'],
-    73:	['left'],
-    74:	['left'],
-    75:	['left'],
-    76:	['left'],
-    77:	['left'],
-    78:	['left'],
-    79:	['left'],
-    80:	['left'],
-    81:	['left'],
-    82:	['left'],
-    83:	['left'],
-    84:	['left'],
-    85:	['right'],
-    86:	['right'],
-    87:	['right'],
-    88:	['right'],
-    89:	['right'],
-    90:	['right'],
-    91:	['right'],
-    92:	['right'],
-    93:	['right'],
-    94:	['right'],
-    95:	['right'],
-    96:	['right'],
-}
-
 class Utils:
     # file
     def get_file_list(path):
@@ -441,7 +352,6 @@ class HandModel:
         self.lock_state = [False for _ in range(17)]
         self.save_undo(forced=True)
     
-    #region mano model
     def update_mano(self):
         pose_param = torch.concat(self.joint_rot, dim=1)
         verts, joints = self.mano_layer(th_pose_coeffs=pose_param,
@@ -1201,7 +1111,7 @@ class Dataset:
             print("[WARNING] Failed to read points")
         return pcd
 
-class OurDataset(Dataset):
+class SourceDataset(Dataset):
     _SERIALS = [
         '000390922112', # master
         '000480922112',
@@ -1330,7 +1240,7 @@ def load_dataset_from_file(file_path):
     scene_dir = os.path.dirname(camera_dir)
     dataset_dir = os.path.dirname(scene_dir)
     
-    return OurDataset(dataset_dir)
+    return SourceDataset(dataset_dir)
     
 class Scene:
     
@@ -2098,7 +2008,7 @@ class AppWindow:
         if os.name=='nt' and os.getlogin()=='raeyo':
             filedlg.set_path('C:\data4')
         elif os.name=='posix' and os.getlogin()=='raeyo':
-            filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
+            filedlg.set_path('/media/raeyo/ssd_e/data4/source')
             
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):
@@ -2123,7 +2033,6 @@ class AppWindow:
                     pass
                 else:
                     del self.dataset
-                    
                     self.dataset = load_dataset_from_file(file_path)
             if self.annotation_scene is None:
                 self.annotation_scene = self.dataset.get_scene_from_file(file_path)

@@ -1,25 +1,15 @@
 # Hand Pose Annotator
 
-<img src="./lib/hand_pose_annotator.png" height="400">
+<img src="./hand_pose_annotator.png" height="400">
 
-
-# TODO:
-- [X] Select Activate each cam pcd
-- [X] Fix redo, undo
-- [ ] Mocap pose 
-- [ ] Calculate SDF base error
-- [ ] Visualize Intersection Area
+### How to Use
 ```
 # install requirements
 $ conda create -n pose-anno-3d python=3.7
 $ conda activate pose-anno-3d
-$ pip install numpy open3d PyYAML opencv-python==4.5.3.56 Cython
+$ pip install numpy open3d==0.15.2 PyYAML opencv-python==4.5.3.56 Cython
 
 # install torch - cpu
-$ (linux) pip3 install torch --extra-index-url https://download.pytorch.org/whl/cpu
-$ (window) pip3 install torch
-
-# install torch - cuda
 $ (linux) pip3 install torch --extra-index-url https://download.pytorch.org/whl/cpu
 $ (window) pip3 install torch
 

@@ -1,7 +1,6 @@
 import os
 import sys
 
-from sympy import det
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import open3d as o3d
@@ -905,7 +904,7 @@ class AppWindow:
         if os.environ.get("USERNAME")=='ailab':
             filedlg.set_path('/home/ailab/catkin_ws/src/gail-camera-manager/data/data4-source')
         elif os.environ.get("USERNAME")=='raeyo':
-            filedlg.set_path('/media/raeyo/T7/Workspace/data4-source')
+            filedlg.set_path('/media/raeyo/ssd_e/data4/source')
         
         self.window.show_dialog(filedlg)
     def _on_filedlg_cancel(self):

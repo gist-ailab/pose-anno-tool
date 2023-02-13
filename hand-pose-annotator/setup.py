@@ -10,15 +10,12 @@ includefiles_list.append(scipy_path)
 
 # Dependencies are automatically detected, but it might need fine tuning.
 # "packages": ["os"] is used as example only
-build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch", 
-                                    'pytorch3d.structures', 'pytorch3d.ops', 'pytorch3d.loss'], 
-                     "packages": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch", 
-                                    'pytorch3d.structures', 'pytorch3d.ops', 'pytorch3d.loss'], 
+build_exe_options = {"includes": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch", "open3d"
+                                    ], 
+                     "packages": ["os", "numpy", "numpy.core._methods", "chumpy", "random", "tkinter", "ctypes", "torch", "open3d"
+                                    ], 
                     #  "include_files": [r'C:\\Users\\user\\minionda3\\Library\\plugins\\platforms'],
                      "excludes": []}
-
-# os.environ['TCL_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
-# os.environ['TK_LIBRARY'] = r'C:\\Users\\user\\minionda3\\envs\\pose-anno\\tcl\\tcl8.6'
 
 base = None
 
