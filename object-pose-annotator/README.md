@@ -30,15 +30,8 @@ In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.
 ```
 $ conda create -n pose-anno python=3.7
 $ conda activate pose-anno
-$ pip install -r requirements.txt
-$ pip install numpy matplotlib==2.2.5 open3d glumpy pyrender imgviz pyglet
-$ pip install opencv-python==4.5.3.56
-$ pip install git+https://github.com/SeungBack/bop_toolkit
-
-$ python annotator.py
-
-$ pip install --upgrade cx_Freeze
-
-$ python setup.py build
+$ pip install numpy matplotlib open3d==0.15.2 glumpy pyrender imgviz pyglet open3d opencv-python==4.5.3.56 scikit-learn
+$ sudo mount -t nfs 172.27.183.142:/volume1/aihub /aihub
+$ cd object-pose-annotator & ln -s /aihub/OccludedObjectDataset/ours/data2/data2_real_source .
+$ python object_pose_annotator.py
 ```
-

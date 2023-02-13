@@ -805,8 +805,8 @@ class AppWindow:
                 obj_inst_name = f'obj_{obj_id:06}_{inst_id}'
                 target_obj_names.append(obj_name)
                 target_obj_inst_names.append(obj_inst_name)
-                # if obj_inst_name in self.depth_diff_means.keys():
-                    # err = abs(self.depth_diff_means[obj_inst_name]) 
+                if obj_inst_name in self.depth_diff_means.keys():
+                    err = abs(self.depth_diff_means[obj_inst_name]) 
                 
                 ok_delta = self.ok_delta 
                 ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
