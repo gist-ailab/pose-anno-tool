@@ -21,6 +21,7 @@ import matplotlib
 
 from pathlib import Path
 from os.path import basename, dirname
+from scipy.spatial.transform import Rotation as Rot
 
 obj_id_to_thresh_factor = {
     # reflective objects
@@ -63,6 +64,8 @@ class Dataset:
     def __init__(self, dataset_path, dataset_split):
         self.scenes_path = os.path.join(dataset_path, dataset_split)
         self.objects_path = os.path.join(dataset_path, 'models')
+        # self.mesh_path = os.path.join(dataset_path, 'mesh_models')
+        self.mesh_path = os.path.join(dataset_path, 'models')
 
 
 class AnnotationScene:
@@ -73,8 +76,8 @@ class AnnotationScene:
 
         self.obj_list = list()
 
-    def add_obj(self, obj_geometry, obj_name, obj_instance, transform=np.identity(4)):
-        self.obj_list.append(self.SceneObject(obj_geometry, obj_name, obj_instance, transform))
+    def add_obj(self, obj_geometry, obj_mesh, obj_name, obj_instance, transform=np.identity(4)):
+        self.obj_list.append(self.SceneObject(obj_geometry, obj_mesh, obj_name, obj_instance, transform))
 
     def get_objects(self):
         return self.obj_list[:]
@@ -83,11 +86,18 @@ class AnnotationScene:
         self.obj_list.pop(index)
 
     class SceneObject:
-        def __init__(self, obj_geometry, obj_name, obj_instance, transform):
+        def __init__(self, obj_geometry, obj_mesh, obj_name, obj_instance, transform):
             self.obj_geometry = obj_geometry
+            self.obj_mesh = obj_mesh
             self.obj_name = obj_name
             self.obj_instance = obj_instance
-            self.transform = transform
+            self.transform = np.identity(4)
+            self.set_transform(transform)
+
+        def set_transform(self, transform):
+            self.obj_geometry.transform(transform)
+            self.obj_mesh.transform(transform)
+            self.transform = np.matmul(transform, self.transform)
 
 
 class Settings:
@@ -190,25 +200,26 @@ class AppWindow:
         self._scene.scene.remove_geometry(name)
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
         if "world" in name:
-            transform = np.eye(4)
-            transform[:3, 3] = active_obj.transform[:3, 3]
-            coord_frame.transform(transform)
-            for label in self.coord_labels:
-                self._scene.remove_3d_label(label)
-            self.coord_labels = []
-            size = size * 0.6
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D (+)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A (-)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S (+)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W (-)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q (+)"))
-            self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E (-)"))
+            pass 
+            # transform = np.eye(4)
+            # transform[:3, 3] = active_obj.transform[:3, 3]
+            # coord_frame.transform(transform)
+            # for label in self.coord_labels:
+            #     self._scene.remove_3d_label(label)
+            # self.coord_labels = []
+            # size = size * 0.6
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([size, 0, 0]), "D (+)"))
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([-size, 0, 0]), "A (-)"))
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, size, 0]), "S (+)"))
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, -size, 0]), "W (-)"))
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, size]), "Q (+)"))
+            # self.coord_labels.append(self._scene.add_3d_label(active_obj.transform[:3, 3] + np.array([0, 0, -size]), "E (-)"))
 
         else:
             coord_frame.transform(active_obj.transform)
-        self._scene.scene.add_geometry(name, coord_frame, 
-                                        self.settings.coord_material,
-                                        add_downsampled_copy_for_fast_rendering=True) 
+            self._scene.scene.add_geometry(name, coord_frame, 
+                                            self.settings.coord_material,
+                                            add_downsampled_copy_for_fast_rendering=True) 
 
     def _on_layout(self, layout_context):
         r = self.window.content_rect
@@ -887,6 +898,7 @@ class AppWindow:
         filedlg.add_filter("", "모든 파일")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
+        filedlg.set_path('/aihub/OccludedObjectDataset/ours/data2/data2_real_source/all')
         self.window.show_dialog(filedlg)
 
     def _on_filedlg_cancel(self):
@@ -934,13 +946,23 @@ class AppWindow:
         if x != 0 or y != 0 or z != 0:
             h_transform = np.array([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]])
         else:  # elif rx!=0 or ry!=0 or rz!=0:
+            # center = active_obj.obj_geometry.get_center()
+            # rot_mat_obj_center = active_obj.obj_geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
+            # T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
+            # R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
+            # T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
+            # h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
             center = active_obj.obj_geometry.get_center()
-            rot_mat_obj_center = active_obj.obj_geometry.get_rotation_matrix_from_xyz((rx, ry, rz))
+            current_rot = active_obj.transform[:3, :3]
+            rot_vec = rx*current_rot[:, 0] + ry*current_rot[:, 1] + rz*current_rot[:, 2]
+            r = Rot.from_rotvec(rot_vec)
+            rot_mat = r.as_matrix()
             T_neg = np.vstack((np.hstack((np.identity(3), -center.reshape(3, 1))), [0, 0, 0, 1]))
-            R = np.vstack((np.hstack((rot_mat_obj_center, [[0], [0], [0]])), [0, 0, 0, 1]))
+            R = np.vstack((np.hstack((rot_mat, [[0], [0], [0]])), [0, 0, 0, 1]))
             T_pos = np.vstack((np.hstack((np.identity(3), center.reshape(3, 1))), [0, 0, 0, 1]))
-            h_transform = np.matmul(T_pos, np.matmul(R, T_neg))
-        active_obj.obj_geometry.transform(h_transform)
+            h_transform = T_pos @ R @ T_neg
+            
+        active_obj.set_transform(h_transform)
         center = active_obj.obj_geometry.get_center()
         self._scene.scene.remove_geometry(active_obj.obj_name)
         self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
@@ -948,7 +970,7 @@ class AppWindow:
                                         add_downsampled_copy_for_fast_rendering=True)
                                     
         # update values stored of object
-        active_obj.transform = np.matmul(h_transform, active_obj.transform)
+        # active_obj.transform = np.matmul(h_transform, active_obj.transform)
 
         if self.settings.show_coord_frame:
             self._add_coord_frame("obj_coord_frame", size=0.1)
@@ -1138,13 +1160,14 @@ class AppWindow:
                     active_obj = objects[self._meshes_used.selected_index]
                     h_transform = np.eye(4)
                     h_transform[:3, 3] = target_xyz - active_obj.obj_geometry.get_center()
-                    active_obj.obj_geometry.transform(h_transform)
+                    # active_obj.obj_geometry.transform(h_transform)
+                    active_obj.set_transform(h_transform)
                     self._scene.scene.remove_geometry(active_obj.obj_name)
                     self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                                 self.settings.annotation_active_obj_material,
                                                 add_downsampled_copy_for_fast_rendering=True)
                     # update values stored of object
-                    active_obj.transform = np.matmul(h_transform, active_obj.transform)
+                    # active_obj.transform = np.matmul(h_transform, active_obj.transform)
                     if self.settings.show_coord_frame:
                         self._add_coord_frame("obj_coord_frame", size=0.1)
                         self._add_coord_frame("world_coord_frame")
@@ -1196,12 +1219,13 @@ class AppWindow:
                                                           o3d.pipelines.registration.ICPConvergenceCriteria(
                                                               max_iteration=50))
         if np.sum(np.abs(reg.transformation[:3, 3])) < 0.25:
-            active_obj.obj_geometry.transform(reg.transformation)
+            # active_obj.obj_geometry.transform(reg.transformation)
+            active_obj.set_transform(reg.transformation)
             self._scene.scene.remove_geometry(active_obj.obj_name)
             self._scene.scene.add_geometry(active_obj.obj_name, active_obj.obj_geometry,
                                         self.settings.annotation_active_obj_material,
                                         add_downsampled_copy_for_fast_rendering=True)
-            active_obj.transform = np.matmul(reg.transformation, active_obj.transform)
+            # active_obj.transform = np.matmul(reg.transformation, active_obj.transform)
 
             if self.settings.show_coord_frame:
                 self._add_coord_frame("obj_coord_frame", size=0.1)
@@ -1316,10 +1340,10 @@ class AppWindow:
         obj_mtl = o3d.visualization.rendering.MaterialRecord()
         obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         obj_mtl.shader = "defaultUnlit"
-        obj_mtl.point_size = 10.0
+        # obj_mtl.point_size = 10.0
         for obj in objects:
             obj = copy.deepcopy(obj)
-            render.scene.add_geometry(obj.obj_name, obj.obj_geometry, obj_mtl,                              
+            render.scene.add_geometry(obj.obj_name, obj.obj_mesh, obj_mtl,                              
                                   add_downsampled_copy_for_fast_rendering=True)
         depth_rendered = render.render_to_depth_image(z_in_view_space=True)
         depth_rendered = np.array(depth_rendered, dtype=np.float32)
@@ -1334,10 +1358,10 @@ class AppWindow:
             for target_obj in objects:
                 target_obj = copy.deepcopy(target_obj)
                 color = [1,0,0] if source_obj.obj_name == target_obj.obj_name else [0,0,0]
-                target_obj.obj_geometry.paint_uniform_color(color)
+                target_obj.obj_mesh.paint_uniform_color(color)
                 render.scene.add_geometry("mask_{}_to_{}".format(
                                                 source_obj.obj_name, target_obj.obj_name), 
-                                        target_obj.obj_geometry, obj_mtl,                              
+                                        target_obj.obj_mesh, obj_mtl,                              
                                         add_downsampled_copy_for_fast_rendering=True)
             # render mask as RGB
             mask_obj = render.render_to_image()
@@ -1603,12 +1627,12 @@ class AppWindow:
         center = self._annotation_scene.annotation_scene.get_center()
         center[2] -= 0.2
         init_trans[0:3, 3] = center
-        object_geometry.transform(init_trans)
+        # object_geometry.transform(init_trans)
+        self._annotation_scene.add_obj(object_geometry, new_mesh_name, new_mesh_instance, transform=init_trans)
         new_mesh_instance = self._obj_instance_count(mesh_name_to_add, meshes)
         new_mesh_name = mesh_name_to_add + '_' + str(new_mesh_instance)
         self._scene.scene.add_geometry(new_mesh_name, object_geometry, self.settings.annotation_obj_material,
                                        add_downsampled_copy_for_fast_rendering=True)
-        self._annotation_scene.add_obj(object_geometry, new_mesh_name, new_mesh_instance, transform=init_trans)
         if self.settings.show_mesh_names:
             self.mesh_names.append(self._scene.add_3d_label(center, f"{new_mesh_name}"))
 
@@ -1762,6 +1786,11 @@ class AppWindow:
                             os.path.join(self.scenes.objects_path, 'obj_' + f"{int(obj['obj_id']):06}" + '.ply'))
                         obj_geometry.points = o3d.utility.Vector3dVector(
                             np.array(obj_geometry.points) / 1000)  # convert mm to meter
+                        obj_mesh = o3d.io.read_triangle_mesh(
+                            os.path.join(self.scenes.mesh_path, 'obj_' + f"{int(obj['obj_id']):06}" + '.ply'))
+                        obj_mesh.vertices = o3d.utility.Vector3dVector(
+                            np.array(obj_mesh.vertices) / 1000)  # convert mm to meter
+                        
                         model_name = 'obj_' + f'{ + obj["obj_id"]:06}'
                         if "inst_id" in obj.keys():
                             obj_instance = int(obj["inst_id"])
@@ -1774,8 +1803,8 @@ class AppWindow:
                         transform_cam_to_obj = np.concatenate(
                             (transform, np.array([0, 0, 0, 1]).reshape(1, 4)))  # homogeneous transform
 
-                        self._annotation_scene.add_obj(obj_geometry, obj_name, obj_instance, transform_cam_to_obj)
-                        obj_geometry.transform(transform_cam_to_obj)
+                        self._annotation_scene.add_obj(obj_geometry, obj_mesh, obj_name, obj_instance, transform_cam_to_obj)
+                        # obj_geometry.transform(transform_cam_to_obj)
                         self._scene.scene.add_geometry(obj_name, obj_geometry, self.settings.annotation_obj_material,
                                                         add_downsampled_copy_for_fast_rendering=True)
                         active_meshes.append(obj_name)
