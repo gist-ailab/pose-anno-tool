@@ -71,6 +71,7 @@ class GTVisualizer():
             for sub_dir_2 in os.listdir(os.path.join(self.aihub_root, sub_dir_1)):
                 if sub_dir_2[-4:] in ['.zip', '.tar']:
                     continue
+                print(self.aihub_root, sub_dir_1, sub_dir_2)
                 for scene_id in os.listdir(os.path.join(self.aihub_root, sub_dir_1, sub_dir_2)):
                     if int(scene_id) == self.scene_id:
                         self.sub_dir_1 = sub_dir_1
@@ -411,6 +412,7 @@ class GTVisualizer():
         self.sub_dir_1 = sub_dir_1
         self.sub_dir_2 = sub_dir_2
         self.aihub_root = aihub_root
+        print(aihub_root, sub_dir_1, sub_dir_2, scene_id, image_id)
         self.scene_id = int(scene_id)
         self.image_id = int(image_id)
         if self.data_type == "data2_real":
