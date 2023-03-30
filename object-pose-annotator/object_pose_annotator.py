@@ -757,7 +757,7 @@ class AppWindow:
         self._log.text = "\t이미지 " + source_image_num + "의 라벨링 결과를 " + target_image_num + "로 복사합니다."
         self.window.set_needs_layout()
 
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_adjusted_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if not os.path.exists(json_6d_path):
             self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
@@ -1247,7 +1247,7 @@ class AppWindow:
 
         image_num = self._annotation_scene.image_num
         # model_names = self.load_model_names()
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_adjusted_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
@@ -1287,7 +1287,7 @@ class AppWindow:
             self.window.set_needs_layout()
         except Exception as e:
             date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_aligned_c4_plane_icp_adjusted_backup_{}.json".format(date_time))
+            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_aligned_c4_plane_icp_backup_{}.json".format(date_time))
             with open(json_6d_path, 'w+') as gt_scene:
                 view_angle_data = list()
                 for obj in self._annotation_scene.get_objects():
@@ -1772,7 +1772,7 @@ class AppWindow:
 
         # load values if an annotation already exists
         scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}",
-                                        'scene_gt_aligned_c4_plane_icp_adjusted_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+                                        'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if os.path.exists(scene_gt_path):
             with open(scene_gt_path) as scene_gt_file:
                 try:
