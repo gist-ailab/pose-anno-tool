@@ -757,7 +757,7 @@ class AppWindow:
         self._log.text = "\t이미지 " + source_image_num + "의 라벨링 결과를 " + target_image_num + "로 복사합니다."
         self.window.set_needs_layout()
 
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if not os.path.exists(json_6d_path):
             self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
@@ -908,31 +908,31 @@ class AppWindow:
         self._fileedit.text_value = ply_path
         dataset_path = str(Path(ply_path).parent.parent.parent.parent)
         split_and_type = basename(str(Path(ply_path).parent.parent.parent))
-        rgb_path = ply_path.replace('/pcd/', '/rgb/')
+        rgb_path = ply_path.replace('/pcd_final/', '/rgb_undistort/')
         self.scenes = Dataset(dataset_path, split_and_type)
-        try:
-            start_scene_num = int(basename(str(Path(ply_path).parent.parent)))
-            start_image_num = int(basename(ply_path)[:-4])
-            self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
-            self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
-            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
-            if len(self.image_num_lists) == 0:
-                self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.jpg")])
-            self.current_image_idx = self.image_num_lists.index(start_image_num)
-            if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
-                self.update_obj_list()
-                self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
-                self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
-                self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
-                    100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
-                    self.current_image_idx + 1, len(self.image_num_lists))
-            self.window.close_dialog()
-            self._log.text = "\t라벨링 대상 파일을 불러왔습니다."
-            self.window.set_needs_layout()
-        except Exception as e:
-            print(e)
-            self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
-            self._log.text = "\t올바른 파일 경로를 선택하세요."
+        # try:
+        start_scene_num = int(basename(str(Path(ply_path).parent.parent)))
+        start_image_num = int(basename(ply_path)[:-4])
+        self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
+        self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
+        self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
+        if len(self.image_num_lists) == 0:
+            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.jpg")])
+        self.current_image_idx = self.image_num_lists.index(start_image_num)
+        if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
+            self.update_obj_list()
+            self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
+            self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
+            self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+                100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+                self.current_image_idx + 1, len(self.image_num_lists))
+        self.window.close_dialog()
+        self._log.text = "\t라벨링 대상 파일을 불러왔습니다."
+        self.window.set_needs_layout()
+        # except Exception as e:
+        #     print(e)
+        #     self._on_error("잘못된 경로가 입력되었습니다. (error at _on_filedlg_done)")
+        #     self._log.text = "\t올바른 파일 경로를 선택하세요."
 
     def _update_scene_numbers(self):
         self._scene_number.text = "작업 폴더: " + f'{self._annotation_scene.scene_num:06}'
@@ -1247,7 +1247,7 @@ class AppWindow:
 
         image_num = self._annotation_scene.image_num
         # model_names = self.load_model_names()
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
@@ -1287,7 +1287,7 @@ class AppWindow:
             self.window.set_needs_layout()
         except Exception as e:
             date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_aligned_c4_plane_icp_backup_{}.json".format(date_time))
+            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_final_backup_{}.json".format(date_time))
             with open(json_6d_path, 'w+') as gt_scene:
                 view_angle_data = list()
                 for obj in self._annotation_scene.get_objects():
@@ -1319,7 +1319,7 @@ class AppWindow:
         render = rendering.OffscreenRenderer(width=self.W, height=self.H)
         # black background color
         render.scene.set_background([0, 0, 0, 1])
-        render.scene.set_lighting(render.scene.LightingProfile.SOFT_SHADOWS, [0,0,0])
+        # render.scene.set_lighting(render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
 
         # set camera intrinsic
         intrinsic = np.array(self.cam_K).reshape((3, 3))
@@ -1332,28 +1332,29 @@ class AppWindow:
         render.scene.camera.look_at(center, eye, up)
         render.scene.camera.set_projection(intrinsic, 0.01, 3.0, self.W, self.H)
         
-        import time
-        start_time = time.time()
-
         objects = self._annotation_scene.get_objects()
         # generate object material
         obj_mtl = o3d.visualization.rendering.MaterialRecord()
         obj_mtl.base_color = [1.0, 1.0, 1.0, 1.0]
         obj_mtl.shader = "defaultUnlit"
-        # obj_mtl.point_size = 10.0
         for obj in objects:
             obj = copy.deepcopy(obj)
+            obj.obj_mesh.paint_uniform_color([1, 0, 0])
             render.scene.add_geometry(obj.obj_name, obj.obj_mesh, obj_mtl,                              
-                                  add_downsampled_copy_for_fast_rendering=True)
+                                  add_downsampled_copy_for_fast_rendering=False)
+        
+
         depth_rendered = render.render_to_depth_image(z_in_view_space=True)
         depth_rendered = np.array(depth_rendered, dtype=np.float32)
         depth_rendered[np.isposinf(depth_rendered)] = 0
         depth_rendered *= 1000 # convert meter to mm
         render.scene.clear_geometry()
+        print('depth_rendered', time.time() - start_time)
 
         # rendering object masks #
         obj_masks = {}
         for source_obj in objects:
+            start_time = time.time()
             # add geometry and set color (target object as white / others as black)
             for target_obj in objects:
                 target_obj = copy.deepcopy(target_obj)
@@ -1365,7 +1366,6 @@ class AppWindow:
                                         add_downsampled_copy_for_fast_rendering=True)
             # render mask as RGB
             mask_obj = render.render_to_image()
-            # mask_obj = cv2.cvtColor(np.array(mask_obj), cv2.COLOR_RGBA2BGRA)
             mask_obj = np.array(mask_obj)
 
             # save in dictionary
@@ -1393,7 +1393,9 @@ class AppWindow:
         amodal_masks = []
         bboxes = []
         cmap = matplotlib.cm.get_cmap('gist_rainbow')
+        import time
         for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
+            start_time = time.time()
             cnd_r = obj_mask[:, :, 0] != 0
             cnd_g = obj_mask[:, :, 1] == 0
             cnd_b = obj_mask[:, :, 2] == 0
@@ -1463,6 +1465,7 @@ class AppWindow:
             is_oks.append(is_ok)
             amodal_masks.append(amodal_mask)
             bboxes.append(bbox)
+            print("time: ", time.time() - start_time)
 
         # draw amodal masks
         mask_img = rgb_img.copy()
@@ -1728,22 +1731,22 @@ class AppWindow:
                         self._on_error("키프레임이 아닙니다. 첫번째 키프레임으로 이동합니다. (error at _scene_load)")
                     self.load_keyframe_first = False
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'scene_camera_adjusted.json'.format(self.current_scene_idx)) 
+        camera_params_path = os.path.join(scene_path, 'scene_camera_final.json'.format(self.current_scene_idx)) 
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
             self.cam_K = np.array(cam_K).reshape((3, 3))
             depth_scale = self.scene_camera_info[str(image_num)]['depth_scale']
         if image_num < 0:
-            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:07}.pcd')
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:07}.png')
-            self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:07}.png')
+            self.pcd_path = os.path.join(scene_path, 'pcd_final', f'{image_num:07}.pcd')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:07}.png')
+            self.depth_path = os.path.join(scene_path, 'depth_final', f'{image_num:07}.png')
         else:
-            self.pcd_path = os.path.join(scene_path, 'pcd', f'{image_num:06}.pcd')
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.png')
-            self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}.png')
+            self.pcd_path = os.path.join(scene_path, 'pcd_final', f'{image_num:06}.pcd')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:06}.png')
+            self.depth_path = os.path.join(scene_path, 'depth_final', f'{image_num:06}.png')
         if not os.path.exists(self.rgb_path):
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.jpg')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:06}.jpg')
 
         self.rgb_img = cv2.imread(self.rgb_path)
         depth_img = cv2.imread(self.depth_path, -1)
@@ -1772,7 +1775,7 @@ class AppWindow:
 
         # load values if an annotation already exists
         scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}",
-                                        'scene_gt_aligned_c4_plane_icp_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
+                                        'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if os.path.exists(scene_gt_path):
             with open(scene_gt_path) as scene_gt_file:
                 try:
