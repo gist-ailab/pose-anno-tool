@@ -17,7 +17,6 @@ conda activate pose-anno && cd object-pose-annotator && python object_pose_annot
 
 ## GT Visualization
 
-
 <img src="./gt_visualizer/lib/gt_visualizer.png" height="400">
 
 <img src="./gt_visualizer/lib/order_visualizer.png" height="400">

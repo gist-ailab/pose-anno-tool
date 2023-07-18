@@ -1315,14 +1315,18 @@ class AppWindow:
          # annotation validator
         self._log.text = "\t라벨링 검증용 이미지를 생성 중입니다."
         self.window.set_needs_layout()   
-        
         render = rendering.OffscreenRenderer(width=self.W, height=self.H)
         # black background color
         render.scene.set_background([0, 0, 0, 1])
         # render.scene.set_lighting(render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
+        # adjust cam_K to render size
+        intrinsic = np.array(self.cam_K).reshape((3, 3))
+        intrinsic[0, 0] *= 1 / 4
+        intrinsic[1, 1] *= 1 / 4
+        intrinsic[0, 2] *= 1 / 4
+        intrinsic[1, 2] *= 1 / 4
 
         # set camera intrinsic
-        intrinsic = np.array(self.cam_K).reshape((3, 3))
         extrinsic = np.eye(4)
         render.setup_camera(intrinsic, extrinsic, self.W, self.H)
         # set camera pose
@@ -1349,12 +1353,10 @@ class AppWindow:
         depth_rendered[np.isposinf(depth_rendered)] = 0
         depth_rendered *= 1000 # convert meter to mm
         render.scene.clear_geometry()
-        print('depth_rendered', time.time() - start_time)
 
         # rendering object masks #
         obj_masks = {}
         for source_obj in objects:
-            start_time = time.time()
             # add geometry and set color (target object as white / others as black)
             for target_obj in objects:
                 target_obj = copy.deepcopy(target_obj)
@@ -1367,35 +1369,32 @@ class AppWindow:
             # render mask as RGB
             mask_obj = render.render_to_image()
             mask_obj = np.array(mask_obj)
-
-            # save in dictionary
             obj_masks[source_obj.obj_name] = mask_obj.copy()
-            # clear geometry
             render.scene.clear_geometry()
 
 
         depth_captured = cv2.imread(self.depth_path, -1)
+        depth_captured = cv2.resize(depth_captured, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
         depth_captured = np.float32(depth_captured) / self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"]
         valid_depth_mask = np.array(depth_captured > 200, dtype=bool)
 
         rgb_img = cv2.imread(self.rgb_path)
-        diff_vis = np.zeros_like(rgb_img)
+        rgb_img = cv2.resize(rgb_img, (self.W, self.H))
+        diff_vis = np.zeros((self.H, self.W, 3), dtype=np.uint8)
         ########################################
         # calculate depth difference with mask #
         # depth_diff = depth_cap - depth_ren   #
         ########################################
         texts = []
         is_oks = []
-        self.H, self.W, _ = diff_vis.shape
+        # self.H, self.W, _ = diff_vis.shape
         self.icx, self.icy = self.W / 2, self.H / 2
         self.scale_factor = 1
         self.depth_diff_means = {}
         amodal_masks = []
         bboxes = []
         cmap = matplotlib.cm.get_cmap('gist_rainbow')
-        import time
         for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
-            start_time = time.time()
             cnd_r = obj_mask[:, :, 0] != 0
             cnd_g = obj_mask[:, :, 1] == 0
             cnd_b = obj_mask[:, :, 2] == 0
@@ -1460,19 +1459,18 @@ class AppWindow:
             is_ok = abs(depth_diff_mean) < ok_delta
 
             color = (0, 255, 0) if is_ok else (0, 0, 255)
-            cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+            cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 1)
 
             is_oks.append(is_ok)
             amodal_masks.append(amodal_mask)
             bboxes.append(bbox)
-            print("time: ", time.time() - start_time)
 
         # draw amodal masks
         mask_img = rgb_img.copy()
         for i, (amodal_mask, bbox, text) in enumerate(zip(amodal_masks, bboxes, texts)):
-            diff_vis = cv2.putText(diff_vis, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 1.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 4)
+            diff_vis = cv2.putText(diff_vis, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
             mask_img[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 0.6 * 255 + mask_img[amodal_mask] * 0.4
-            mask_img = cv2.putText(mask_img, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 1.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 4)
+            mask_img = cv2.putText(mask_img, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
 
         diff_img = cv2.addWeighted(rgb_img, 0.8, diff_vis, 1.0, 0)
         self.diff_img = diff_img.copy()
@@ -1752,6 +1750,7 @@ class AppWindow:
         depth_img = cv2.imread(self.depth_path, -1)
         depth_img = np.float32(depth_img) / depth_scale / 1000
         self.H, self.W, _ = self.rgb_img.shape
+        self.H, self.W = self.H // 4, self.W // 4
         rgb_img = self.rgb_img.copy()
         diff_img = np.zeros_like(rgb_img)
         mask_img = np.zeros_like(rgb_img)
@@ -1886,7 +1885,7 @@ class AppWindow:
 
         intrinsic = np.array(self.cam_K).reshape((3, 3))
         extrinsic = np.eye(4)
-        self._scene.setup_camera(intrinsic, extrinsic, self.W, self.H, self.bounds)
+        self._scene.setup_camera(intrinsic, extrinsic, int(self.W*4), int(self.H*4), self.bounds)
         center = [0, 0, 1]  # look_at target
         eye = [0, 0, -0.5]  # camera position
         up = [0, -1, 0]  # camera orientation
