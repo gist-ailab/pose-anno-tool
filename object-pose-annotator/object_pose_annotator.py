@@ -1469,10 +1469,11 @@ class AppWindow:
         mask_img = rgb_img.copy()
         for i, (amodal_mask, bbox, text) in enumerate(zip(amodal_masks, bboxes, texts)):
             diff_vis = cv2.putText(diff_vis, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
-            mask_img[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 0.6 * 255 + mask_img[amodal_mask] * 0.4
+            mask_img[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 0.5 * 255 + mask_img[amodal_mask] * 0.5
             mask_img = cv2.putText(mask_img, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
+        mask_img = cv2.addWeighted(rgb_img.copy(), 0.8, mask_img, 1.0, 0)
 
-        diff_img = cv2.addWeighted(rgb_img, 0.8, diff_vis, 1.0, 0)
+        diff_img = cv2.addWeighted(rgb_img, 1.0, diff_vis, 1.0, 0)
         self.diff_img = diff_img.copy()
 
         self.mask_img = mask_img
