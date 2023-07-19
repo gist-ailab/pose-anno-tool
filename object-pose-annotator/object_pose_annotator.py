@@ -1685,7 +1685,7 @@ class AppWindow:
 
     def _update_vis_img(self, rgb_img, diff_img, mask_img):
         
-        width = 512
+        width = 768
         ratio = width / self.W
         rgb_img = cv2.resize(rgb_img, (width, int(self.H*ratio)))
         diff_img = cv2.resize(diff_img, (width, int(self.H*ratio)))
