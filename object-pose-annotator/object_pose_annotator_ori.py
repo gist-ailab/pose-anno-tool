@@ -18,11 +18,40 @@ import os
 import sys
 import copy
 import matplotlib
-import matplotlib.cm
 
 from pathlib import Path
 from os.path import basename, dirname
 from scipy.spatial.transform import Rotation as Rot
+
+obj_id_to_thresh_factor = {
+    # reflective objects
+    15: 1.5, # tuna can
+    48: 1.5, # fork
+    49: 1.5, # knife
+    50: 1.5, # spoon
+    53: 1.5, # scissors
+    58: 1.5, # wrench
+    75: 3.0, # pot
+    81: 1.5, # hammer
+    83: 1.5, # lock
+    # slighly reflective objects
+    64: 1.5, # post-it note
+    66: 1.5, # index cards
+    68: 1.5, # oreo cookie
+    # thin 
+    51: 1.5, # spatula
+    59: 1.5, # driver 1
+    60: 1.5, # driver 2 
+    # transparents
+    73: 1.5, # black bin
+    # real vs model diffrent
+    14: 1.5, # tomato soup can
+    18: 1.5, # spam
+    10: 1.5, # coffee can
+    69: 1.5, # take & toss
+    72: 1.5, # can
+    82: 3.0, # drill
+}
 
 camera_idx_to_thresh_factor = {
     0: 1.0, # zivid
@@ -34,9 +63,9 @@ camera_idx_to_thresh_factor = {
 class Dataset:
     def __init__(self, dataset_path, dataset_split):
         self.scenes_path = os.path.join(dataset_path, dataset_split)
-        self.objects_path = os.path.join(dataset_path, 'models_eval')
-        self.mesh_path = os.path.join(dataset_path, 'models_obj_eval')
-
+        self.objects_path = os.path.join(dataset_path, 'models')
+        # self.mesh_path = os.path.join(dataset_path, 'mesh_models')
+        self.mesh_path = os.path.join(dataset_path, 'models')
 
 
 class AnnotationScene:
@@ -145,7 +174,7 @@ class AppWindow:
             try:
                 self._update_and_show_mesh_name()
             except:
-                self._on_error("Scene not loaded yet. (error at _apply_settings)")
+                self._on_error("라벨링 대상 파일을 선택하세요 (error at _apply_settings")
                 pass
         else:
             for inst_label in self.mesh_names:
@@ -160,13 +189,13 @@ class AppWindow:
 
     def _add_coord_frame(self, name="coord_frame", size=0.2, origin=[0, 0, 0]):
         if self._annotation_scene is None: # shsh
-            self._on_error("Scene not loaded yet. (error at _add_coord_frame)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_coord_frame)")
             return
         objects = self._annotation_scene.get_objects()
         try:
             active_obj = objects[self._meshes_used.selected_index]
         except IndexError:
-            self._on_error("Select an object first. (error at _add_coord_frame)")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _add_coord_frame)")
             return
         self._scene.scene.remove_geometry(name)
         coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size, origin=origin)
@@ -238,12 +267,14 @@ class AppWindow:
         self.coord_labels = []
         self.mesh_names = []
         self.settings = Settings()
-        self.ok_delta = 25
+        self.ok_delta = 5
         self.scale_factor = None
+        self.is_keyframe = False
+        self.load_keyframe_first = True
 
 
         self.window = gui.Application.instance.create_window(
-            "6D Object Pose Annotator", width, height)
+            "6D Object Pose Annotator by GIST AILAB", width, height)
         w = self.window  
 
         self.spl = "\\" if sys.platform.startswith("win") else "/"
@@ -256,12 +287,41 @@ class AppWindow:
         # ---- Validation panel ----
         self._validation_panel = gui.Vert(
             0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
-        self.scene_obj_info_panel = gui.CollapsableVert("Annotation Quality", 0,
+        self.scene_obj_info_panel = gui.CollapsableVert("라벨링 검증 도구", 0,
                                          gui.Margins(em, 0, 0, 0))
         self.scene_obj_info_panel.set_is_open(True)
         self.scene_obj_info_table = gui.ListView()
         self.scene_obj_info_panel.add_child(self.scene_obj_info_table)
         self._validation_panel.add_child(self.scene_obj_info_panel)
+
+        self.scene_obj_info_panel.add_child(gui.Label("작업자 정보"))
+        self.note_edit_1 = gui.TextEdit()
+        self.note_edit_1.placeholder_text = "작업자"
+        self.note_edit_1.set_on_value_changed(self._on_note_edit_1)
+        self.scene_obj_info_panel.add_child(self.note_edit_1)
+
+        self.scene_obj_info_panel.add_child(gui.Label("검수자 정보"))
+        self.note_edit_2 = gui.TextEdit()
+        self.note_edit_2.placeholder_text = "검수자"
+        self.note_edit_2.set_on_value_changed(self._on_note_edit_2)
+        self.scene_obj_info_panel.add_child(self.note_edit_2)
+
+        note_title = gui.Label("라벨링 검토 의견")
+        self.scene_obj_info_panel.add_child(note_title)
+        self.note_edit_3 = gui.TextEdit()
+        self.note_edit_3.placeholder_text = "검토 의견 1."
+        self.note_edit_3.set_on_value_changed(self._on_note_edit_3)
+        self.scene_obj_info_panel.add_child(self.note_edit_3)
+
+        self.note_edit_4 = gui.TextEdit()
+        self.note_edit_4.placeholder_text = "검토 의견 2."
+        self.note_edit_4.set_on_value_changed(self._on_note_edit_4)
+        self.scene_obj_info_panel.add_child(self.note_edit_4)
+
+        self.note_edit_5 = gui.TextEdit()
+        self.note_edit_5.placeholder_text = "검토 의견 3."
+        self.note_edit_5.set_on_value_changed(self._on_note_edit_5)
+        self.scene_obj_info_panel.add_child(self.note_edit_5)
 
         self.anno_copy_panel = gui.Vert(
             em, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
@@ -271,7 +331,7 @@ class AppWindow:
         self.source_id_edit.set_limits(-4, 72)
         self.source_id_edit.set_on_value_changed(self._on_source_id_edit)
         self.source_image_num = 0
-        source_grid.add_child(gui.Label("Source Image ID:"))
+        source_grid.add_child(gui.Label("   복사할 이미지 번호", ))
         source_grid.add_child(self.source_id_edit)
 
         target_grid = gui.VGrid(3, 0.25*em)
@@ -280,10 +340,10 @@ class AppWindow:
         self.target_id_edit.set_limits(-4, 72)
         self.target_id_edit.set_on_value_changed(self._on_target_id_edit)
         self.target_image_num = 1
-        target_grid.add_child(gui.Label("Target Image ID:"))
+        target_grid.add_child(gui.Label("붙여넣을 이미지 번호", ))
         target_grid.add_child(self.target_id_edit)
         
-        self._copy_button  = gui.Button('Copy Annotation')
+        self._copy_button  = gui.Button('라벨링 결과 복사하기')
         self._copy_button.set_on_clicked(self._on_copy_button)
         self.anno_copy_panel.add_child(source_grid)
         self.anno_copy_panel.add_child(target_grid)
@@ -295,35 +355,35 @@ class AppWindow:
             0, gui.Margins(0.25 * em, 0.25 * em, 0.25 * em, 0.25 * em))
 
         self._fileedit = gui.TextEdit()
-        filedlgbutton = gui.Button("Open File")
+        filedlgbutton = gui.Button("파일 열기")
         filedlgbutton.horizontal_padding_em = 0.5
         filedlgbutton.vertical_padding_em = 0
         filedlgbutton.set_on_clicked(self._on_filedlg_button)
 
         fileedit_layout = gui.Horiz()
-        fileedit_layout.add_child(gui.Label("File Path:"))
+        fileedit_layout.add_child(gui.Label("파일 경로"))
         fileedit_layout.add_child(self._fileedit)
         fileedit_layout.add_fixed(0.25 * em)
         fileedit_layout.add_child(filedlgbutton)
         self._settings_panel.add_child(fileedit_layout)
 
-        view_ctrls = gui.CollapsableVert("View Controls", 0.33 * em,
+        view_ctrls = gui.CollapsableVert("편의 기능", 0,
                                          gui.Margins(em, 0, 0, 0))
         view_ctrls.set_is_open(True)
 
-        self._show_axes = gui.Checkbox("Show Camera Coordinate Frame")
+        self._show_axes = gui.Checkbox("카메라 좌표계 보기")
         self._show_axes.set_on_checked(self._on_show_axes)
         view_ctrls.add_child(self._show_axes)
 
-        self._highlight_obj = gui.Checkbox("Highlight Active Object")
+        self._highlight_obj = gui.Checkbox("라벨링 대상 물체 강조하기")
         self._highlight_obj.set_on_checked(self._on_highlight_obj)
         view_ctrls.add_child(self._highlight_obj)
 
-        self._show_coord_frame = gui.Checkbox("Show Object Coordinate Frame")
+        self._show_coord_frame = gui.Checkbox("물체 좌표계 보기")
         self._show_coord_frame.set_on_checked(self._on_show_coord_frame)
         view_ctrls.add_child(self._show_coord_frame)
 
-        self._show_mesh_names = gui.Checkbox("Show Object Names")
+        self._show_mesh_names = gui.Checkbox("물체 이름 보기")
         self._show_mesh_names.set_on_checked(self._on_show_mesh_names)
         view_ctrls.add_child(self._show_mesh_names)
 
@@ -343,17 +403,17 @@ class AppWindow:
         self._responsiveness.double_value = 5.0
 
         grid = gui.VGrid(2, 0.25 * em)
-        grid.add_child(gui.Label("Transparency"))
+        grid.add_child(gui.Label("투명도"))
         grid.add_child(self._transparency)
-        grid.add_child(gui.Label("Point Size"))
+        grid.add_child(gui.Label("포인트 크기"))
         grid.add_child(self._point_size)
-        grid.add_child(gui.Label("Responsiveness"))
+        grid.add_child(gui.Label("민감도"))
         grid.add_child(self._responsiveness)
         view_ctrls.add_child(grid)
 
         self._settings_panel.add_child(view_ctrls)
         # ----
-        self._images_panel = gui.CollapsableVert("Images", 0.33 * em,
+        self._images_panel = gui.CollapsableVert("이미지 보기", 0.33 * em,
                                                  gui.Margins(em, 0, 0, 0))
         self._vis_img_proxy = gui.WidgetProxy()
         self._vis_img_proxy.set_widget(gui.ImageWidget())
@@ -362,7 +422,7 @@ class AppWindow:
 
 
         self._log_panel = gui.VGrid(1, em)
-        self._log = gui.Label("\t Start by opening a file.")
+        self._log = gui.Label("\t 라벨링 대상 파일을 선택하세요. ")
         self._log_panel.add_child(self._log)
         self.window.set_needs_layout()
 
@@ -374,11 +434,11 @@ class AppWindow:
         w.add_child(self._validation_panel)
         w.set_on_layout(self._on_layout)
 
-        annotation_objects = gui.CollapsableVert("Annotation Objects", 0.25 * em,
+        annotation_objects = gui.CollapsableVert("라벨링 대상 물체", 0.25 * em,
                                                  gui.Margins(0.25*em, 0, 0, 0))
         annotation_objects.set_is_open(True)
         object_select_layout = gui.VGrid(2)
-        object_select_layout.add_child(gui.Label("Object ID: obj_"))
+        object_select_layout.add_child(gui.Label("물체 아이디: obj_"))
         self._meshes_available = gui.NumberEdit(gui.NumberEdit.INT)
         self._meshes_available.int_value = 1
         self._meshes_available.set_limits(1, 200)
@@ -392,16 +452,16 @@ class AppWindow:
         self.inst_id_edit.set_on_value_changed(self._on_inst_value_changed)
         self._meshes_used = gui.ListView()
         self._meshes_used.set_on_selection_changed(self._on_selection_changed)
-        add_mesh_button = gui.Button("Add Object")
+        add_mesh_button = gui.Button("물체 추가하기")
         add_mesh_button.horizontal_padding_em = 0.8
         add_mesh_button.vertical_padding_em = 0.2
-        remove_mesh_button = gui.Button("Remove Object")
+        remove_mesh_button = gui.Button("물체 삭제하기")
         remove_mesh_button.horizontal_padding_em = 0.8
         remove_mesh_button.vertical_padding_em = 0.2
         add_mesh_button.set_on_clicked(self._add_mesh)
         remove_mesh_button.set_on_clicked(self._remove_mesh)
 
-        inst_grid.add_child(gui.Label("Instance ID:"))
+        inst_grid.add_child(gui.Label("인스턴스 아이디: ", ))
         inst_grid.add_child(self.inst_id_edit)
         annotation_objects.add_child(inst_grid)
         hz = gui.Horiz(spacing=5)
@@ -416,7 +476,7 @@ class AppWindow:
         self._x_rot = gui.Slider(gui.Slider.DOUBLE)
         self._x_rot.set_limits(-0.5, 0.5)
         self._x_rot.set_on_value_changed(self._on_x_rot)
-        x_grid.add_child(gui.Label("X axis",))
+        x_grid.add_child(gui.Label("x축",))
         x_grid.add_child(self._x_rot)
         annotation_objects.add_child(x_grid)
 
@@ -424,7 +484,7 @@ class AppWindow:
         self._y_rot = gui.Slider(gui.Slider.DOUBLE)
         self._y_rot.set_limits(-0.5, 0.5)
         self._y_rot.set_on_value_changed(self._on_y_rot)
-        y_grid.add_child(gui.Label("Y axis",))
+        y_grid.add_child(gui.Label("y축",))
         y_grid.add_child(self._y_rot)
         annotation_objects.add_child(y_grid)
 
@@ -432,14 +492,14 @@ class AppWindow:
         self._z_rot = gui.Slider(gui.Slider.DOUBLE)
         self._z_rot.set_limits(-0.5, 0.5)
         self._z_rot.set_on_value_changed(self._on_z_rot)
-        z_grid.add_child(gui.Label("Z axis",))
+        z_grid.add_child(gui.Label("z축",))
         z_grid.add_child(self._z_rot)
         annotation_objects.add_child(z_grid)
         self._settings_panel.add_child(annotation_objects)
 
 
 
-        self._scene_control = gui.CollapsableVert("File Control", 0.25 * em,
+        self._scene_control = gui.CollapsableVert("작업 파일 리스트", 0.33 * em,
                                                   gui.Margins(0.25 * em, 0, 0, 0))
         self._scene_control.set_is_open(True)
 
@@ -447,9 +507,9 @@ class AppWindow:
         self.image_number_edit = gui.NumberEdit(gui.NumberEdit.INT)
         self.image_number_edit.int_value = 1
         self.image_number_edit.set_limits(-4, 53) #! todo update this automatically
-        h.add_child(gui.Label("Image:"))
+        h.add_child(gui.Label("이미지:"))
         h.add_child(self.image_number_edit)
-        change_image_button = gui.Button("Change")
+        change_image_button = gui.Button("이동")
         change_image_button.set_on_clicked(self._on_change_image)
         change_image_button.horizontal_padding_em = 0.8
         change_image_button.vertical_padding_em = 0
@@ -457,25 +517,34 @@ class AppWindow:
         h.add_stretch()
         self._scene_control.add_child(h)
 
-        self._images_buttons_label = gui.Label("Image:")
-        self._samples_buttons_label = gui.Label("Directory:")
+        self._images_buttons_label = gui.Label("이미지:")
+        self._samples_buttons_label = gui.Label("작업 폴더: ")
+        self._keyframe_buttons_label = gui.Label("키프레임: ")
 
-        self._pre_image_button = gui.Button("Previous")
+        self._pre_image_button = gui.Button("이전")
         self._pre_image_button.horizontal_padding_em = 0.8
         self._pre_image_button.vertical_padding_em = 0
         self._pre_image_button.set_on_clicked(self._on_previous_image)
-        self._next_image_button = gui.Button("Next")
+        self._next_image_button = gui.Button("다음")
         self._next_image_button.horizontal_padding_em = 0.8
         self._next_image_button.vertical_padding_em = 0
         self._next_image_button.set_on_clicked(self._on_next_image)
-        self._pre_sample_button = gui.Button("Previous")
+        self._pre_sample_button = gui.Button("이전")
         self._pre_sample_button.horizontal_padding_em = 0.8
         self._pre_sample_button.vertical_padding_em = 0
         self._pre_sample_button.set_on_clicked(self._on_previous_scene)
-        self._next_sample_button = gui.Button("Next")
+        self._next_sample_button = gui.Button("다음")
         self._next_sample_button.horizontal_padding_em = 0.8
         self._next_sample_button.vertical_padding_em = 0
         self._next_sample_button.set_on_clicked(self._on_next_scene)
+        self._pre_keyframe_button = gui.Button("이전")
+        self._pre_keyframe_button.horizontal_padding_em = 0.8
+        self._pre_keyframe_button.vertical_padding_em = 0
+        self._pre_keyframe_button.set_on_clicked(self._on_previous_keyframe)
+        self._next_keyframe_button = gui.Button("다음")
+        self._next_keyframe_button.horizontal_padding_em = 0.8
+        self._next_keyframe_button.vertical_padding_em = 0
+        self._next_keyframe_button.set_on_clicked(self._on_next_keyframe)
         # 2 rows for sample and scene control
         h = gui.Horiz(0.4 * em)  # row 1
         h.add_child(self._images_buttons_label)
@@ -489,10 +558,16 @@ class AppWindow:
         h.add_child(self._next_sample_button)
         h.add_stretch()
         self._scene_control.add_child(h)
+        h = gui.Horiz(0.4 * em)  # row 2
+        h.add_child(self._keyframe_buttons_label)
+        h.add_child(self._pre_keyframe_button)
+        h.add_child(self._next_keyframe_button)
+        h.add_stretch()
+        self._scene_control.add_child(h)
 
         self._view_numbers = gui.Horiz(0.4 * em)
-        self._image_number = gui.Label("Image: " + f'{0:06}')
-        self._scene_number = gui.Label("Directory: " + f'{0:06}')
+        self._image_number = gui.Label("이미지: " + f'{0:06}')
+        self._scene_number = gui.Label("작업폴더: " + f'{0:06}')
 
         self._view_numbers.add_child(self._image_number)
         self._view_numbers.add_child(self._scene_number)
@@ -505,24 +580,24 @@ class AppWindow:
                 # self._image_number = gui.Label("Image: " + f'{0:06}')
         prog_layout = gui.Vert(em)
         prog_layout.add_child(self._progress)
-        self._progress_str = gui.Label("Progress: 0.0% [0/0]")
+        self._progress_str = gui.Label("진행률: 0.0% [0/0]")
         progress_ctrls.add_child(self._progress_str)
         progress_ctrls.add_child(self._progress)
         self._scene_control.add_child(progress_ctrls)
 
 
         self._settings_panel.add_child(self._scene_control)
-        initial_viewpoint = gui.Button("Move to Initial Viewpoint (T)")
+        initial_viewpoint = gui.Button("처음 시점으로 이동하기 (T)")
         initial_viewpoint.horizontal_padding_em = 0.8
         initial_viewpoint.vertical_padding_em = 0.2
         initial_viewpoint.set_on_clicked(self._on_initial_viewpoint)
         self._scene_control.add_child(initial_viewpoint)
-        refine_position = gui.Button("Refine Pose using ICP (R)")
+        refine_position = gui.Button("자동 정렬하기 (R)")
         refine_position.horizontal_padding_em = 0.8
         refine_position.vertical_padding_em = 0.2
         refine_position.set_on_clicked(self._on_refine)
         self._scene_control.add_child(refine_position)
-        generate_save_annotation = gui.Button("Save Annotation (S)")
+        generate_save_annotation = gui.Button("라벨링 결과 저장하기 (F)")
         generate_save_annotation.horizontal_padding_em = 0.8
         generate_save_annotation.vertical_padding_em = 0.2
         generate_save_annotation.set_on_clicked(self._on_generate)
@@ -532,13 +607,13 @@ class AppWindow:
         if gui.Application.instance.menubar is None:
             file_menu = gui.Menu()
             file_menu.add_separator()
-            file_menu.add_item("Quit", AppWindow.MENU_QUIT)
+            file_menu.add_item("종료하기", AppWindow.MENU_QUIT)
             help_menu = gui.Menu()
-            help_menu.add_item("About", AppWindow.MENU_ABOUT)
+            help_menu.add_item("제작자 정보", AppWindow.MENU_ABOUT)
 
             menu = gui.Menu()
-            menu.add_menu("File", file_menu)
-            menu.add_menu("About", help_menu)
+            menu.add_menu("파일", file_menu)
+            menu.add_menu("도움말", help_menu)
             gui.Application.instance.menubar = menu
 
         w.set_on_menu_item_activated(AppWindow.MENU_QUIT, self._on_menu_quit)
@@ -553,8 +628,106 @@ class AppWindow:
         self._scene.set_on_key(self._transform)
         self._left_shift_modifier = False
         self._scene.set_on_mouse(self._on_mouse)
-        self._log.text = "\t Start by opening a file."
+        self._log.text = "\t라벨링 대상 파일을 선택하세요."
         self.window.set_needs_layout()
+
+        
+
+    def _on_note_edit_1(self, new_text):
+        
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r' , encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['1'] = new_text
+            json.dump(note_json, f, ensure_ascii=False)
+
+    def _on_note_edit_2(self, new_text):
+        
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['2'] = new_text
+            json.dump(note_json, f, ensure_ascii=False)
+
+    def _on_note_edit_3(self, new_text):
+        
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['3'] = new_text
+            json.dump(note_json, f, ensure_ascii=False)
+
+    def _on_note_edit_4(self, new_text):
+        
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['4'] = new_text
+            json.dump(note_json, f, ensure_ascii=False)
+
+    def _on_note_edit_5(self, new_text):
+        
+
+        current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        try:
+            note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        except AttributeError:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error_att _on_note_edit)")
+            return
+        if os.path.exists(note_json_path):
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+        else:
+            note_json = {str(self.image_num_lists[self.current_image_idx]): {}}
+        with open(note_json_path, 'w', encoding='UTF-8-sig') as f:
+            if str(self.image_num_lists[self.current_image_idx]) not in note_json.keys():
+                note_json[str(self.image_num_lists[self.current_image_idx])] = {}
+            note_json[str(self.image_num_lists[self.current_image_idx])]['5'] = new_text
+            json.dump(note_json, f, ensure_ascii=False)
 
     def _on_source_id_edit(self, new_val):
         self.source_image_num = int(new_val)
@@ -565,7 +738,7 @@ class AppWindow:
     def _on_copy_button(self):
 
         if self._annotation_changed:
-            self._on_error('Try again after saving the current annotation. (error at _on_copy_button)')
+            self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
 
         if self.source_image_num < 0:
@@ -578,21 +751,21 @@ class AppWindow:
             target_image_num = f'{self.target_image_num:06}'
         
         if self.source_image_num == self.target_image_num:
-            self._on_error('The source and target image numbers are the same. (error at _on_copy_button)')
+            self._on_error('원본 이미지와 대상 이미지가 같습니다. (error_at _on_copy_button)')
             return
 
-        self._log.text = "Copying the labeling result of image " + source_image_num + " to " + target_image_num + "..."
+        self._log.text = "\t이미지 " + source_image_num + "의 라벨링 결과를 " + target_image_num + "로 복사합니다."
         self.window.set_needs_layout()
 
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt.json')
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if not os.path.exists(json_6d_path):
-            self._on_error('The json file does not exist. (error at _on_copy_button)')
+            self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
         with open(json_6d_path, "r") as gt_scene:
             try:
                 gt_6d_pose_data = json.load(gt_scene)
             except json.decoder.JSONDecodeError as e:
-                self._on_error("Error loading the json file. (error at _on_copy_button)")
+                self._on_error("라벨링 파일을 불러오는 데 오류가 발생했습니다. (error at _on_copy_button)")
                 return
         
         se3_base_to_source = np.eye(4)
@@ -608,7 +781,7 @@ class AppWindow:
         se3_target_to_source = np.matmul(np.linalg.inv(se3_base_to_target), se3_base_to_source)
 
         if str(int(source_image_num)) not in gt_6d_pose_data:
-            self._on_error('The source image number does not exist in the json file. (error at _on_copy_button)')
+            self._on_error('라벨링 결과를 저장하고 다시 시도하세요. (error_at _on_copy_button)')
             return
 
         with open(json_6d_path, 'w+') as gt_scene:
@@ -625,7 +798,7 @@ class AppWindow:
                 target_data.append(target)
             gt_6d_pose_data[str(int(target_image_num))] = target_data
             json.dump(gt_6d_pose_data, gt_scene)
-        self._log.text = "\tCopied the annotation of image " + source_image_num + " to " + target_image_num + "."
+        self._log.text = "\t라벨링 결과를 복사해 저장했습니다."
         self.window.set_needs_layout()
 
 
@@ -634,62 +807,78 @@ class AppWindow:
         self.scene_obj_info_table_data = []
         target_obj_names = []
         target_obj_inst_names = []
-        for obj_inst_name in self.depth_diff_means.keys():
-            obj_id = int(obj_inst_name.split('_')[1])
-            inst_id = int(obj_inst_name.split('_')[2])
-            err = -1
-            obj_name = f'obj_{obj_id:06}'
-            obj_inst_name = f'obj_{obj_id:06}_{inst_id}'
-            target_obj_names.append(obj_name)
-            target_obj_inst_names.append(obj_inst_name)
-            if obj_inst_name in self.depth_diff_means.keys():
-                err = abs(self.depth_diff_means[obj_inst_name]) 
-            
-            ok_delta = self.ok_delta 
-            ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
-            if err <= ok_delta :
-                text = "Complete"
-            else:
-                text = "Incomplete"
-            self.scene_obj_info_table_data.append([f'obj_{obj_id:06}_{inst_id}', text, err])
+        for obj_info in self.scene_obj_info:
+            obj_id = int(obj_info["obj_id"])
+            num_inst = int(obj_info["num_inst"])
+            for inst_id in range(1, num_inst + 1):
+                err = -1
+                obj_name = f'obj_{obj_id:06}'
+                obj_inst_name = f'obj_{obj_id:06}_{inst_id}'
+                target_obj_names.append(obj_name)
+                target_obj_inst_names.append(obj_inst_name)
+                if obj_inst_name in self.depth_diff_means.keys():
+                    err = abs(self.depth_diff_means[obj_inst_name]) 
+                
+                ok_delta = self.ok_delta 
+                ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
+                if obj_id in obj_id_to_thresh_factor.keys():
+                    ok_delta *= obj_id_to_thresh_factor[obj_id]
+                if err == -1:
+                    text = "라벨링 필요"
+                elif err <= ok_delta :
+                    text = "완료"
+                else:
+                    text = "검수 필요"
+                self.scene_obj_info_table_data.append([f'obj_{obj_id:06}_{inst_id}', text, err])
 
         scene_obj_info_table = []
 
         for i, table_data in enumerate(self.scene_obj_info_table_data):
             row = "{}: {} ({:.1f})".format(table_data[0], table_data[1], table_data[2])
             scene_obj_info_table.append(row)
+        
+        # check whether there is invalid objects
+        scene_obj_info_table.append('----------------------------------')
+        for scene_obj in self._annotation_scene.get_objects():
+            if scene_obj.obj_name not in target_obj_inst_names:
+                obj_name = '_'.join(scene_obj.obj_name.split('_')[:-1])
+                if obj_name not in target_obj_names:
+                    scene_obj_info_table.append('{}: 물체 아이디 오류'.format(scene_obj.obj_name))
+                else:
+                    scene_obj_info_table.append('{}: 인스턴스 아이디 오류'.format(scene_obj.obj_name))
+
         self.scene_obj_info_table.set_items(scene_obj_info_table)
 
     def _on_x_rot(self, new_val):
         try:
             self.move( 0, 0, 0, new_val * np.pi / 180, 0, 0)
         except:
-            self._on_error("Select an object first. (error at _on_x_rot)")
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_x_rot).")
         self._x_rot.int_value = 0      
 
     def _on_y_rot(self, new_val):
         try:
             self.move( 0, 0, 0, 0, new_val * np.pi / 180, 0)
         except:
-            self._on_error("Select an object first. (error at _on_y_rot)")
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_y_rot).")
         self._y_rot.int_value = 0     
 
     def _on_z_rot(self, new_val):
         try:
             self.move( 0, 0, 0, 0, 0, new_val * np.pi / 180)
         except:
-            self._on_error("Select an object first. (error at _on_z_rot)")
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _on_z_rot).")
         self._z_rot.int_value = 0     
 
     def _on_inst_value_changed(self, new_val):
         if int(new_val) < 1:
-            self._on_error("Instance ID must be greater than 0. (error at _on_inst_value_changed)")
+            self._on_error("1보다 큰 값을 입력하세요  (error at _on_inst_value_changed).")
             return
         idx = self._meshes_used.selected_index
         try:
             obj_name = self._annotation_scene.get_objects()[idx].obj_name
         except AttributeError:
-            self._on_error("Select an object first. (error at _on_inst_value_changed)")
+            self._on_error("라벨링 대상 파일을 선택하세요 (error at _on_inst_value_changed).")
             return
         self._annotation_scene.get_objects()[idx].obj_instance = int(new_val)
         self._annotation_scene.get_objects()[idx].obj_name = "obj_" + obj_name.split("_")[1] + "_" + str(int(new_val))
@@ -699,47 +888,46 @@ class AppWindow:
         self._meshes_used.selected_index = idx
         if self.settings.show_mesh_names:
             self._update_and_show_mesh_name()
-        self._log.text = "\tChanged the instance ID of the object."
+        self._log.text = "\t인스턴스 아이디를 변경했습니다."
         self.window.set_needs_layout()
 
     def _on_filedlg_button(self):
-        filedlg = gui.FileDialog(gui.FileDialog.OPEN, "Open File",
+        filedlg = gui.FileDialog(gui.FileDialog.OPEN, "파일 선택",
                                  self.window.theme)
-        filedlg.add_filter(".png", "Image (.png)")
-        filedlg.add_filter(".jpg", "Image (.jpg)")
-        filedlg.add_filter("", "All files (*)")
+        filedlg.add_filter(".pcd", "포인트 클라우드 (.pcd)")
+        filedlg.add_filter("", "모든 파일")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
-        filedlg.set_path('/aihub/OccludedObjectDataset/DiverseClutter6D/real_backup/rgb')
+        filedlg.set_path('/aihub/OccludedObjectDataset/ours/data2/data2_real_source/all')
         self.window.show_dialog(filedlg)
-
 
     def _on_filedlg_cancel(self):
         self.window.close_dialog()
 
-    def _on_filedlg_done(self, path):
-        self._fileedit.text_value = path
-        dataset_path = str(Path(path).parent.parent.parent.parent)
-        split_and_type = basename(str(Path(path).parent.parent.parent))
+    def _on_filedlg_done(self, ply_path):
+        self._fileedit.text_value = ply_path
+        dataset_path = str(Path(ply_path).parent.parent.parent.parent)
+        split_and_type = basename(str(Path(ply_path).parent.parent.parent))
+        rgb_path = ply_path.replace('/pcd_final/', '/rgb_undistort/')
         self.scenes = Dataset(dataset_path, split_and_type)
-
-        start_scene_num = int(basename(str(Path(path).parent.parent)))
-        start_image_num = int(basename(path)[:-4])
-        self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
+        # try:
+        start_scene_num = int(basename(str(Path(ply_path).parent.parent)))
+        start_image_num = int(basename(ply_path)[:-4])
+        self.scene_num_lists = sorted([int(basename(x)) for x in glob.glob(dirname(str(Path(ply_path).parent.parent)) + self.spl + "*") if os.path.isdir(x)])
         self.current_scene_idx = self.scene_num_lists.index(start_scene_num)
-        self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(path))) + self.spl + "*.png")])
+        self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.png")])
         if len(self.image_num_lists) == 0:
-            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(path))) + self.spl + "*.jpg")])
+            self.image_num_lists = sorted([int(basename(x).split(".")[0]) for x in glob.glob(dirname(str(Path(rgb_path))) + self.spl + "*.jpg")])
         self.current_image_idx = self.image_num_lists.index(start_image_num)
         if os.path.exists(self.scenes.scenes_path) and os.path.exists(self.scenes.objects_path):
             self.update_obj_list()
             self.scene_load(self.scenes.scenes_path, start_scene_num, start_image_num)
             self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) 
-            self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+            self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
                 100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
                 self.current_image_idx + 1, len(self.image_num_lists))
         self.window.close_dialog()
-        self._log.text = "\tLoad a scene to start annotating."
+        self._log.text = "\t라벨링 대상 파일을 불러왔습니다."
         self.window.set_needs_layout()
         # except Exception as e:
         #     print(e)
@@ -747,8 +935,8 @@ class AppWindow:
         #     self._log.text = "\t올바른 파일 경로를 선택하세요."
 
     def _update_scene_numbers(self):
-        self._scene_number.text = "Directory: " + f'{self._annotation_scene.scene_num:06}'
-        self._image_number.text = "Image: " + f'{self._annotation_scene.image_num:06}'
+        self._scene_number.text = "작업 폴더: " + f'{self._annotation_scene.scene_num:06}'
+        self._image_number.text = "이미지: " + f'{self._annotation_scene.image_num:06}'
 
     def move(self, x, y, z, rx, ry, rz):
         self._annotation_changed = True
@@ -894,8 +1082,7 @@ class AppWindow:
             H = translate(+ocx, +ocy) @ rotate(degrees=0) @ scale(self.scale_factor) @ translate(-self.icx, -self.icy)
             M = H[0:2]
             
-            rgb_img = cv2.resize(self.rgb_img.copy(), self.diff_img.shape[:2][::-1])
-            rgb_img = cv2.warpAffine(rgb_img, dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
+            rgb_img = cv2.warpAffine(self.rgb_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
             diff_img = cv2.warpAffine(self.diff_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
             mask_img = cv2.warpAffine(self.mask_img.copy(), dsize=(ow,oh), M=M, flags=cv2.INTER_NEAREST)
             self._update_vis_img(rgb_img, diff_img, mask_img)
@@ -903,12 +1090,12 @@ class AppWindow:
 
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
-            self._on_error("Select an object first. (error at _transform)")
+            self._on_error("라벨링 대상 물체를 선택하세요 (error at _transform)")
             return gui.Widget.EventCallbackResult.HANDLED
 
         # Translation
         if not self._left_shift_modifier:
-            self._log.text = "\tAdjusting the object position."
+            self._log.text = "\t물체 위치를 조정 중 입니다."
             self.window.set_needs_layout()
             if event.key == gui.KeyName.D:
                 self.move( self.dist, 0, 0, 0, 0, 0)
@@ -924,7 +1111,7 @@ class AppWindow:
                 self.move( 0, 0, -self.dist, 0, 0, 0)
         # Rotation - keystrokes are not in same order as translation to make movement more human intuitive
         else:
-            self._log.text = "\tAdjusting the object orientation."
+            self._log.text = "\t물체 방향을 조정 중 입니다."
             self.window.set_needs_layout()
             if event.key == gui.KeyName.E:
                 self.move( 0, 0, 0, 0, 0, self.deg * np.pi / 180)
@@ -952,7 +1139,7 @@ class AppWindow:
                 objects = self._annotation_scene.get_objects()
                 active_obj = objects[self._meshes_used.selected_index]
             except IndexError:
-                self._on_error("Select an object first. (error at _on_mouse)")
+                self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_mouse)")
                 return gui.Widget.EventCallbackResult.HANDLED
 
             def depth_callback(depth_image):
@@ -987,14 +1174,14 @@ class AppWindow:
                     if self.settings.show_mesh_names:
                         self._update_and_show_mesh_name()
             self._scene.scene.scene.render_to_depth_image(depth_callback)
-            self._log.text = "\tAdjusting the object position using mouse click."
+            self._log.text = "\t물체 위치를 조정 중 입니다."
             self.window.set_needs_layout()
             return gui.Widget.EventCallbackResult.HANDLED
 
         return gui.Widget.EventCallbackResult.HANDLED
 
     def _on_selection_changed(self, a, b):
-        self._log.text = "\tSelected object: " + str(self._meshes_used.selected_index)
+        self._log.text = "\t라벨링 대상 물체를 변경합니다."
         self.window.set_needs_layout()
         objects = self._annotation_scene.get_objects()
         for obj in objects:
@@ -1011,13 +1198,13 @@ class AppWindow:
         self._apply_settings()
 
     def _on_refine(self):
-        self._log.text = "\tRefining the pose using ICP..."
+        self._log.text = "\t자동 정렬 중입니다."
         self.window.set_needs_layout()
         self._annotation_changed = True
 
         # if no active_mesh selected print error
         if self._meshes_used.selected_index == -1:
-            self._on_error("Select an object first. (error at _on_refine)")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _on_refine)")
             return gui.Widget.EventCallbackResult.HANDLED
 
         target = self._annotation_scene.annotation_scene
@@ -1045,22 +1232,22 @@ class AppWindow:
                 self._add_coord_frame("world_coord_frame")
             if self.settings.show_mesh_names:
                 self._update_and_show_mesh_name()
-            self._log.text = "\tSuccess to refine the pose using ICP."
+            self._log.text = "\t자동 정렬을 완료했습니다."
             self.window.set_needs_layout()
         else:
-            self._log.text = "\tFailed to refine the pose. Try again or adjust it manually."
+            self._log.text = "\t자동 정렬에 실패했습니다. 물체 위치를 조정한 후 다시 시도하세요."
             self.window.set_needs_layout()
 
     def _on_generate(self):
-        self._log.text = "\tSaving the annotation results..."
+        self._log.text = "\t라벨링 결과를 저장 중입니다."
         self.window.set_needs_layout()
         if self._annotation_scene is None: # shsh
-            self._on_error("Select a scene to save the annotation results. (error at _on_generate)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_generate)")
             return
 
         image_num = self._annotation_scene.image_num
         # model_names = self.load_model_names()
-        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt')
+        json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
 
         if os.path.exists(json_6d_path):
             with open(json_6d_path, "r") as gt_scene:
@@ -1070,7 +1257,7 @@ class AppWindow:
                     date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     backup_path = json_6d_path.replace(".json", "_backup_{}.json".format(date_time))
                     shutil.copy(json_6d_path, backup_path)
-                    self._on_error("Failed to load the json file. The file is saved as a backup file. (error at _on_generate)")
+                    self._on_error("라벨링 파일을 불러오는 데 오류가 발생했습니다. 파일을 백업하였습니다. (error at _on_generate)")
                     gt_6d_pose_data = {}
         else:
             gt_6d_pose_data = {}
@@ -1096,11 +1283,11 @@ class AppWindow:
                     del gt_6d_pose_data[str(image_num)]
                 gt_6d_pose_data[str(image_num)] = view_angle_data
                 json.dump(gt_6d_pose_data, gt_scene)
-            self._log.text = "\tSave the annotation results successfully."
+            self._log.text = "\t라벨링 결과를 저장했습니다."
             self.window.set_needs_layout()
         except Exception as e:
             date_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_backup_{}.json".format(date_time))
+            json_6d_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", "scene_gt_final_backup_{}.json".format(date_time))
             with open(json_6d_path, 'w+') as gt_scene:
                 view_angle_data = list()
                 for obj in self._annotation_scene.get_objects():
@@ -1118,7 +1305,7 @@ class AppWindow:
                     view_angle_data.append(obj_data)
                 gt_6d_pose_data[str(image_num)] = view_angle_data
                 json.dump(gt_6d_pose_data, gt_scene)
-            self._log.text = "\tFailed to save the annotation results. The results are saved as a backup file."
+            self._log.text = "\t라벨링 결과를 저장했습니다."
             self.window.set_needs_layout()
         self._annotation_changed = False
         self._validate_anno()
@@ -1126,10 +1313,12 @@ class AppWindow:
 
     def _validate_anno(self):
          # annotation validator
-        self._log.text = "\tGenerating validation results..."
+        self._log.text = "\t라벨링 검증용 이미지를 생성 중입니다."
         self.window.set_needs_layout()   
         render = rendering.OffscreenRenderer(width=self.W, height=self.H)
+        # black background color
         render.scene.set_background([0, 0, 0, 1])
+        # render.scene.set_lighting(render.scene.LightingProfile.NO_SHADOWS, [0,0,0])
         # adjust cam_K to render size
         intrinsic = np.array(self.cam_K).reshape((3, 3))
         intrinsic[0, 0] *= 1 / 4
@@ -1154,7 +1343,7 @@ class AppWindow:
         obj_mtl.shader = "defaultUnlit"
         for obj in objects:
             obj = copy.deepcopy(obj)
-            obj.obj_mesh.paint_uniform_color([1, 1, 1])
+            obj.obj_mesh.paint_uniform_color([1, 0, 0])
             render.scene.add_geometry(obj.obj_name, obj.obj_mesh, obj_mtl,                              
                                   add_downsampled_copy_for_fast_rendering=False)
         
@@ -1171,7 +1360,7 @@ class AppWindow:
             # add geometry and set color (target object as white / others as black)
             for target_obj in objects:
                 target_obj = copy.deepcopy(target_obj)
-                color = [1,1,1] if source_obj.obj_name == target_obj.obj_name else [0,0,0]
+                color = [1,0,0] if source_obj.obj_name == target_obj.obj_name else [0,0,0]
                 target_obj.obj_mesh.paint_uniform_color(color)
                 render.scene.add_geometry("mask_{}_to_{}".format(
                                                 source_obj.obj_name, target_obj.obj_name), 
@@ -1186,7 +1375,7 @@ class AppWindow:
 
         depth_captured = cv2.imread(self.depth_path, -1)
         depth_captured = cv2.resize(depth_captured, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
-        depth_captured = np.float32(depth_captured) * self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"] 
+        depth_captured = np.float32(depth_captured) / self.scene_camera_info[str(self.image_num_lists[self.current_image_idx])]["depth_scale"]
         valid_depth_mask = np.array(depth_captured > 200, dtype=bool)
 
         rgb_img = cv2.imread(self.rgb_path)
@@ -1206,25 +1395,32 @@ class AppWindow:
         bboxes = []
         cmap = matplotlib.cm.get_cmap('hsv')
         for i, (obj_name, obj_mask) in enumerate(obj_masks.items()):
-            obj_mask = np.where(obj_mask > 125, 255, 0).astype(np.uint8)[..., 0]
-            cv2.imwrite("/home/seung/Workspace/papers/2022/clora/6d-pose-anno-tool/object-pose-annotator/obj_mask.png", obj_mask)
-            valid_mask = obj_mask * copy.deepcopy(valid_depth_mask)
-            valid_mask = np.array(valid_mask > 0, dtype=bool).astype(np.uint8)
+            cnd_r = obj_mask[:, :, 0] != 0
+            cnd_g = obj_mask[:, :, 1] == 0
+            cnd_b = obj_mask[:, :, 2] == 0
+            cnd_obj = np.bitwise_and(np.bitwise_and(cnd_r, cnd_g), cnd_b)
 
-            cv2.imwrite("/home/seung/Workspace/papers/2022/clora/6d-pose-anno-tool/object-pose-annotator/valid_mask.png", valid_mask)
+            cnd_bg = np.zeros((self.H+2, self.W+2), dtype=np.uint8)
+            newVal, loDiff, upDiff = 1, 1, 0
+            cnd_obj = cv2.floodFill(cnd_obj.copy().astype(np.uint8), cnd_bg, 
+                                    (0,0), newVal, loDiff, upDiff)
+
+            cnd_bg = cnd_bg[1:self.H+1, 1:self.W+1].astype(bool)
+            cnd_obj = 1 - cnd_bg.copy() 
+            valid_mask = cnd_obj.astype(bool)
+            amodal_mask = valid_mask.copy()
+            valid_mask = valid_mask * copy.deepcopy(valid_depth_mask)
             # get only object depth of captured depth
             depth_captured_obj = depth_captured.copy()
+            depth_captured_obj[cnd_bg] = 0
+
             # get only object depth of rendered depth
             depth_rendered_obj = depth_rendered.copy()
-            # import matplotlib.pyplot as plt
-            # plt.imshow(depth_captured_obj)
-            # plt.show()
-            # plt.imshow(depth_rendered_obj)
-            # plt.show()
+            depth_rendered_obj[cnd_bg] = 0
 
             depth_diff = depth_captured_obj - depth_rendered_obj
-            inlier_mask = np.abs(np.copy(depth_diff)) < 100
-            # valid_mask = valid_mask * inlier_mask
+            inlier_mask = np.abs(np.copy(depth_diff)) < 50
+            valid_mask = valid_mask * inlier_mask
             depth_diff = depth_diff * valid_mask
             depth_diff_abs = np.abs(np.copy(depth_diff))
             
@@ -1232,22 +1428,22 @@ class AppWindow:
                 depth_diff = np.ones_like(depth_diff) * 1000
                 depth_diff_abs = np.ones_like(depth_diff_abs) * 1000
 
-            delta_1 = 10
-            delta_2 = 20
+            delta_1 = 3
+            delta_2 = 15
             below_delta_1 = valid_mask * (depth_diff_abs < delta_1)
             below_delta_2 = valid_mask * (depth_diff_abs < delta_2) * (depth_diff_abs > delta_1)
             above_delta = valid_mask * (depth_diff_abs > delta_2)
-            below_delta_1_vis = (below_delta_1).astype(np.uint8)
-            below_delta_2_vis = (below_delta_2).astype(np.uint8)
-            above_delta_vis = (above_delta).astype(np.uint8)
-            depth_diff_mean = np.sum(depth_diff[valid_mask > 0]) / np.sum(valid_mask)
-            depth_diff_vis = np.stack([below_delta_2_vis, below_delta_1_vis, above_delta_vis], axis=-1) * 255
-
+            below_delta_1_vis = (255 * below_delta_1).astype(np.uint8)
+            below_delta_2_vis = (255 * below_delta_2).astype(np.uint8)
+            above_delta_vis = (255 * above_delta).astype(np.uint8)
+            depth_diff_mean = np.sum(depth_diff[valid_mask]) / np.sum(valid_mask)
+            depth_diff_vis = np.dstack(
+                [below_delta_2_vis, below_delta_1_vis, above_delta_vis]).astype(np.uint8)
             try:
-                diff_vis[valid_mask>0] = depth_diff_vis[valid_mask>0]
+                diff_vis[valid_mask] = cv2.addWeighted(diff_vis[valid_mask], 0.8, depth_diff_vis[valid_mask], 1.0, 0)
             except Exception as e:
                 print(e)
-                self._on_error("Object {} is out of camera view or too far from point cloud.".format(obj_name))
+                self._on_error("물체 {}가 카메라 밖에 있거나 포인트 클라우드와 너무 멀리 떨어져 있습니다.".format(obj_name))
                 continue
             text = "{}_{}".format(int(obj_name.split("_")[1]), int(obj_name.split("_")[2]))
             texts.append(text)
@@ -1257,29 +1453,31 @@ class AppWindow:
             self.depth_diff_means[obj_name] = abs(depth_diff_mean)
             ok_delta = self.ok_delta
             ok_delta *= camera_idx_to_thresh_factor[self.current_image_idx % 4]
+            obj_id = int(obj_name.split("_")[1])
+            if obj_id in obj_id_to_thresh_factor.keys():
+                ok_delta *= obj_id_to_thresh_factor[obj_id]
             is_ok = abs(depth_diff_mean) < ok_delta
+
             color = (0, 255, 0) if is_ok else (0, 0, 255)
             cv2.rectangle(diff_vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 1)
 
             is_oks.append(is_ok)
-            amodal_masks.append(obj_mask)
+            amodal_masks.append(amodal_mask)
             bboxes.append(bbox)
-        # Pre-compute the colors and the text overlay positions once, outside the loop
-        colors = [np.array(cmap(i / len(amodal_masks))[:3]) * 255 for i in range(len(amodal_masks))]
-        text_positions = [(bbox[0], bbox[1]) for bbox in bboxes]
 
-        # Create a copy of the original image to apply masks
-        mask_img = np.zeros_like(rgb_img)
         # draw amodal masks
-        for amodal_mask, text_position, color in zip(amodal_masks, text_positions, colors):
-            mask_img[amodal_mask > 0] = color
-            cv2.putText(mask_img, text, text_position, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            cv2.rectangle(mask_img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 1)
+        mask_img = rgb_img.copy()
+        for i, (amodal_mask, bbox, text) in enumerate(zip(amodal_masks, bboxes, texts)):
+            diff_vis = cv2.putText(diff_vis, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
+            mask_img[amodal_mask] = np.array(cmap(i/len(amodal_masks))[:3]) * 0.5 * 255 + mask_img[amodal_mask] * 0.5
+            mask_img = cv2.putText(mask_img, text, (bbox[0], bbox[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, np.array(cmap(i/len(amodal_masks))[:3]) * 255, 2)
+        mask_img = cv2.addWeighted(rgb_img.copy(), 0.8, mask_img, 1.0, 0)
 
-        mask_img = cv2.addWeighted(rgb_img, 0.5, mask_img, 1.0, 0)
+        diff_img = cv2.addWeighted(rgb_img, 1.0, diff_vis, 1.0, 0)
+        self.diff_img = diff_img.copy()
+
         self.mask_img = mask_img
-        diff_img = cv2.addWeighted(rgb_img, 0.5, diff_vis, 0.8, 0)
-        self.diff_img = diff_img
+
         self._update_vis_img(rgb_img, diff_img, mask_img)
 
     def _on_error(self, err_msg):
@@ -1316,12 +1514,12 @@ class AppWindow:
     def _on_highlight_obj(self, light):
         self.settings.highlight_obj = light
         if light:
-            self._log.text = "\t Highlighting the object to annotate."
+            self._log.text = "\t 라벨링 대상 물체를 강조합니다."
             self.window.set_needs_layout()
             self.settings.annotation_obj_material.base_color = [0.9, 0.3, 0.3, 1.0]
             self.settings.annotation_active_obj_material.base_color = [0.3, 0.9, 0.3, 1.0]
         elif not light:
-            self._log.text = "\t Not highlighting the object to annotate."
+            self._log.text = "\t 라벨링 대상 물체를 강조하지 않습니다."
             self.window.set_needs_layout()
             self.settings.annotation_obj_material.base_color = [0.9, 0.9, 0.9, 1.0]
             self.settings.annotation_active_obj_material.base_color = [0.9, 0.9, 0.9, 1.0]
@@ -1330,7 +1528,7 @@ class AppWindow:
 
         # update current object visualization
         if self._annotation_scene is None: # shsh
-            self._on_error("Select the annotation object file. (error at _on_highlight_obj)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_highlight_obj)")
             return
         meshes = self._annotation_scene.get_objects()
         for mesh in meshes:
@@ -1341,7 +1539,7 @@ class AppWindow:
 
     def _on_transparency(self, transparency): #shsh
         
-        self._log.text = "\t Adjusting transparency."
+        self._log.text = "\t 투명도 값을 변경합니다."
         self.window.set_needs_layout()
         self.settings.transparency = transparency
         if self._annotation_scene is None:
@@ -1411,15 +1609,15 @@ class AppWindow:
 
     def _add_mesh(self):
         if self._annotation_scene is None: # shsh
-            self._on_error("Select the file to annotate. (error at _add_mesh)") 
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _add_mesh)")
             return
 
         mesh_name_to_add = f'obj_{self._meshes_available.int_value:06}'
         if not os.path.exists(os.path.join(self.scenes.objects_path, mesh_name_to_add + '.ply')):
-            self._on_error("The object does not exist. (error at _add_mesh)")
+            self._on_error("존재하지 않는 물체를 선택했습니다. (error at _add_mesh)")
             return
 
-        self._log.text = "\t Adding object to annotate."
+        self._log.text = "\t 라벨링 물체를 추가합니다."
         self.window.set_needs_layout()
         meshes = self._annotation_scene.get_objects()
         meshes = [i.obj_name for i in meshes]
@@ -1428,7 +1626,7 @@ class AppWindow:
         object_geometry.points = o3d.utility.Vector3dVector(
             np.array(object_geometry.points) / 1000)  # convert mm to meter
         object_mesh = o3d.io.read_triangle_mesh(
-                os.path.join(self.scenes.mesh_path, mesh_name_to_add + '.obj'))
+                os.path.join(self.scenes.mesh_path, mesh_name_to_add + '.ply'))
         object_mesh.vertices = o3d.utility.Vector3dVector(
                 np.array(object_mesh.vertices) / 1000)  # convert mm to meter
         init_trans = np.identity(4)
@@ -1452,12 +1650,12 @@ class AppWindow:
 
     def _remove_mesh(self):
         if self._annotation_scene is None: # shsh
-            self._on_error("Select the file to annotate. (error at _remove_mesh)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _remove_mesh)")
             return
         if not self._annotation_scene.get_objects():
-            self._on_error("There is no object to remove. (error at _remove_mesh)")
+            self._on_error("라벨링 대상 물체를 선택하세요. (error at _remove_mesh)")
             return
-        self._log.text = "\t Removing object to annotate."
+        self._log.text = "\t 라벨링 물체를 삭제합니다."
         self.window.set_needs_layout()
         meshes = self._annotation_scene.get_objects()
         active_obj = meshes[self._meshes_used.selected_index]
@@ -1487,7 +1685,7 @@ class AppWindow:
 
     def _update_vis_img(self, rgb_img, diff_img, mask_img):
         
-        width = 512
+        width = 1024
         ratio = width / self.W
         rgb_img = cv2.resize(rgb_img, (width, int(self.H*ratio)))
         diff_img = cv2.resize(diff_img, (width, int(self.H*ratio)))
@@ -1496,7 +1694,7 @@ class AppWindow:
         vis_img = np.vstack([rgb_img, diff_img, mask_img])
         _vis_img = o3d.geometry.Image(cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB))
         self._vis_img_proxy.set_widget(gui.ImageWidget(_vis_img))
-        self._log.text = "\t Updated visualization images."
+        self._log.text = "\t라벨링 검증용 이미지를 업데이트 했습니다."
         self.window.set_needs_layout()   
 
 
@@ -1505,26 +1703,53 @@ class AppWindow:
         self._annotation_changed = False
         self._scene.scene.clear_geometry()
         geometry = None
+        self.note_edit_1.text_value = ""
+        self.note_edit_2.text_value = ""
+        self.note_edit_3.text_value = ""
+        self.note_edit_4.text_value = ""
+        self.note_edit_5.text_value = ""
 
+        keyframes_path = os.path.join(scenes_path, f'{scene_num:06}', 'keyframes.json')
+        if os.path.exists(keyframes_path):
+            with open(keyframes_path) as keyframes_file:
+                try:
+                    data = json.load(keyframes_file)
+                    self.keyframe_ids = data
+                    # use only first camera's keyframe
+                    # filter out only one of three consecutive keyframes
+                    self.keyframe_ids = [i for i in self.keyframe_ids if int(i) % 3 == 1]
+                    self.is_keyframe = True
+                except json.decoder.JSONDecodeError:
+                    self._on_error("저장된 키프레임 파일을 불러오지 못했습니다. (error at _scene_load)")
+                    return
+                if self.load_keyframe_first:
+                    image_num = self.image_num_lists[self.current_image_idx]
+                    if "{0:06d}".format(image_num) not in self.keyframe_ids:
+                        image_num = int(self.keyframe_ids[0])
+                        self.current_image_idx = self.image_num_lists.index(image_num)
+                        self._on_error("키프레임이 아닙니다. 첫번째 키프레임으로 이동합니다. (error at _scene_load)")
+                    self.load_keyframe_first = False
         scene_path = os.path.join(scenes_path, f'{scene_num:06}')
-        camera_params_path = os.path.join(scene_path, 'scene_camera.json'.format(self.current_scene_idx)) 
+        camera_params_path = os.path.join(scene_path, 'scene_camera_final_adjusted.json'.format(self.current_scene_idx)) 
         with open(camera_params_path) as f:
             self.scene_camera_info = json.load(f)
             cam_K = self.scene_camera_info[str(image_num)]['cam_K']
             self.cam_K = np.array(cam_K).reshape((3, 3))
             depth_scale = self.scene_camera_info[str(image_num)]['depth_scale']
         if image_num < 0:
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:07}.png')
-            self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:07}.png')
+            self.pcd_path = os.path.join(scene_path, 'pcd_final', f'{image_num:07}.pcd')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:07}.png')
+            self.depth_path = os.path.join(scene_path, 'depth_final', f'{image_num:07}.png')
         else:
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.png')
-            self.depth_path = os.path.join(scene_path, 'depth', f'{image_num:06}.png')
+            self.pcd_path = os.path.join(scene_path, 'pcd_final', f'{image_num:06}.pcd')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:06}.png')
+            self.depth_path = os.path.join(scene_path, 'depth_final', f'{image_num:06}.png')
         if not os.path.exists(self.rgb_path):
-            self.rgb_path = os.path.join(scene_path, 'rgb', f'{image_num:06}.jpg')
+            self.rgb_path = os.path.join(scene_path, 'rgb_undistort', f'{image_num:06}.jpg')
 
         self.rgb_img = cv2.imread(self.rgb_path)
         depth_img = cv2.imread(self.depth_path, -1)
-        depth_img = np.float32(depth_img) / 1000 * depth_scale
+        depth_img = np.float32(depth_img) / depth_scale / 1000
         self.H, self.W, _ = self.rgb_img.shape
         self.H, self.W = self.H // 4, self.W // 4
         rgb_img = self.rgb_img.copy()
@@ -1532,8 +1757,7 @@ class AppWindow:
         mask_img = np.zeros_like(rgb_img)
         self._update_vis_img(rgb_img, diff_img, mask_img)
 
-        geometry = self._make_point_cloud(self.rgb_img, depth_img, self.cam_K)
-
+        geometry = o3d.io.read_point_cloud(self.pcd_path)
         if geometry is not None:
             print("[Info] Successfully read scene ", scene_num)
             if not geometry.has_normals():
@@ -1550,13 +1774,14 @@ class AppWindow:
         self._meshes_used.set_items([])  # clear list from last loaded scene
 
         # load values if an annotation already exists
-        scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}", 'scene_gt.json')
+        scene_gt_path = os.path.join(self.scenes.scenes_path, f"{self._annotation_scene.scene_num:06}",
+                                        'scene_gt_final_{:06d}.json'.format(self.scene_num_lists[self.current_scene_idx]))
         if os.path.exists(scene_gt_path):
             with open(scene_gt_path) as scene_gt_file:
                 try:
                     data = json.load(scene_gt_file)
                 except json.decoder.JSONDecodeError:
-                    self._on_error("Failed to load annotation file. (error at scene_load)")
+                    self._on_error("저장된 라벨링 파일을 불러오지 못했습니다. (error at _scene_load)")
                     return
                 if str(image_num) in data.keys():
                     scene_data = data[str(image_num)]
@@ -1569,7 +1794,7 @@ class AppWindow:
                         obj_geometry.points = o3d.utility.Vector3dVector(
                             np.array(obj_geometry.points) / 1000)  # convert mm to meter
                         obj_mesh = o3d.io.read_triangle_mesh(
-                            os.path.join(self.scenes.mesh_path, 'obj_' + f"{int(obj['obj_id']):06}" + '.obj'))
+                            os.path.join(self.scenes.mesh_path, 'obj_' + f"{int(obj['obj_id']):06}" + '.ply'))
                         obj_mesh.vertices = o3d.utility.Vector3dVector(
                             np.array(obj_mesh.vertices) / 1000)  # convert mm to meter
                         
@@ -1596,12 +1821,51 @@ class AppWindow:
         self._update_scene_numbers()
         self._validate_anno()
 
+        # load scene_obj_info.json
+        scene_obj_info_path = os.path.join(scene_path, 'scene_obj_info.json')
+        with open(scene_obj_info_path, 'r') as f:
+            self.scene_obj_info = json.load(f)
+        # initialize the table data
+     
         self.update_scene_obj_info_table()
 
         self._scene.set_view_controls(gui.SceneWidget.Controls.FLY)
         self._scene.set_view_controls(gui.SceneWidget.Controls.ROTATE_CAMERA)
 
         current_scene_num = self.scene_num_lists[self.current_scene_idx]
+        note_json_path = os.path.join(self.scenes.scenes_path, f"{current_scene_num:06}", 'note_{:06d}.json'.format(current_scene_num))
+        if os.path.exists(note_json_path): # !TODO: This is too ugly ..
+            with open(note_json_path, 'r', encoding='UTF-8-sig') as f:
+                note_json = json.load(f)
+            # if str(self.image_num_lists[self.current_image_idx]) in note_json.keys():
+            #     if '1' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_1.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['1']
+            #     else:
+            #         self.note_edit_1.text_value = ''
+            #     if '2' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_2.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['2']
+            #     else:
+            #         self.note_edit_2.text_value = ''
+            #     if '3' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_3.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['3']
+            #     else:
+            #         self.note_edit_3.text_value = ''
+            #     if '4' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_4.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['4']
+            #     else:
+            #         self.note_edit_4.text_value = ''
+            #     if '5' in note_json[str(self.image_num_lists[self.current_image_idx])].keys():
+            #         self.note_edit_5.text_value = note_json[str(self.image_num_lists[self.current_image_idx])]['5']
+            #     else:
+            #         self.note_edit_5.text_value = ''
+            # else:
+            self.note_edit_1.text_value = ""
+            self.note_edit_2.text_value = ""
+            self.note_edit_3.text_value = ""
+            self.note_edit_4.text_value = ""
+            self.note_edit_5.text_value = ""
+        # self.source_id_edit.set_value(image_num)
+
 
     def update_obj_list(self):
         model_names = self.load_model_names()
@@ -1615,9 +1879,9 @@ class AppWindow:
 
     def _on_initial_viewpoint(self):
         if self.bounds is None:
-            self._on_error("No point cloud loaded. (error at _on_initial_viewpoint)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_initial_viewpoint)")
             return
-        self._log.text = "\t Moving to initial viewpoint."
+        self._log.text = "\t 처음 시점으로 이동합니다."
         self.window.set_needs_layout()
 
         intrinsic = np.array(self.cam_K).reshape((3, 3))
@@ -1633,7 +1897,7 @@ class AppWindow:
 
     def _check_changes(self):
         if self._annotation_changed:
-            self._on_error("Annotation has been changed. Save the annotation first. (error at _check_changes)")
+            self._on_error("라벨링 결과를 저장하지 않았습니다. 저장하지 않고 넘어가려면 버튼을 다시 눌러주세요.")
             self._annotation_changed = False
             return True
         else:
@@ -1643,28 +1907,30 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_scene_idx is None:
-            self._on_error("Select the annotation object file. (error at _on_next_scene)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_scene)")
             return
         if self.current_scene_idx >= len(self.scene_num_lists) - 1:
-            self._on_error("Next scene does not exist.")
+            self._on_error("다음 라벨링 폴더가 존재하지 않습니다.")
             return
-        self._log.text = "\t Moving to the next scene."
+        self._log.text = "\t 다음 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
         self.current_scene_idx += 1
+        self.load_keyframe_first = True
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], -4)  # open next scene on the first image
 
     def _on_previous_scene(self):
         if self._check_changes():
             return
         if self.current_scene_idx is None:
-            self._on_error("Select the annotation object file. (error at _on_previous_scene)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_scene)")
             return
         if self.current_scene_idx <= 0:
-            self._on_error("Previous scene does not exist.")
+            self._on_error("이전 라벨링 폴더가 존재하지 않습니다.")
             return
         self.current_scene_idx -= 1
-        self._log.text = "\t Moving to the previous scene."
+        self._log.text = "\t 이전 라벨링 폴더로 이동했습니다."
         self.window.set_needs_layout()
+        self.load_keyframe_first = True
         self.scene_load(self.scenes.scenes_path, self.scene_num_lists[self.current_scene_idx], -4)  # open next scene on the first image
 
     def _on_change_image(self):
@@ -1672,17 +1938,17 @@ class AppWindow:
             return
         try:
             if self.image_number_edit.int_value not in self.image_num_lists:
-                self._on_error("The image number does not exist. (error at _on_change_image)")
+                self._on_error("해당 이미지가 존재하지 않습니다. (error at _on_change_image)")
                 return
         except AttributeError:
-            self._on_error("Select the annotation object file. (error at _on_change_image)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_change_image)")
             return
-        self._log.text = "\t Changing the image."
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
         self.window.set_needs_layout()
         self.current_image_idx = self.image_num_lists.index(self.image_number_edit.int_value)
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
@@ -1690,17 +1956,17 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_image_idx is None:
-            self._on_error("Select the annotation object file. (error at _on_next_image)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_image)")
             return
         if self.current_image_idx  >= len(self.image_num_lists) - 1:
-            self._on_error("Next point cloud does not exist. (error at _on_next_image)")
+            self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
             return
-        self._log.text = "\t Moving to the next point cloud."
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
         self.window.set_needs_layout()
         self.current_image_idx += 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
@@ -1708,25 +1974,102 @@ class AppWindow:
         if self._check_changes():
             return
         if self.current_image_idx is None:
-            self._on_error("Select the annotation object file. (error at _on_previous_image)")
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_image)")
             return
         if self.current_image_idx < -4:
-            self._on_error("Previous point cloud does not exist. (error at _on_previous_image)")
+            self._on_error("이전 포인트 클라우드가 존재하지 않습니다.")
             return
-        self._log.text = "\t Moving to the previous point cloud."
+        self._log.text = "\t 이전 포인트 클라우드로 이동했습니다."
         self.window.set_needs_layout()
         self.current_image_idx -= 1
         self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
         self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
-        self._progress_str.text = "Progress: {:.1f}% [{}/{}]".format(
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
             100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
             self.current_image_idx + 1, len(self.image_num_lists))
 
+
+    def _on_next_keyframe(self):
+        if self._check_changes():
+            return
+        if self.current_image_idx is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_next_keyframe)")
+            return
+        if not self.is_keyframe:
+            self._on_next_image()
+            return
+
+        image_num = self.image_num_lists[self.current_image_idx]
+        if "{0:06d}".format(image_num) not in self.keyframe_ids:
+            # get the first keyframe after the current image
+            for keyframe_id in self.keyframe_ids:
+                if int(keyframe_id) > image_num:
+                    image_num = int(keyframe_id)
+                    break
+            self.current_image_idx = self.image_num_lists.index(image_num)
+        # move to the next keyframe
+        else:
+            for i in range(self.current_image_idx + 1, len(self.image_num_lists)):
+                if "{0:06d}".format(self.image_num_lists[i]) in self.keyframe_ids:
+                    self.current_image_idx = i
+                    break
+
+        if self.current_image_idx  >= len(self.image_num_lists) - 1:
+            self._on_error("다음 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 다음 포인트 클라우드로 이동했습니다."
+        self.window.set_needs_layout()
+        self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+            100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+            self.current_image_idx + 1, len(self.image_num_lists))
+
+    def _on_previous_keyframe(self):
+        if self._check_changes():
+            return
+        if self._check_changes():
+            return
+        if self.current_image_idx is None:
+            self._on_error("라벨링 대상 파일을 선택하세요. (error at _on_previous_keyframe)")
+            return
+        if not self.is_keyframe:
+            self._on_previous_image()
+            return
+        image_num = self.image_num_lists[self.current_image_idx]
+        if "{0:06d}".format(image_num) not in self.keyframe_ids:
+            # get the first keyframe before the current image
+            for keyframe_id in self.keyframe_ids[::-1]:
+                if int(keyframe_id) < image_num:
+                    image_num = int(keyframe_id)
+                    break
+            self.current_image_idx = self.image_num_lists.index(image_num)
+        # move to the previous keyframe
+        else:
+            for i in range(self.current_image_idx - 1, -1, -1):
+                if "{0:06d}".format(self.image_num_lists[i]) in self.keyframe_ids:
+                    self.current_image_idx = i
+                    break
+        if self.current_image_idx < -4:
+            self._on_error("이전 포인트 클라우드가 존재하지 않습니다.")
+            return
+        self._log.text = "\t 이전 포인트 클라우드로 이동했습니다."
+        self.window.set_needs_layout()
+        self.scene_load(self.scenes.scenes_path, self._annotation_scene.scene_num, self.image_num_lists[self.current_image_idx])
+        self._progress.value = (self.current_image_idx + 1) / len(self.image_num_lists) # 25% complete
+        self._progress_str.text = "진행률: {:.1f}% [{}/{}]".format(
+            100 * (self.current_image_idx + 1) / len(self.image_num_lists), 
+            self.current_image_idx + 1, len(self.image_num_lists))
 
 def main():
 
 
     gui.Application.instance.initialize()
+    hangeul = "./lib/NanumGothic.ttf"
+    font = gui.FontDescription(hangeul)
+    font.add_typeface_for_language(hangeul, "ko")
+    gui.Application.instance.set_font(gui.Application.DEFAULT_FONT_ID, font)
+
     w = AppWindow(1920, 1080)
     gui.Application.instance.run()
 
