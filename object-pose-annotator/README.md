@@ -20,7 +20,6 @@
 - [X] Add logger
 - [X] Test on window
 - [X] Cx_freeze
-- [ ] Automatic save and backup
 
 
 ## Install and Run
@@ -30,6 +29,6 @@ In windows, Microsoft Visual C++ 14.0 is required. [link](https://www.microsoft.
 ```
 $ conda create -n gc6d-anno python=3.7
 $ conda activate gc6d-anno
-$ pip install numpy matplotlib open3d==0.15.2 glumpy pyrender imgviz pyglet open3d opencv-python==4.5.3.56 scikit-learn
+$ pip install -r requirements.txt
 $ python object_pose_annotator.py
 ```
