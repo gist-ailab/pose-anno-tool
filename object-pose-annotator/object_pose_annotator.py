@@ -710,7 +710,7 @@ class AppWindow:
         filedlg.add_filter("", "All files (*)")
         filedlg.set_on_cancel(self._on_filedlg_cancel)
         filedlg.set_on_done(self._on_filedlg_done)
-        filedlg.set_path('/aihub/OccludedObjectDataset/DiverseClutter6D/real_backup/rgb')
+        # filedlg.set_path('/aihub/OccludedObjectDataset/DiverseClutter6D/real_backup/rgb')
         self.window.show_dialog(filedlg)
 
 
